@@ -1,0 +1,494 @@
+# Municipality Transparency + Urban Planning Intelligence — MVP Plan (Agent Brief)
+
+**Goal:** Build a research-grade MVP that ingests public municipality protocols (minutes), attachments, and (optionally) recordings/transcripts, then produces:
+- **Decision cards** with citations (source-of-truth traceability)
+- **Topic tree navigation** seeded from the municipality’s own taxonomy
+- **Search + RAG** constrained to **answer-with-citations**
+- **Geo-linking (Step 5)** that maps **only when high confidence** (and explicitly outputs `NONE` otherwise)
+- **Multi-track timelines** (Decision timeline now; Execution evidence later)
+
+**Target pilot municipality:** Ashdod (as the first adapter), starting with **City Council meetings** and **their attachments**.
+
+---
+
+## 0) MVP Definition
+
+### 0.1 What users can do (MVP user stories)
+1. Browse a **Topic Tree** (e.g., “Council Meetings”) and see meetings by year.
+2. Open a **Meeting Page** and see:
+   - meeting metadata (date, committee)
+   - linked PDFs (protocol short/full), attachments list
+   - auto-generated summary + decision list (with citations)
+3. Open a **Decision Card** and see:
+   - decision text + vote (if present)
+   - “who said what” highlights (if extracted)
+   - all referenced documents / attachments
+   - geo-scope badge: `NONE/CITYWIDE/AREA/SITE/MULTI`
+   - map geometry when confidence is high, with evidence snippet + citation
+4. Use **Search** (keyword + semantic) over protocols and attachments.
+5. Ask questions in **RAG** mode and receive answers **only** if:
+   - answer is grounded in retrieved chunks
+   - each major claim has citations (doc/page/line or timestamp)
+6. View a **Timeline**:
+   - Track A: decisions over time
+   - Track B (later): execution evidence events (tenders, permits, updates)
+
+### 0.2 Non-goals (explicitly out of scope for MVP)
+- Predicting outcomes or completion dates
+- “Fully accurate” fuzzy geo mapping (near/around) without anchors
+- Full planning-committee ingestion (can be Phase 2)
+- Production-scale multi-city crawls (MVP is single city, single vertical)
+- Human moderation workflows (optional later)
+
+---
+
+## 1) High-level architecture
+
+### 1.1 Data flow
+1. **Adapter (Ashdod)** discovers:
+   - topics
+   - year pages
+   - meeting pages
+   - meeting assets (protocol PDFs, audio, attachments)
+2. **Fetcher** downloads assets, computes hashes, stores raw.
+3. **Extractor** parses PDFs/HTML into text and structured blocks.
+4. **Meeting parser** identifies:
+   - meeting metadata
+   - decisions table (best starting point)
+   - attachments references
+5. **Chunker/Indexer** creates text chunks with citations and stores:
+   - full-text index
+   - embeddings (optional)
+6. **Geo Step 5** extracts geo mentions and links to GIS features with confidence + evidence.
+7. **API** serves UI endpoints (topic tree, meeting page, decision card, map, timeline, search, RAG).
+
+### 1.2 Storage philosophy
+**Version everything.** Websites change; you must preserve provenance.
+- Raw: PDFs/audio links + hash + fetch timestamp
+- Parsed: extracted text, chunks, structured objects (meeting/decision)
+- Derived: geo links with confidence + reason codes; summaries with citations
+
+---
+
+## 2) Tech stack (recommended for MVP)
+
+### 2.1 Backend
+- Python 3.11+ (pipeline + API) **or** Node.js (API) + Python (pipeline)
+- FastAPI (if Python) for APIs
+- Postgres 15+ with PostGIS extension
+- Object storage: local filesystem for MVP; S3-compatible later
+- Optional: vector store (pgvector, Qdrant, Pinecone, etc.)
+- Optional: Redis for job queue caching
+
+### 2.2 Frontend
+- Next.js (React) + Mapbox GL / Leaflet for map
+- Timeline component (custom or library) with two tracks
+
+### 2.3 GIS tools (dev workflow)
+- QGIS for inspecting layers & validating geometry
+- `ogr2ogr`/GDAL for importing layers into PostGIS
+
+---
+
+## 3) Data model (minimum viable schema)
+
+**Implement the DDL provided earlier.** MVP-critical tables:
+- municipality, source_site
+- document, document_version
+- meeting, agenda_item, decision, vote
+- meeting_document_link, item_document_link
+- text_chunk (full-text + citations)
+- geo_layer, geo_feature, geo_mention, geo_link, geo_summary
+- speaker, speaker_role, speaker_turn (optional in MVP)
+- accountability_claim (optional in MVP)
+- event (timeline)
+
+**MVP shortcut:** you can ship without `speaker_turn` and `accountability_claim` on Day 1, then add them once parsing stabilizes.
+
+---
+
+## 4) Ashdod Adapter spec (first municipality)
+
+### 4.1 Start URLs
+- Protocols by topic page: Ashdod “protocols by subject” page (provided by user)
+
+### 4.2 Adapter outputs (canonical)
+- Topics list: `(topic_id, name_he, url, count_hint)`
+- Meetings list per topic/year: `(meeting_id, date, code, url, committee_name)`
+- Meeting assets:
+  - protocol_short_url (optional)
+  - protocol_full_url (optional)
+  - attachments page URL (optional)
+  - audio URL (optional)
+  - video URL (optional)
+  - attachment_urls[] (crawl attachment list page)
+
+### 4.3 Stability strategy
+- Generate stable IDs:
+  - `meeting_id = sha1(normalized_meeting_url)` or site `parentMediaID` + date
+  - `doc_id = canonical_url`
+- Normalize URLs:
+  - remove tracking params
+  - resolve relative links
+  - keep canonical URL stable
+
+### 4.4 Crawler constraints
+- Respect robots.txt (or documented permission)
+- Rate limit (configurable)
+- Retries with backoff
+- Log all failures with URL + reason
+
+---
+
+## 5) Pipeline modules (implementation plan)
+
+### 5.1 Module A — Fetch & version
+**Input:** URL list from adapter  
+**Output:** document + document_version rows, raw files stored
+
+Steps:
+1. HEAD/GET, record status + content-type
+2. Download bytes
+3. Compute sha256 hash
+4. Store file: `storage_uri = {muni}/{doc_kind}/{hash}.bin`
+5. Insert document if new, update last_seen_at
+6. Insert document_version if new hash for doc
+
+Acceptance:
+- Re-running crawl produces **no duplicate versions** (hash uniqueness)
+- Version history retained
+
+### 5.2 Module B — Text extraction
+**Input:** document_version raw files  
+**Output:** document_version.extracted_text + metadata_json (e.g., pages, OCR used)
+
+Rules:
+- PDFs:
+  - If text layer exists → extract via PDF parser
+  - If scanned → OCR (only for those pages)
+- Keep page boundaries if possible for citations
+- Store `citation_map` in metadata_json:
+  - map text offsets to page numbers/lines (approx is OK for MVP)
+
+Acceptance:
+- 90%+ protocols produce usable extracted text for search
+
+### 5.3 Module C — Meeting parser (decisions-first)
+**Input:** extracted protocol text + meeting metadata  
+**Output:** agenda_item, decision, vote (if available), meeting_document_link
+
+Strategy:
+1. Parse meeting header:
+   - date, committee, meeting code (best effort)
+2. Locate “Decisions” section:
+   - often a table with decision entries
+   - extract each decision row into `decision_text`
+3. If votes appear (counts or “approved unanimously”), parse into vote table
+4. Create a synthetic agenda item if agenda structure is unknown:
+   - `item_no = "DECISIONS"`; decisions attach here
+
+Acceptance:
+- At least the “decisions table” is extracted for a sample of recent meetings
+
+### 5.4 Module D — Chunking & indexing
+**Input:** extracted_text, decisions, attachments  
+**Output:** text_chunk rows + full-text index + optional embeddings
+
+Chunking rules (MVP):
+- Split by headings/sections if possible
+- Otherwise chunk by ~800–1200 characters with overlap
+- Attach citations:
+  - docver_id + page range (if known)
+  - or docver_id + approximate line offsets
+
+Search:
+- PostgreSQL FTS on `text_chunk.tsv`
+- Optional: semantic retrieval with embeddings
+
+Acceptance:
+- Search finds known decision phrases from protocols reliably
+
+### 5.5 Module E — RAG (answer-with-citations)
+**Input:** user query → retrieve top K chunks  
+**Output:** answer with citations; refusal when insufficient grounding
+
+Rules:
+- The assistant must:
+  - cite sources for all key claims
+  - avoid speculation
+  - if retrieval confidence low, respond: “Not enough evidence in available documents.”
+
+Evaluation:
+- Create 30 test questions; require citation correctness (manual check)
+
+### 5.6 Module F — Step 5 Geo (scope + mentions + GIS joins)
+**Input:** decisions + agenda text chunks  
+**Output:** geo_summary + geo_mentions + geo_links + cached geo_features
+
+#### 5.6.1 Geo scope classification (do not force mapping)
+Outputs `geo_scope`:
+- NONE, CITYWIDE, AREA, SITE, MULTI
+
+Deterministic logic:
+- CADASTRE tokens (גוש/חלקה/מגרש) → SITE
+- address patterns (רחוב/רח’/שדרות + number) → SITE
+- quarter/neighborhood only → AREA
+- no anchors in budget/policy items → NONE/CITYWIDE
+
+Hard guardrail:
+- `geo_scope == NONE` ⇒ do not create map features
+
+#### 5.6.2 Mention extraction (high precision)
+- Regex for:
+  - גוש \d+
+  - חלקה \d+
+  - מגרש \d+
+  - רחוב/רח’/שדרות + name + \d+
+  - רובע [א-ת׳]+ or Roman/number patterns (custom for Ashdod)
+- Gazetteer for known POIs later
+
+#### 5.6.3 Candidate generation (GIS sources)
+MVP recommended sources:
+- **GovMap API** for address locate and (when possible) parcel/cadastre references
+- **MAPI / Israel open data** layers for blocks/parcels where accessible
+- Ashdod municipal quarters/neighborhood polygons if available (Phase 2)
+- Streets layer: GovMap or OSM fallback (avoid Nominatim heavy usage; self-host later)
+
+#### 5.6.4 Scoring rubric (minimum errors)
+Base confidence:
+- Cadastre ID match: 0.95–0.99
+- Full address match: 0.85–0.95
+- Quarter name polygon: 0.70–0.90
+- Fuzzy “near”: capped at 0.70 (often <0.6)
+
+Thresholds:
+- >= 0.85: map by default
+- 0.70–0.85: map only when user requests (toggle “show uncertain”)
+- <0.70: do not map, keep mention list only
+
+Consistency checks:
+- Must fall inside municipality boundary (if boundary polygon exists)
+- If both address and quarter given, geometry must be inside quarter or penalize
+
+Acceptance:
+- Precision@0.85 very high on a labeled set of 50 items
+- False-map on `NONE` items near zero
+
+### 5.7 Module G — Timeline events (multi-track)
+Track A (MVP):
+- Create `event_type="DECISION"` for each decision
+- Set `event_date=meeting_date`
+Track B (later):
+- ingest tenders/permits/contractor updates as separate doc kinds
+- link to projects with confidence
+
+UI must show:
+- Decision track always
+- Execution track only when evidence exists
+
+---
+
+## 6) API endpoints (MVP contract)
+
+### 6.1 Public endpoints
+- `GET /topics?muni=ashdod`
+- `GET /meetings?muni=ashdod&topic_id=...&year=2026`
+- `GET /meeting/{meeting_id}` (agenda, decisions, docs, summary)
+- `GET /decision/{decision_id}` (decision card + citations + geo_scope)
+- `GET /search?q=...&muni=ashdod` (keyword + optional semantic)
+- `POST /ask` (RAG; returns answer + citations)
+- `GET /map/features?muni=ashdod&from=YYYY-MM-DD&to=YYYY-MM-DD&topic=...&min_conf=0.85`
+- `GET /timeline?muni=ashdod&scope=(project|area|citywide)&id=...`
+
+### 6.2 Internal/admin endpoints (MVP)
+- `POST /crawl/run?muni=ashdod&topic_id=...`
+- `POST /process/run?doc_id=...`
+- `GET /health`
+
+---
+
+## 7) UI screens (MVP)
+
+### Screen 1 — Topic Tree
+- Left: topics list
+- Right: counts + year filters
+- “Last updated” indicator
+
+### Screen 2 — Meetings list
+- per year: meeting items
+- badges: protocol available, attachments count, audio available
+
+### Screen 3 — Meeting page
+- top: metadata
+- tabs:
+  - Summary (bullet points with citations)
+  - Decisions (list)
+  - Attachments (download links)
+  - Transcript (optional later)
+
+### Screen 4 — Decision card
+- decision text + vote
+- evidence panel:
+  - citation links to PDF view anchor
+  - attachment links
+- geo panel:
+  - geo_scope badge
+  - map snippet if confidence high
+  - “show uncertain” toggle
+
+### Screen 5 — Map view
+- filters: topic, date range, committee, confidence threshold
+- markers/polygons only for high confidence by default
+- click feature → list decisions linked + evidence
+
+### Screen 6 — Timeline view
+- Track A decisions (always)
+- Track B execution evidence (later)
+- “lag” indicator: time since last evidence update
+
+---
+
+## 8) Evaluation plan (research-grade)
+
+### 8.1 Datasets
+- Gold set of 50–200 agenda/decision segments labeled with:
+  - geo_scope ground truth
+  - correct location feature id or acceptable candidates
+  - decision extraction correctness
+- Query set of 30–100 citizen questions for RAG evaluation
+
+### 8.2 Metrics
+- Decision extraction: precision/recall on decision rows
+- RAG:
+  - citation correctness
+  - answer correctness
+  - refusal correctness (when docs insufficient)
+- Geo:
+  - Precision@0.85
+  - Coverage (% items with any mapping >= 0.70)
+  - False-map rate on NONE items
+- System:
+  - crawl freshness (time to ingest new meeting)
+  - reproducibility (idempotent re-runs)
+
+---
+
+## 9) Milestones & deliverables
+
+### Milestone 1 — Crawl + versioning + raw archive
+Deliverables:
+- Ashdod adapter working for one topic (Council meetings)
+- Store PDFs + attachments with hash/version
+- Basic admin “run crawl” command
+
+### Milestone 2 — Text extraction + search
+Deliverables:
+- PDF text extraction stored
+- keyword search working across extracted chunks
+- Meeting page shows raw text excerpt + links
+
+### Milestone 3 — Decisions table extraction
+Deliverables:
+- Decision list visible on meeting page
+- Decision card with citations to source pages/lines
+
+### Milestone 4 — RAG with citations-only policy
+Deliverables:
+- /ask endpoint
+- UI “Ask” panel on meeting/topic
+- Refusal behavior when evidence missing
+
+### Milestone 5 — Geo Step 5 (high confidence only)
+Deliverables:
+- geo_scope classification
+- address + cadastre mapping with confidence
+- map view with min_conf=0.85
+
+### Milestone 6 — Timeline Track A
+Deliverables:
+- timeline view showing decisions over time
+- export to CSV/JSON for research
+
+---
+
+## 10) Operational guidance
+
+### 10.1 Logging & observability
+- Log every URL fetched with status, bytes, hash
+- Track parse failures with docver_id
+- Store pipeline run IDs for reproducibility
+
+### 10.2 Reproducibility
+- All outputs derived from:
+  - raw file hash
+  - model version (for summaries/extractions)
+  - code version
+- Store model/version metadata in `metadata_json` fields
+
+### 10.3 Safety & correctness constraints
+- Never invent facts; always cite sources
+- Prefer “unknown / insufficient evidence” over guesses
+- Geo: never map when `geo_scope=NONE`, never map low-confidence links by default
+
+---
+
+## 11) Immediate next actions for the agent
+
+1. Create Postgres/PostGIS DB and apply schema.
+2. Implement `AshdodAdapter`:
+   - parse topics page
+   - list council meetings by year
+   - fetch meeting asset links and attachment links
+3. Build fetcher + versioning pipeline and run on a small subset (e.g., last 5 meetings).
+4. Implement PDF extraction → chunks → FTS search.
+5. Implement decisions extraction for sample protocol(s) and verify against manual reading.
+6. Implement Geo Step 5 for:
+   - CADASTRE regex extraction
+   - ADDRESS regex extraction
+   - candidate generation via GovMap API
+   - scoring and thresholds
+7. Build minimal UI screens: Topic tree → Meeting → Decision card → Map.
+
+---
+
+## Appendix A — “Answer with citations” response format
+Every RAG answer must return:
+- answer text
+- list of citations as `(doc_id/docver_id, page/line range or timestamp)`
+- optional “limitations” section when evidence incomplete
+
+---
+
+## Appendix B — Geo reason codes (for debugging & audit)
+- CADASTRE_MATCH
+- ADDRESS_GEOCODE_MATCH
+- AREA_NAME_MATCH
+- INSIDE_CITY_BOUNDARY
+- CONSISTENT_WITH_QUARTER
+- AMBIGUOUS_MULTIPLE_CANDIDATES
+- LOW_CONFIDENCE_REFUSED
+
+---
+
+## Appendix C — Suggested directory structure (repo)
+
+/adapters
+ashdod.py
+/pipeline
+fetch.py
+extract_text.py
+parse_meeting.py
+chunk_index.py
+rag.py
+geo_step5.py
+timeline.py
+/api
+main.py
+/ui
+nextjs-app/...
+/sql
+schema.sql
+/tests
+test_adapter.py
+test_decision_parse.py
+test_geo_step5.py
