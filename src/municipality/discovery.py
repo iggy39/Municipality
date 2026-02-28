@@ -101,13 +101,15 @@ class DiscoveryEngine:
     ) -> tuple[list[LinkNode], list[LinkAsset]]:
         root_canonical = normalize_url(root_url)
         root_external = resolve_external_id(root_canonical)
-        queue: list[tuple[str, int, str | None, int | None]] = [(root_canonical, 0, None, None)]
+        queue: list[tuple[str, int, str | None, int | None, str | None]] = [
+            (root_canonical, 0, None, None, None)
+        ]
         visited: set[str] = set()
         nodes: list[LinkNode] = []
         assets: list[LinkAsset] = []
 
         while queue:
-            url, depth, parent_external_id, count_hint = queue.pop(0)
+            url, depth, parent_external_id, count_hint, title_hint = queue.pop(0)
             if url in visited or depth > max_depth:
                 continue
             visited.add(url)
@@ -116,7 +118,11 @@ class DiscoveryEngine:
             now = datetime.utcnow()
             soup = BeautifulSoup(html, "html.parser")
             external_id = root_external if depth == 0 else resolve_external_id(url)
-            title = self._extract_title(soup, url)
+            title = self._resolve_node_title(
+                extracted_title=self._extract_title(soup, url),
+                title_hint=title_hint,
+                depth=depth,
+            )
             nodes.append(
                 LinkNode(
                     title_he=title,
@@ -147,9 +153,29 @@ class DiscoveryEngine:
                     )
                     continue
                 if self._in_scope(canonical) and canonical not in visited:
-                    queue.append((canonical, depth + 1, external_id, candidate.count_hint))
+                    queue.append(
+                        (
+                            canonical,
+                            depth + 1,
+                            external_id,
+                            candidate.count_hint,
+                            candidate.title_he,
+                        )
+                    )
 
         return nodes, assets
+
+    @staticmethod
+    def _resolve_node_title(
+        extracted_title: str,
+        title_hint: str | None,
+        depth: int,
+    ) -> str:
+        normalized_extracted = normalize_hebrew_text(extracted_title)
+        normalized_hint = normalize_hebrew_text(title_hint or "")
+        if depth > 0 and normalized_hint:
+            return normalized_hint
+        return normalized_extracted or normalized_hint or "untitled"
 
     def _extract_title(self, soup: BeautifulSoup, canonical_url: str) -> str:
         if self.adapter:

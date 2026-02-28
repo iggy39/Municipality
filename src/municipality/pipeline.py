@@ -48,6 +48,7 @@ class PipelineService:
 
         site = self.ensure_source_site(municipality_slug, root_url)
         nodes, assets = self.discovery.crawl(root_url)
+        node_paths = _build_node_paths(nodes)
 
         for node in nodes:
             existing = self.session.execute(
@@ -130,6 +131,13 @@ class PipelineService:
                 continue
 
             digest = hashlib.sha256(result.body).hexdigest()
+            tree_segments = node_paths.get(asset.source_node_external_id)
+            self.storage.write_tree(
+                municipality_slug,
+                canonical_url,
+                result.body,
+                tree_segments=tree_segments,
+            )
             existing_version = self.session.execute(
                 select(DocumentVersion).where(DocumentVersion.document_id == document.id, DocumentVersion.sha256 == digest)
             ).scalar_one_or_none()
@@ -156,3 +164,32 @@ class PipelineService:
         run.finished_at = datetime.utcnow()
         self.session.commit()
         return run.id
+
+
+def _build_node_paths(nodes) -> dict[str, list[str]]:
+    by_external = {node.external_id: node for node in nodes}
+    cache: dict[str, list[str]] = {}
+
+    def resolve(external_id: str) -> list[str]:
+        if external_id in cache:
+            return cache[external_id]
+
+        node = by_external.get(external_id)
+        if node is None:
+            cache[external_id] = []
+            return []
+
+        parent_path: list[str] = []
+        parent_id = node.parent_external_id
+        if parent_id:
+            parent_path = resolve(parent_id)
+
+        title = node.title_he.strip() if isinstance(node.title_he, str) else ""
+        segment = title or external_id
+        path = [*parent_path, segment]
+        cache[external_id] = path
+        return path
+
+    for ext_id in by_external:
+        resolve(ext_id)
+    return cache

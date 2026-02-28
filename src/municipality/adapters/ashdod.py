@@ -40,8 +40,12 @@ class AshdodDiscoveryAdapter:
     ) -> list[LinkCandidate]:
         candidates: list[LinkCandidate] = []
         seen: set[str] = set()
+        gallery_anchors = soup.select(".gallery a[href]")
 
-        for anchor in soup.select("a[href]"):
+        if not gallery_anchors:
+            return []
+
+        for anchor in gallery_anchors:
             text_getter = getattr(anchor, "get_text", None)
             href_getter = getattr(anchor, "get", None)
             if text_getter is None or href_getter is None:
@@ -73,7 +77,7 @@ class AshdodDiscoveryAdapter:
         if candidates:
             return candidates
 
-        for anchor in soup.select("a[href]"):
+        for anchor in gallery_anchors:
             text_getter = getattr(anchor, "get_text", None)
             href_getter = getattr(anchor, "get", None)
             if text_getter is None or href_getter is None:

@@ -1,0 +1,11 @@
+# .gitignore for Municipality project
+# Ignore storage folder and its contents
+/storage/
+
+# Common additional ignores (optional)
+.env
+node_modules/
+.DS_Store
+Thumbs.db
+npm-debug.log
+yarn-error.log

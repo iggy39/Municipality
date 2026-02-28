@@ -49,26 +49,33 @@ ASHDOD_PROTOCOLS_BASE = f"https://www.ashdod.muni.il/he-il/{HE_SITE}/{HE_PROTOCO
 
 ROOT_HTML = f"""
 <html><head><title>{HE_PROTOCOLS_BY_TOPIC_TITLE}</title></head><body>
-  <a href="/he-il/{HE_SITE}/{HE_PROTOCOLS}/{HE_PROTOCOLS_BY_TOPIC}/?parentMediaID=9999&title=2025">
-    <img src="/images/ashdod/folder-icon.png" />
-    18
-    <h3>2025</h3>
-  </a>
-  <a href="/he-il/{HE_SITE}/{HE_HOME}/{HE_REPORTS}/?parentMediaID=192050&title={HE_REPORTS}">ignore</a>
+  <ul class="gallery">
+    <li>
+      <a href="/he-il/{HE_SITE}/{HE_PROTOCOLS}/{HE_PROTOCOLS_BY_TOPIC}/?parentMediaID=9999&title=2025">
+        <img src="/images/ashdod/folder-icon.png" />
+        18
+        <h3>2025</h3>
+      </a>
+    </li>
+  </ul>
+  <a href="/he-il/{HE_SITE}/{HE_HOME}/{HE_REPORTS}/?parentMediaID=192050&title={HE_REPORTS}">outside-gallery</a>
 </body></html>
 """
 
 
 MEETING_HTML = f"""
 <html><body>
-  <a href="/media/16514520/protocol-short.pdf">{HE_PROTOCOL_SHORT}</a>
-  <a href="/media/16514521/protocol-full.pdf">{HE_PROTOCOL_FULL}</a>
-  <a href="/media/16514518/audio.mp3">{HE_AUDIO_FILE}</a>
-  <a href="/he-il/{HE_SITE}/{HE_PROTOCOLS}/{HE_PROTOCOLS_BY_TOPIC}/?parentMediaID=214566&title={HE_APPENDICES}">
-    <img src="/images/ashdod/folder-icon.png" />
-    16
-    <h3>{HE_APPENDICES}</h3>
-  </a>
+  <div class="gallery">
+    <a href="/media/16514520/protocol-short.pdf">{HE_PROTOCOL_SHORT}</a>
+    <a href="/media/16514521/protocol-full.pdf">{HE_PROTOCOL_FULL}</a>
+    <a href="/media/16514518/audio.mp3">{HE_AUDIO_FILE}</a>
+    <a href="/he-il/{HE_SITE}/{HE_PROTOCOLS}/{HE_PROTOCOLS_BY_TOPIC}/?parentMediaID=214566&title={HE_APPENDICES}">
+      <img src="/images/ashdod/folder-icon.png" />
+      16
+      <h3>{HE_APPENDICES}</h3>
+    </a>
+  </div>
+  <a href="/media/outside.pdf">outside-gallery</a>
 </body></html>
 """
 
@@ -117,3 +124,12 @@ def test_in_scope_filters_non_target_year() -> None:
     assert not adapter.in_scope(
         f"{ASHDOD_PROTOCOLS_BASE}?parentMediaID=206853&title=2024"
     )
+
+
+def test_returns_empty_when_gallery_is_missing() -> None:
+    adapter = AshdodDiscoveryAdapter()
+    soup = BeautifulSoup("<html><body><a href='/media/a.pdf'>A</a></body></html>", "html.parser")
+
+    links = adapter.extract_link_candidates(soup, ASHDOD_PROTOCOLS_BASE)
+
+    assert links == []
