@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "municipality"
+version = "0.1.0"
+description = "Municipality discovery and versioned raw archive pipeline"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "beautifulsoup4>=4.12",
+  "fastapi>=0.115",
+  "httpx>=0.28",
+  "sqlalchemy>=2.0",
+  "uvicorn>=0.34"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3"
+]
+
+[tool.pytest.ini_options]
+pythonpath = [
+  "src"
+]
+testpaths = [
+  "tests"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

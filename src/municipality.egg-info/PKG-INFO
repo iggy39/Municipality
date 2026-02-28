@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: municipality
+Version: 0.1.0
+Summary: Municipality discovery and versioned raw archive pipeline
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: beautifulsoup4>=4.12
+Requires-Dist: fastapi>=0.115
+Requires-Dist: httpx>=0.28
+Requires-Dist: sqlalchemy>=2.0
+Requires-Dist: uvicorn>=0.34
+Provides-Extra: dev
+Requires-Dist: pytest>=8.3; extra == "dev"
+
+# Municipality
+
+Implementation scaffold for Milestone M1 (discovery and versioned raw archive).

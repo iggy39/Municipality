@@ -1,0 +1,8 @@
+beautifulsoup4>=4.12
+fastapi>=0.115
+httpx>=0.28
+sqlalchemy>=2.0
+uvicorn>=0.34
+
+[dev]
+pytest>=8.3
