@@ -6,6 +6,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from municipality.adapters import AshdodDiscoveryAdapter
 from municipality.discovery import DiscoveryEngine, classify_asset_kind, normalize_url, resolve_external_id
 from municipality.fetcher import AssetFetcher
 from municipality.models import AssetManifest, Document, DocumentVersion, PipelineRun, PipelineRunStep, SourceSite, TaxonomyNode
@@ -19,9 +20,10 @@ class PipelineService:
         html_fetcher,
         fetcher: AssetFetcher,
         storage_root: Path,
+        adapter=None,
     ):
         self.session = session
-        self.discovery = DiscoveryEngine(html_fetcher=html_fetcher)
+        self.discovery = DiscoveryEngine(html_fetcher=html_fetcher, adapter=adapter)
         self.fetcher = fetcher
         self.storage = RawStorage(storage_root)
 
@@ -37,6 +39,9 @@ class PipelineService:
         return row
 
     def run_crawl(self, municipality_slug: str, root_url: str) -> int:
+        if municipality_slug.lower() == "ashdod" and self.discovery.adapter is None:
+            self.discovery.adapter = AshdodDiscoveryAdapter()
+
         run = PipelineRun(run_type="crawl", municipality_slug=municipality_slug, status="running")
         self.session.add(run)
         self.session.flush()
@@ -61,7 +66,7 @@ class PipelineService:
                         canonical_url=node.canonical_url,
                         node_type=node.node_type,
                         depth=node.depth,
-                        count_hint=None,
+                        count_hint=node.count_hint,
                         crawl_run_id=run.id,
                         discovered_at=node.discovered_at,
                     )

@@ -91,8 +91,8 @@ def test_end_to_end_rerun_is_idempotent(tmp_path: Path) -> None:
             fetcher=StubFetcher(),
             storage_root=tmp_path / "raw",
         )
-        run1 = service.run_crawl("ashdod", "https://site.local/root")
-        run2 = service.run_crawl("ashdod", "https://site.local/root")
+        run1 = service.run_crawl("testcity", "https://site.local/root")
+        run2 = service.run_crawl("testcity", "https://site.local/root")
 
         docs = session.execute(select(Document)).scalars().all()
         versions = session.execute(select(DocumentVersion)).scalars().all()
