@@ -9,13 +9,13 @@ from municipality.discovery import ALLOWED_YEARS, LinkCandidate
 from municipality.text import normalize_hebrew_text
 
 
-HE_PROTOCOLS = "\u05e4\u05e8\u05d5\u05d8\u05d5\u05e7\u05d5\u05dc\u05d9\u05dd"
-HE_APPENDIX = "\u05e0\u05e1\u05e4\u05d7"
-HE_REGULAR = "\u05e8\u05d2\u05d9\u05dc\u05d4"
-HE_SPECIAL = "\u05de\u05d9\u05d5\u05d7\u05d3\u05ea"
-HE_COMMITTEE = "\u05d5\u05e2\u05d3\u05d4"
-HE_COUNCIL_MEETINGS = "\u05d9\u05e9\u05d9\u05d1\u05d5\u05ea \u05de\u05d5\u05e2\u05e6\u05d4"
-HE_PLENUM = "\u05de\u05dc\u05d9\u05d0\u05ea"
+HE_PROTOCOLS = "פרוטוקולים"
+HE_APPENDIX = "נספח"
+HE_REGULAR = "רגילה"
+HE_SPECIAL = "מיוחדת"
+HE_COMMITTEE = "ועדה"
+HE_COUNCIL_MEETINGS = "ישיבות מועצה"
+HE_PLENUM = "מליאת"
 
 
 class AshdodDiscoveryAdapter:

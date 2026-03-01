@@ -4,12 +4,17 @@ Goal: parse decisions from protocols, attach verifiable citations, and expose de
 
 Scope lock for M3:
 - Council meetings first (`ישיבות מועצה` / city council protocols).
-- Deterministic parser is primary.
-- Fallback model is allowed only for low-confidence cases.
+- API model is primary during processing for decision extraction.
+- Deterministic parser remains as backup when API model output is invalid/unavailable.
+- Fallback path is reserved for advanced cases and currently left blank.
+
+Processing prompt prefix (mandatory):
+- Every API-model decision extraction request must start with:
+  - `find decisions in next hebrew text`
 
 Fallback model policy (mandatory):
-- Provider: Bytez
-- Model: `dicta-il/DictaLM-3.0-24B-Thinking`
+- Provider: Bytez (reserved)
+- Model: _blank for now_ (reserved for future sophisticated fallback)
 - API key source: `BYTEZ_API_KEY` environment variable only (never hardcoded in repo)
 - Every fallback invocation must be recorded in decision metadata.
 - Fallback metadata is public and must be included in API responses.
@@ -116,10 +121,11 @@ Done when:
 
 ### M3-T06 - Fallback adjudication + metadata audit
 Checklist:
-- [ ] Add Bytez fallback client wrapper using `BYTEZ_API_KEY` env var.
-- [ ] Use `dicta-il/DictaLM-3.0-24B-Thinking` only for low-confidence rows.
-- [ ] Define strict structured-output contract (JSON) for fallback extraction.
-- [ ] Validate fallback output against source spans before accepting.
+- [ ] Add Bytez API-model client wrapper using `BYTEZ_API_KEY` env var.
+- [ ] Call API model per whole protocol document (or deterministic document chunks when needed), not per row.
+- [ ] Use prompt prefix `find decisions in next hebrew text` for every API-model extraction call.
+- [ ] Define strict structured-output contract (JSON array/object) for API-model extraction.
+- [ ] Validate API-model output against source spans before accepting.
 - [ ] Persist fallback metadata fields in `decision.metadata_json`:
   - [ ] `fallback_used`
   - [ ] `fallback_reason`
@@ -128,7 +134,11 @@ Checklist:
   - [ ] `fallback_invoked_at`
   - [ ] `fallback_validation_status`
   - [ ] `fallback_validation_reasons`
-- [ ] Keep deterministic parser output when fallback validation fails.
+- [ ] Keep deterministic parser output only when API-model validation fails.
+
+Current policy note:
+- API model is active default in processing.
+- Fallback fields remain in public metadata contract for compatibility, but fallback path is currently reserved.
 
 Done when:
 - [ ] Fallback path is covered by tests and metadata is always populated correctly.

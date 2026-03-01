@@ -20,3 +20,9 @@ def test_migrations_apply_and_reapply_cleanly(tmp_path: Path) -> None:
         assert extracted.first() is not None
         chunk = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='text_chunk'"))
         assert chunk.first() is not None
+        meeting = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='meeting'"))
+        assert meeting.first() is not None
+        decision = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='decision'"))
+        assert decision.first() is not None
+        citation = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='decision_citation'"))
+        assert citation.first() is not None

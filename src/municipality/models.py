@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Index
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column
 
 from municipality.db import Base
@@ -163,4 +163,125 @@ class TextChunk(Base):
     end_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
     citation_label: Mapped[str | None] = mapped_column(String(64), nullable=True)
     trigram_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Meeting(Base):
+    __tablename__ = "meeting"
+    __table_args__ = (
+        UniqueConstraint("source_site_id", "meeting_external_id", name="uq_meeting_site_external"),
+        Index("ix_meeting_source_site_id", "source_site_id"),
+        Index("ix_meeting_external_id", "meeting_external_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_site_id: Mapped[int] = mapped_column(ForeignKey("source_site.id"), nullable=False)
+    meeting_external_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    title_he: Mapped[str] = mapped_column(Text, nullable=False)
+    committee_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meeting_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    meeting_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    meeting_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    parse_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Decision(Base):
+    __tablename__ = "decision"
+    __table_args__ = (
+        Index("ix_decision_meeting_id", "meeting_id"),
+        Index("ix_decision_source_document_id", "source_document_id"),
+        Index("ix_decision_signature_norm", "decision_signature_norm"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    meeting_id: Mapped[int] = mapped_column(ForeignKey("meeting.id"), nullable=False)
+    source_document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
+    decision_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agenda_item: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_text: Mapped[str] = mapped_column(Text, nullable=False)
+    decision_signature_norm: Mapped[str] = mapped_column(String(255), nullable=False)
+    parser_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Vote(Base):
+    __tablename__ = "vote"
+    __table_args__ = (
+        UniqueConstraint("decision_id", name="uq_vote_decision"),
+        Index("ix_vote_decision_id", "decision_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    decision_id: Mapped[int] = mapped_column(ForeignKey("decision.id"), nullable=False)
+    for_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    against_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    abstain_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    unanimous: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_uncertain: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class DecisionCitation(Base):
+    __tablename__ = "decision_citation"
+    __table_args__ = (
+        Index("ix_decision_citation_decision_id", "decision_id"),
+        Index("ix_decision_citation_document_id", "document_id"),
+        Index("ix_decision_citation_page_number", "page_number"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    decision_id: Mapped[int] = mapped_column(ForeignKey("decision.id"), nullable=False)
+    document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
+    document_version_id: Mapped[int | None] = mapped_column(ForeignKey("document_version.id"), nullable=True)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    anchor_label: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    anchor_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class MeetingDocumentLink(Base):
+    __tablename__ = "meeting_document_link"
+    __table_args__ = (
+        UniqueConstraint("meeting_id", "document_id", name="uq_meeting_document_link"),
+        Index("ix_meeting_document_link_meeting_id", "meeting_id"),
+        Index("ix_meeting_document_link_document_id", "document_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    meeting_id: Mapped[int] = mapped_column(ForeignKey("meeting.id"), nullable=False)
+    document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    provenance: Mapped[str] = mapped_column(String(32), nullable=False)
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class DecisionDocumentLink(Base):
+    __tablename__ = "decision_document_link"
+    __table_args__ = (
+        UniqueConstraint("decision_id", "document_id", name="uq_decision_document_link"),
+        Index("ix_decision_document_link_decision_id", "decision_id"),
+        Index("ix_decision_document_link_document_id", "document_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    decision_id: Mapped[int] = mapped_column(ForeignKey("decision.id"), nullable=False)
+    document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    provenance: Mapped[str] = mapped_column(String(32), nullable=False)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

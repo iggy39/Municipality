@@ -28,21 +28,19 @@ ashdod_mod = importlib.util.module_from_spec(spec)
 loader.exec_module(ashdod_mod)
 AshdodDiscoveryAdapter = ashdod_mod.AshdodDiscoveryAdapter
 
-HE_SITE = "\u05d0\u05ea\u05e8-\u05d4\u05e2\u05d9\u05e8"
-HE_PROTOCOLS = "\u05e4\u05e8\u05d5\u05d8\u05d5\u05e7\u05d5\u05dc\u05d9\u05dd"
-HE_PROTOCOLS_BY_TOPIC = "\u05e8\u05e9\u05d9\u05de\u05ea-\u05e4\u05e8\u05d5\u05d8\u05d5\u05e7\u05d5\u05dc\u05d9\u05dd-\u05dc\u05e4\u05d9-\u05e0\u05d5\u05e9\u05d0"
+HE_SITE = "אתר-העיר"
+HE_PROTOCOLS = "פרוטוקולים"
+HE_PROTOCOLS_BY_TOPIC = "רשימת-פרוטוקולים-לפי-נושא"
 HE_PROTOCOLS_BY_TOPIC_TITLE = (
-    "\u05e8\u05e9\u05d9\u05de\u05ea \u05e4\u05e8\u05d5\u05d8\u05d5\u05e7\u05d5\u05dc\u05d9\u05dd "
-    "\u05dc\u05e4\u05d9 \u05e0\u05d5\u05e9\u05d0"
+    "רשימת פרוטוקולים "
+    "לפי נושא"
 )
-HE_HOME = "\u05d3\u05e3-\u05d4\u05d1\u05d9\u05ea"
-HE_REPORTS = "\u05d3\u05d5\u05d7\u05d5\u05ea"
-HE_PROTOCOL_SHORT = (
-    "\u05e4\u05e8\u05d5\u05d8\u05d5\u05e7\u05d5\u05dc \u05de\u05e7\u05d5\u05e6\u05e8"
-)
-HE_PROTOCOL_FULL = "\u05e4\u05e8\u05d5\u05d8\u05d5\u05e7\u05d5\u05dc \u05de\u05dc\u05d0"
-HE_AUDIO_FILE = "\u05e7\u05d5\u05d1\u05e5 \u05e9\u05de\u05e2"
-HE_APPENDICES = "\u05e0\u05e1\u05e4\u05d7\u05d9\u05dd"
+HE_HOME = "דף-הבית"
+HE_REPORTS = "דוחות"
+HE_PROTOCOL_SHORT = "פרוטוקול מקוצר"
+HE_PROTOCOL_FULL = "פרוטוקול מלא"
+HE_AUDIO_FILE = "קובץ שמע"
+HE_APPENDICES = "נספחים"
 
 ASHDOD_PROTOCOLS_BASE = f"https://www.ashdod.muni.il/he-il/{HE_SITE}/{HE_PROTOCOLS}/{HE_PROTOCOLS_BY_TOPIC}/"
 

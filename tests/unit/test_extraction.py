@@ -3,8 +3,21 @@ from __future__ import annotations
 from municipality.extraction import parse_extracted_text, score_extraction_quality
 
 
+HE_WELFARE_COMMITTEE = "ועדת רווחה"
+HE_LINE_A = "שורה א"
+HE_PAGE_TWO = "עמוד שני"
+HE_LINE_B = "שורה ב"
+HE_SHORT_TEXT = "טקסט קצר"
+HE_MORE = "עוד"
+
+
 def test_parse_extracted_text_strips_bidi_marks_and_keeps_pages() -> None:
-    raw = "\u202bוועדת רווחה\u202c\nשורה א\f\u202bעמוד שני\u202c\nשורה ב"
+    raw = (
+        f"\u202b{HE_WELFARE_COMMITTEE}\u202c\n"
+        f"{HE_LINE_A}\f"
+        f"\u202b{HE_PAGE_TWO}\u202c\n"
+        f"{HE_LINE_B}"
+    )
     full_text, pages, citation_map = parse_extracted_text(raw)
 
     assert "\u202b" not in full_text
@@ -16,7 +29,7 @@ def test_parse_extracted_text_strips_bidi_marks_and_keeps_pages() -> None:
 
 
 def test_quality_flags_short_text_for_ocr_candidate() -> None:
-    full_text, pages, _ = parse_extracted_text("טקסט קצר\fעוד")
+    full_text, pages, _ = parse_extracted_text(f"{HE_SHORT_TEXT}\f{HE_MORE}")
     score, flags, summary = score_extraction_quality(full_text, pages)
 
     assert score < 0.8

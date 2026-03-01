@@ -11,7 +11,16 @@ Requires-Dist: sqlalchemy>=2.0
 Requires-Dist: uvicorn>=0.34
 Provides-Extra: dev
 Requires-Dist: pytest>=8.3; extra == "dev"
+Requires-Dist: pre-commit>=4.0; extra == "dev"
 
 # Municipality
 
 Implementation scaffold for Milestone M1 (discovery and versioned raw archive).
+
+## Development
+
+- Install dev dependencies: `pip install -e ".[dev]"`
+- Enable git hooks once per clone: `pre-commit install`
+- Run all hooks manually: `pre-commit run --all-files`
+
+The pre-commit hook enforces the Hebrew direction guard (`tests/unit/test_hebrew_direction_guard.py`) to prevent reversed Hebrew text regressions.

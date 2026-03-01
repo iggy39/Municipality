@@ -1,0 +1,8 @@
+{
+  "files.encoding": "utf8",
+  "editor.rtlMoveVisually": true,
+  "editor.renderControlCharacters": true,
+  "editor.unicodeHighlight.invisibleCharacters": true,
+  "editor.unicodeHighlight.ambiguousCharacters": true,
+  "editor.unicodeHighlight.nonBasicASCII": false
+}

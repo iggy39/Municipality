@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: hebrew-direction-guard
+        name: Hebrew direction guard
+        entry: python -m pytest tests/unit/test_hebrew_direction_guard.py -q
+        language: system
+        pass_filenames: false
+        always_run: true

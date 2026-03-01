@@ -6,7 +6,15 @@ import re
 from municipality.extraction import resolve_pages_for_span
 
 
-HEADING_PREFIX_RE = re.compile(r"^(סעיף|פרק|נושא|החלטה|סיכום)")
+HE_SECTION = "סעיף"
+HE_CHAPTER = "פרק"
+HE_TOPIC = "נושא"
+HE_DECISION = "החלטה"
+HE_SUMMARY = "סיכום"
+
+HEADING_PREFIX_RE = re.compile(
+    rf"^({HE_SECTION}|{HE_CHAPTER}|{HE_TOPIC}|{HE_DECISION}|{HE_SUMMARY})"
+)
 ORDERED_PREFIX_RE = re.compile(r"^\d+[.)-]\s")
 WHITESPACE_RE = re.compile(r"\s+")
 

@@ -14,6 +14,17 @@ from municipality.processing import ProcessingService
 from municipality.search import SearchService
 
 
+HE_PROTOCOL_TITLE = "פרוטוקול ועדת רווחה 2026"
+HE_ATTACHMENT_TITLE = "נספח תקציבי 2026"
+HE_PROTOCOL_BODY = (
+    "ועדת רווחה\n"
+    "העשייה הענפה "
+    "במנהל השירותים החברתיים"
+    "\fסיכום והחלטות"
+)
+HE_ATTACHMENT_BODY = "נספח תקציבי\nפירוט סעיפים"
+
+
 class StubExtractor:
     def __init__(self, by_uri: dict[str, str]):
         self.by_uri = by_uri
@@ -64,7 +75,7 @@ def _run_search_eval_scenario(tmp_path: Path):
             source_site_id=site.id,
             document_external_id="doc:protocol",
             canonical_url="https://example.local/protocol-1.pdf",
-            title_he="פרוטוקול ועדת רווחה 2026",
+            title_he=HE_PROTOCOL_TITLE,
             doc_kind="protocol_full",
             mime_hint="application/pdf",
             last_seen_at=datetime.utcnow(),
@@ -73,7 +84,7 @@ def _run_search_eval_scenario(tmp_path: Path):
             source_site_id=site.id,
             document_external_id="doc:attachment",
             canonical_url="https://example.local/attachment-1.pdf",
-            title_he="נספח תקציבי 2026",
+            title_he=HE_ATTACHMENT_TITLE,
             doc_kind="attachment",
             mime_hint="application/pdf",
             last_seen_at=datetime.utcnow(),
@@ -134,8 +145,8 @@ def _run_search_eval_scenario(tmp_path: Path):
 
         extractor = StubExtractor(
             {
-                protocol_ver.storage_uri: "ועדת רווחה\nהעשייה הענפה במנהל השירותים החברתיים\fסיכום והחלטות",
-                attachment_ver.storage_uri: "נספח תקציבי\nפירוט סעיפים",
+                protocol_ver.storage_uri: HE_PROTOCOL_BODY,
+                attachment_ver.storage_uri: HE_ATTACHMENT_BODY,
             }
         )
 

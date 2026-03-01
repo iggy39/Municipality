@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from municipality.chunking import build_chunks
+from municipality.decisions import DecisionExtractionService
 from municipality.extraction import PdfTextExtractor
 from municipality.models import Document, DocumentVersion, ExtractedDocument, PipelineRun, PipelineRunStep, SourceSite
 from municipality.search import SearchService
@@ -21,11 +22,13 @@ class ProcessingService:
         session: Session,
         storage_root: Path,
         extractor: PdfTextExtractor | None = None,
+        decision_extraction: DecisionExtractionService | None = None,
     ):
         self.session = session
         self.storage = RawStorage(storage_root)
         self.extractor = extractor or PdfTextExtractor()
         self.search = SearchService(session)
+        self.decision_extraction = decision_extraction or DecisionExtractionService(session)
 
     def run(self, doc_id: int | None = None, municipality_slug: str | None = None) -> int:
         run = PipelineRun(
@@ -65,12 +68,20 @@ class ProcessingService:
                 extracted_row = self._upsert_extracted_document(document_version.id, extraction)
                 self.session.flush()
 
+                source_kind = _source_kind_for_document(document.doc_kind)
+                self.decision_extraction.process_document(
+                    document=document,
+                    document_version=document_version,
+                    extracted_text=extraction.full_text,
+                    citation_map=extraction.citation_map,
+                    source_kind=source_kind,
+                )
+
                 if not extraction.ok or extracted_row.id is None:
                     step.status = "failed"
                     step.detail = extraction.error_code or "EXTRACTION_FAILED"
                     continue
 
-                source_kind = _source_kind_for_document(document.doc_kind)
                 chunks = build_chunks(
                     document_version_id=document_version.id,
                     text=extraction.full_text,

@@ -1,0 +1,33 @@
+{
+  "cases": [
+    {
+      "case_id": "m3-council-001",
+      "title": "Council regular meeting with counted votes",
+      "raw_text": "ישיבת מועצה רגילה מס' 12/26 בתאריך 01.03.2026\nסיכום והחלטות\n1. אישור תקציב החינוך לשנת 2026 הוחלט לאשר. בעד/נגד/נמנע: 9/1/0\n2. עדכון תכנית שיקום שכונות הוחלט לאשר. בעד 8 נגד 1 נמנעים 1",
+      "expected_decisions": [
+        {
+          "text_contains": "אישור תקציב החינוך",
+          "vote": {"for_count": 9, "against_count": 1, "abstain_count": 0},
+          "citation_required": true
+        },
+        {
+          "text_contains": "עדכון תכנית שיקום שכונות",
+          "vote": {"for_count": 8, "against_count": 1, "abstain_count": 1},
+          "citation_required": true
+        }
+      ]
+    },
+    {
+      "case_id": "m3-council-002",
+      "title": "Council special meeting with unanimous vote",
+      "raw_text": "ישיבת מועצה מיוחדת 15.04.2026\fסיכום והחלטות\n1. מינוי ועדת ביקורת אושר פה אחד",
+      "expected_decisions": [
+        {
+          "text_contains": "מינוי ועדת ביקורת",
+          "vote": {"unanimous": true},
+          "citation_required": true
+        }
+      ]
+    }
+  ]
+}
