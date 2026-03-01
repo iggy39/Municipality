@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Generator
 
 from fastapi import Depends, FastAPI
 import httpx
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from municipality.db import build_engine, build_session_factory
 from municipality.fetcher import AssetFetcher
 from municipality.migrations import apply_all
 from municipality.models import PipelineRun, PipelineRunStep
 from municipality.pipeline import PipelineService
+from municipality.processing import ProcessingService
+from municipality.search import SearchService
 
 
 def _default_html_fetcher(url: str) -> str:
@@ -26,7 +28,7 @@ SessionLocal = build_session_factory(engine)
 app = FastAPI(title="Municipality API")
 
 
-def get_db() -> Session:
+def get_db() -> Generator:
     db = SessionLocal()
     try:
         yield db
@@ -45,7 +47,7 @@ def health() -> dict[str, str]:
 
 
 @app.post("/crawl/run")
-def crawl_run(muni: str, root_url: str, db: Session = Depends(get_db)) -> dict[str, int]:
+def crawl_run(muni: str, root_url: str, db=Depends(get_db)) -> dict[str, int]:
     service = PipelineService(
         session=db,
         html_fetcher=_default_html_fetcher,
@@ -57,12 +59,61 @@ def crawl_run(muni: str, root_url: str, db: Session = Depends(get_db)) -> dict[s
 
 
 @app.post("/process/run")
-def process_run(doc_id: int) -> dict[str, str | int]:
-    return {"status": "queued", "doc_id": doc_id, "note": "M1 placeholder"}
+def process_run(doc_id: int | None = None, muni: str | None = None, db=Depends(get_db)) -> dict[str, int]:
+    service = ProcessingService(
+        session=db,
+        storage_root=Path("storage/raw"),
+    )
+    run_id = service.run(doc_id=doc_id, municipality_slug=muni)
+    return {"run_id": run_id}
+
+
+@app.get("/search")
+def search(
+    q: str,
+    muni: str | None = None,
+    source_type: str | None = None,
+    year: int | None = None,
+    topic: str | None = None,
+    limit: int = 20,
+    db=Depends(get_db),
+) -> dict:
+    service = SearchService(db)
+    hits = service.search(
+        query=q,
+        municipality_slug=muni,
+        source_type=source_type,
+        year=year,
+        topic=topic,
+        limit=max(1, min(limit, 50)),
+    )
+    return {
+        "query": q,
+        "count": len(hits),
+        "results": [
+            {
+                "chunk_id": hit.chunk_id,
+                "score": hit.score,
+                "snippet": hit.snippet,
+                "citation": hit.citation,
+                "source_type": hit.source_type,
+                "document": {
+                    "id": hit.document_id,
+                    "title": hit.document_title,
+                    "url": hit.document_url,
+                },
+                "municipality": hit.municipality_slug,
+                "meeting_external_id": hit.meeting_external_id,
+                "start_page": hit.start_page,
+                "end_page": hit.end_page,
+            }
+            for hit in hits
+        ],
+    }
 
 
 @app.get("/runs/{run_id}")
-def run_status(run_id: int, db: Session = Depends(get_db)) -> dict:
+def run_status(run_id: int, db=Depends(get_db)) -> dict:
     run = db.execute(select(PipelineRun).where(PipelineRun.id == run_id)).scalar_one_or_none()
     if not run:
         return {"error": "not_found", "run_id": run_id}

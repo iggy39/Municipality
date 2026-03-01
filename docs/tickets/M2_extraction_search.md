@@ -107,19 +107,19 @@ Done when:
 
 ### M2-T09 - Search quality eval set and tests
 Checklist:
-- [ ] Build query set from known protocol and attachment phrases.
-- [ ] Define hit criteria (`top_k` contains expected target).
-- [ ] Add automated regression tests.
+- [x] Build query set from known protocol and attachment phrases.
+- [x] Define hit criteria (`top_k` contains expected target).
+- [x] Add automated regression tests.
 
 Done when:
-- [ ] Search hit-rate meets agreed threshold.
+- [x] Search hit-rate meets agreed threshold.
 
 ### M2-T10 - M2 QA report and signoff
 Checklist:
-- [ ] Create `eval/reports/m2_report.md`.
-- [ ] Publish extraction coverage metrics.
-- [ ] Publish search hit-rate and latency summaries.
-- [ ] List known issues and deferrals.
+- [x] Create `eval/reports/m2_report.md`.
+- [x] Publish extraction coverage metrics.
+- [x] Publish search hit-rate and latency summaries.
+- [x] List known issues and deferrals.
 
 Done when:
-- [ ] M2 signoff completed and M3 can start.
+- [x] M2 signoff completed and M3 can start.

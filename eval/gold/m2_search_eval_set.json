@@ -1,0 +1,38 @@
+{
+  "description": "M2 search eval set built from known protocol and attachment phrases",
+  "queries": [
+    {
+      "case_id": "m2-q01",
+      "query": "העשייה הענפה",
+      "top_k": 3,
+      "expected_source_type": "protocol",
+      "expected_document_title_contains": "פרוטוקול",
+      "expected_meeting_external_id": "meeting:2026-01"
+    },
+    {
+      "case_id": "m2-q02",
+      "query": "פירוט סעיפים",
+      "top_k": 3,
+      "expected_source_type": "attachment",
+      "expected_document_title_contains": "נספח",
+      "expected_meeting_external_id": "meeting:2026-01"
+    },
+    {
+      "case_id": "m2-q03",
+      "query": "סיכום והחלטות",
+      "top_k": 3,
+      "expected_source_type": "protocol",
+      "expected_document_title_contains": "פרוטוקול",
+      "filter_year": 2026
+    },
+    {
+      "case_id": "m2-q04",
+      "query": "תקציבי",
+      "top_k": 3,
+      "expected_source_type": "attachment",
+      "expected_document_title_contains": "נספח",
+      "filter_source_type": "attachment",
+      "filter_topic": "meeting:2026-01"
+    }
+  ]
+}

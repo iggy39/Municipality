@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Index
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column
 
 from municipality.db import Base
@@ -111,4 +111,56 @@ class DocumentVersion(Base):
     storage_uri: Mapped[str] = mapped_column(Text, nullable=False)
     fetched_http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fetched_mime: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ExtractedDocument(Base):
+    __tablename__ = "extracted_document"
+    __table_args__ = (
+        UniqueConstraint("document_version_id", name="uq_extracted_document_docver"),
+        Index("ix_extracted_document_docver_id", "document_version_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_version_id: Mapped[int] = mapped_column(ForeignKey("document_version.id"), nullable=False)
+    parser_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    parser_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    pages_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    citation_map_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quality_flags_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quality_summary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    warning_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TextChunk(Base):
+    __tablename__ = "text_chunk"
+    __table_args__ = (
+        UniqueConstraint("chunk_id", name="uq_text_chunk_chunk_id"),
+        Index("ix_text_chunk_docver_id", "document_version_id"),
+        Index("ix_text_chunk_document_id", "document_id"),
+        Index("ix_text_chunk_source_kind", "source_kind"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chunk_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
+    document_version_id: Mapped[int] = mapped_column(ForeignKey("document_version.id"), nullable=False)
+    extracted_document_id: Mapped[int] = mapped_column(ForeignKey("extracted_document.id"), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_text_norm: Mapped[str] = mapped_column(Text, nullable=False)
+    start_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    citation_label: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    trigram_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

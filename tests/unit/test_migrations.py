@@ -16,3 +16,7 @@ def test_migrations_apply_and_reapply_cleanly(tmp_path: Path) -> None:
     with engine.connect() as conn:
         row = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='document_version'"))
         assert row.first() is not None
+        extracted = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='extracted_document'"))
+        assert extracted.first() is not None
+        chunk = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='text_chunk'"))
+        assert chunk.first() is not None
