@@ -18,3 +18,7 @@ Build a research-grade MVP that ingests municipality protocol documents and atta
 2. Handling Implementation Uncertainty
    - If unsure about the best implementation, state the uncertainty to the user first.
    - Only then (if needed) research best practices and proceed.
+
+3. Plan Mode Clarification Depth
+   - In Plan Mode, ask as many targeted follow-up questions as needed to remove ambiguity.
+   - Do not proceed while any requirement remains vague.
