@@ -36,6 +36,7 @@ Real-life bootstrap example (must be first):
 - [ ] Prompt-prefix policy is enforced for answer, verification, and refusal calls.
 - [ ] M4 eval starts with a real-life M2-derived mixed-source case.
 - [ ] Default RAG provider/model is Bytez + `google/gemini-2.5-pro`.
+- [ ] Hybrid semantic topic+entity tree is persisted and integrated into retrieval with max one semantic API extraction call per document version.
 
 ## Ticket Board
 
@@ -52,6 +53,7 @@ Real-life bootstrap example (must be first):
 | M4-T08 | Hallucination guard regression tests | High | M4-T07 |
 | M4-T09 | RAG observability and tracing | Medium | M4-T05 |
 | M4-T10 | M4 QA report and signoff | High | M4-T08 |
+| M4-T11 | Hybrid semantic topic+entity tree (one API call per document) | High | M4-T02, M4-T03 |
 
 ---
 
@@ -175,3 +177,18 @@ Checklist:
 
 Done when:
 - [ ] M4 signoff completed and M5 can start.
+
+### M4-T11 - Hybrid semantic topic+entity tree (one API call per document)
+Checklist:
+- [ ] Implement semantic schema + ORM for tree nodes, aliases, edges, mentions, and decision/chunk links.
+- [ ] Add one-call-per-document semantic extraction contract and caching key.
+- [ ] Enforce strict span validation and reject unsupported semantic candidates.
+- [ ] Implement canonicalization pipeline (normalization, alias merge, specificity/depth gates, stable-hash dedup).
+- [ ] Integrate semantic boosting/filtering in retrieval while preserving citation-first behavior.
+- [ ] Add regression tests + eval report for semantic precision, duplicate rate, depth/specificity quality, and retrieval lift.
+- [ ] Follow detailed implementation blueprint in `docs/tickets/M4_semantic_topic_entity_tree_plan.md`.
+
+Done when:
+- [ ] Semantic extraction performs at most one API call per `(document_version_id, prompt_hash, model)` tuple.
+- [ ] Accepted semantic nodes are 100% evidence-backed (validated text spans).
+- [ ] Semantic retrieval improves specific decision-level query quality over lexical baseline.
