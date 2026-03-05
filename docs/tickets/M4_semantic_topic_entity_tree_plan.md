@@ -1,10 +1,17 @@
 # M4-T11 Implementation Plan
 ## Hybrid Semantic Topic+Entity Tree (One API Call Per Document)
 
-Status: Ready for implementation planning lock
-Date: 2026-03-01
+Status: In progress (Phase 1-2 completed in code, Phase 3 aligned to multicategory evidence spans)
+Date: 2026-03-05
 Owner milestone: M4
 Related board ticket: `M4-T11` in `docs/tickets/M4_rag_citations.md`
+
+Implementation progress snapshot:
+
+- Phase 1: completed (migration `004` + ORM parity + migration idempotency test update).
+- Phase 2: completed (single-call extractor, cache guard, strict contract, multicategory evidence-span prompt contract).
+- Phase 3: in progress (canonicalization core implemented and aligned to Phase 2 evidence-span categories with Option-2 gating; full persistence audit wiring remains in later phases).
+- Phase 4-6: planned.
 
 ---
 
@@ -69,11 +76,14 @@ The design is locked to minimize model cost and drift:
 1. Processing loads extracted text + existing decision/chunk spans.
 2. Deterministic pre-pass builds compact semantic evidence packet:
    - headings,
-   - decision lines,
+   - compact evidence lines (coverage-first, page-aware),
+   - soft regex priors for category hints (`decision|plan_program|discussion|policy|budget_finance|implementation|procurement_legal|public_feedback`),
    - high-value noun phrases / entities,
    - citation-aware offsets and page references.
-3. System sends one strict JSON extraction request to the API model.
-4. System validates response schema and span integrity.
+3. System sends one strict JSON extraction request to the API model with two tasks in the same call:
+   - detect and classify evidence spans by category,
+   - extract semantic nodes/entities linked to detected span ids.
+4. System validates response schema, evidence-span references, and span integrity.
 5. Canonicalizer normalizes, merges aliases, applies specificity/depth gates, and computes stable hashes.
 6. Persist accepted nodes, aliases, mentions, and links.
 7. Persist reject reasons for audit and quality tuning.
@@ -275,15 +285,17 @@ Defines:
 - Prompt prefix constant:
   - `extract semantic topic and entity tree from hebrew municipal document with evidence offsets only`
 - JSON schema contract for model response.
-- Dataclasses for candidate nodes, aliases, mentions, links, and validation reports.
-- Enumerations for node kinds, semantic relation roles, and reject reason codes.
+- Dataclasses for evidence spans, candidate nodes, aliases, mentions, links, and validation reports.
+- Enumerations for node kinds, semantic relation roles, reject reason codes, and evidence categories.
+- Validation for node-to-evidence-span references (`evidence_span_ids`).
 
 #### `src/municipality/semantic_prompt.py` (new)
 
 Builds one-call request payload:
 
-- Input packet composition from deterministic pre-pass.
-- Strict instructions that every returned node requires one or more evidence spans.
+- Input packet composition from deterministic lightweight pre-pass.
+- Coverage-first evidence-line compaction with soft regex category priors (confidence hints only, never hard filters).
+- Strict same-call instructions to classify evidence spans and map semantic nodes to span ids.
 - Explicit refusal behavior in extraction output for unknown/uncertain candidates.
 
 #### `src/municipality/semantic_extractor.py` (new)
@@ -303,6 +315,10 @@ Responsibilities:
 - Text normalization.
 - Alias merge logic.
 - Specificity/depth gating.
+- Option-2 category support gating aligned to Phase 2:
+  - decision evidence support threshold,
+  - contextual non-decision evidence support threshold,
+  - stricter no-reference activation gate.
 - Stable-hash ID derivation.
 - Dedup and hierarchy integrity checks.
 
@@ -312,8 +328,8 @@ Responsibilities:
 
 - End-to-end semantic pipeline per document version.
 - Validation against extracted text and citation map.
-- Persistence of accepted nodes/mentions/links and rejected candidates.
-- Structured run report for observability.
+- Structured run report for observability (`run_id`, cache/call status, evidence span count, candidate/accept/reject counters).
+- Persistence of accepted nodes/mentions/links and rejected candidates is deferred to Phase 4 processing integration.
 
 ---
 
@@ -428,6 +444,8 @@ Must report:
 - `tests/unit/test_semantic_specificity.py`
 - `tests/unit/test_semantic_hashing.py`
 - `tests/unit/test_semantic_span_validation.py`
+- `tests/unit/test_semantic_prompt.py`
+- `tests/unit/test_semantic_contract.py`
 
 #### Integration tests (new)
 
@@ -753,33 +771,35 @@ Response includes:
 
 ## 10) Execution phases
 
-Phase 1: schema + ORM
+Phase 1: schema + ORM (completed)
 
 - Add migration `004`.
 - Add model classes.
 - Pass migration idempotency tests.
 
-Phase 2: extraction contracts + one-call service
+Phase 2: extraction contracts + one-call service (completed)
 
 - Add semantic contract/prompt/extractor modules.
 - Add run caching and one-call guard.
+- Add multicategory evidence-span extraction contract in the same model call.
 
-Phase 3: canonicalization core
+Phase 3: canonicalization core (in progress)
 
 - Implement normalization, merge, specificity, hash dedup.
-- Add reject audit pipeline.
+- Align gating with Phase 2 evidence categories (decision + contextual support, stricter no-ref activation).
+- Add reject audit pipeline persistence in integration phase.
 
-Phase 4: processing integration
+Phase 4: processing integration (planned)
 
 - Call semantic stage from `ProcessingService`.
 - Persist links and mentions.
 
-Phase 5: retrieval + APIs
+Phase 5: retrieval + APIs (planned)
 
 - Add semantic boost/filter in search.
 - Add semantic endpoints.
 
-Phase 6: evaluation + report
+Phase 6: evaluation + report (planned)
 
 - Create gold set and run metrics.
 - Publish report and open known-issues list.

@@ -26,3 +26,9 @@ def test_migrations_apply_and_reapply_cleanly(tmp_path: Path) -> None:
         assert decision.first() is not None
         citation = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='decision_citation'"))
         assert citation.first() is not None
+        semantic_run = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='semantic_document_run'")
+        )
+        assert semantic_run.first() is not None
+        semantic_node = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='semantic_node'"))
+        assert semantic_node.first() is not None

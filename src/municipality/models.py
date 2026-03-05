@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Index
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from municipality.db import Base
@@ -283,5 +283,204 @@ class DecisionDocumentLink(Base):
     document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
     source_type: Mapped[str] = mapped_column(String(32), nullable=False)
     provenance: Mapped[str] = mapped_column(String(32), nullable=False)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SemanticDocumentRun(Base):
+    __tablename__ = "semantic_document_run"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_version_id",
+            "prompt_hash",
+            "model_provider",
+            "model_name",
+            name="uq_semantic_document_run_call_key",
+        ),
+        Index("ix_semantic_document_run_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_version_id: Mapped[int] = mapped_column(ForeignKey("document_version.id"), nullable=False)
+    prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    api_call_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    request_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extraction_payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    validation_report_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    canonicalization_report_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SemanticNode(Base):
+    __tablename__ = "semantic_node"
+    __table_args__ = (
+        UniqueConstraint("source_site_id", "node_key_hash", name="uq_semantic_node_site_hash"),
+        UniqueConstraint(
+            "source_site_id",
+            "parent_node_id",
+            "node_kind",
+            "semantic_type",
+            "pref_label_norm",
+            name="uq_semantic_node_hierarchy_label",
+        ),
+        Index("ix_semantic_node_parent_node_id", "parent_node_id"),
+        Index("ix_semantic_node_node_kind", "node_kind"),
+        Index("ix_semantic_node_semantic_type", "semantic_type"),
+        Index("ix_semantic_node_depth", "depth"),
+        Index("ix_semantic_node_status", "status"),
+        Index("ix_semantic_node_pref_label_norm", "pref_label_norm"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_site_id: Mapped[int] = mapped_column(ForeignKey("source_site.id"), nullable=False)
+    node_key_hash: Mapped[str] = mapped_column(String(40), nullable=False)
+    node_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    semantic_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    pref_label_he: Mapped[str] = mapped_column(Text, nullable=False)
+    pref_label_norm: Mapped[str] = mapped_column(String(255), nullable=False)
+    parent_node_id: Mapped[int | None] = mapped_column(ForeignKey("semantic_node.id"), nullable=True)
+    depth: Mapped[int] = mapped_column(Integer, nullable=False)
+    specificity_score: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    support_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    first_seen_document_version_id: Mapped[int | None] = mapped_column(ForeignKey("document_version.id"), nullable=True)
+    last_seen_document_version_id: Mapped[int | None] = mapped_column(ForeignKey("document_version.id"), nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SemanticAlias(Base):
+    __tablename__ = "semantic_alias"
+    __table_args__ = (
+        UniqueConstraint("semantic_node_id", "alias_hash", name="uq_semantic_alias_node_hash"),
+        Index("ix_semantic_alias_label_norm", "alias_label_norm"),
+        Index("ix_semantic_alias_kind", "alias_kind"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    semantic_node_id: Mapped[int] = mapped_column(ForeignKey("semantic_node.id"), nullable=False)
+    alias_hash: Mapped[str] = mapped_column(String(40), nullable=False)
+    alias_label_he: Mapped[str] = mapped_column(Text, nullable=False)
+    alias_label_norm: Mapped[str] = mapped_column(String(255), nullable=False)
+    alias_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    first_seen_document_version_id: Mapped[int | None] = mapped_column(ForeignKey("document_version.id"), nullable=True)
+    last_seen_document_version_id: Mapped[int | None] = mapped_column(ForeignKey("document_version.id"), nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SemanticEdge(Base):
+    __tablename__ = "semantic_edge"
+    __table_args__ = (
+        UniqueConstraint("source_node_id", "target_node_id", "relation_type", name="uq_semantic_edge_triplet"),
+        Index("ix_semantic_edge_source_node_id", "source_node_id"),
+        Index("ix_semantic_edge_target_node_id", "target_node_id"),
+        Index("ix_semantic_edge_relation_type", "relation_type"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_node_id: Mapped[int] = mapped_column(ForeignKey("semantic_node.id"), nullable=False)
+    target_node_id: Mapped[int] = mapped_column(ForeignKey("semantic_node.id"), nullable=False)
+    relation_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    provenance: Mapped[str] = mapped_column(String(24), nullable=False)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SemanticMention(Base):
+    __tablename__ = "semantic_mention"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_version_id",
+            "semantic_node_id",
+            "start_offset",
+            "end_offset",
+            name="uq_semantic_mention_doc_node_span",
+        ),
+        Index("ix_semantic_mention_document_id", "document_id"),
+        Index("ix_semantic_mention_semantic_node_id", "semantic_node_id"),
+        Index("ix_semantic_mention_evidence_hash", "evidence_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    semantic_node_id: Mapped[int] = mapped_column(ForeignKey("semantic_node.id"), nullable=False)
+    document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
+    document_version_id: Mapped[int] = mapped_column(ForeignKey("document_version.id"), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    start_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mention_text: Mapped[str] = mapped_column(Text, nullable=False)
+    mention_text_norm: Mapped[str] = mapped_column(Text, nullable=False)
+    mention_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    evidence_hash: Mapped[str] = mapped_column(String(40), nullable=False)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class DecisionSemanticLink(Base):
+    __tablename__ = "decision_semantic_link"
+    __table_args__ = (
+        UniqueConstraint("decision_id", "semantic_node_id", "relation_role", name="uq_decision_semantic_link_triplet"),
+        Index("ix_decision_semantic_link_decision_id", "decision_id"),
+        Index("ix_decision_semantic_link_semantic_node_id", "semantic_node_id"),
+        Index("ix_decision_semantic_link_relation_role", "relation_role"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    decision_id: Mapped[int] = mapped_column(ForeignKey("decision.id"), nullable=False)
+    semantic_node_id: Mapped[int] = mapped_column(ForeignKey("semantic_node.id"), nullable=False)
+    relation_role: Mapped[str] = mapped_column(String(32), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    source_mention_id: Mapped[int | None] = mapped_column(ForeignKey("semantic_mention.id"), nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ChunkSemanticLink(Base):
+    __tablename__ = "chunk_semantic_link"
+    __table_args__ = (
+        UniqueConstraint("chunk_id", "semantic_node_id", name="uq_chunk_semantic_link_pair"),
+        Index("ix_chunk_semantic_link_chunk_id", "chunk_id"),
+        Index("ix_chunk_semantic_link_semantic_node_id", "semantic_node_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chunk_id: Mapped[str] = mapped_column(String(64), ForeignKey("text_chunk.chunk_id"), nullable=False)
+    semantic_node_id: Mapped[int] = mapped_column(ForeignKey("semantic_node.id"), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    source_mention_id: Mapped[int | None] = mapped_column(ForeignKey("semantic_mention.id"), nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SemanticCandidateReject(Base):
+    __tablename__ = "semantic_candidate_reject"
+    __table_args__ = (
+        Index("ix_semantic_candidate_reject_run_id", "semantic_document_run_id"),
+        Index("ix_semantic_candidate_reject_reason_code", "reason_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    semantic_document_run_id: Mapped[int] = mapped_column(ForeignKey("semantic_document_run.id"), nullable=False)
+    candidate_label_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    candidate_label_norm: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    node_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    semantic_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

@@ -180,13 +180,18 @@ Done when:
 
 ### M4-T11 - Hybrid semantic topic+entity tree (one API call per document)
 Checklist:
-- [ ] Implement semantic schema + ORM for tree nodes, aliases, edges, mentions, and decision/chunk links.
-- [ ] Add one-call-per-document semantic extraction contract and caching key.
-- [ ] Enforce strict span validation and reject unsupported semantic candidates.
-- [ ] Implement canonicalization pipeline (normalization, alias merge, specificity/depth gates, stable-hash dedup).
+- [x] Implement semantic schema + ORM for tree nodes, aliases, edges, mentions, and decision/chunk links.
+- [x] Add one-call-per-document semantic extraction contract and caching key.
+- [x] Enforce strict span validation and reject unsupported semantic candidates.
+- [x] Implement canonicalization pipeline (normalization, alias merge, specificity/depth gates, stable-hash dedup).
 - [ ] Integrate semantic boosting/filtering in retrieval while preserving citation-first behavior.
 - [ ] Add regression tests + eval report for semantic precision, duplicate rate, depth/specificity quality, and retrieval lift.
-- [ ] Follow detailed implementation blueprint in `docs/tickets/M4_semantic_topic_entity_tree_plan.md`.
+- [x] Follow detailed implementation blueprint in `docs/tickets/M4_semantic_topic_entity_tree_plan.md`.
+
+Status note:
+- Phases 1-2 are completed in code.
+- Phase 3 core is implemented and updated for multicategory evidence-span mapping in the same model call.
+- Phases 4-6 remain open (processing integration, retrieval/API, evaluation/reporting).
 
 Done when:
 - [ ] Semantic extraction performs at most one API call per `(document_version_id, prompt_hash, model)` tuple.
