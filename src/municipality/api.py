@@ -8,6 +8,7 @@ from typing import Generator
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 import httpx
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from municipality.db import build_engine, build_session_factory
@@ -35,6 +36,9 @@ from municipality.models import (
 )
 from municipality.pipeline import PipelineService
 from municipality.processing import ProcessingService
+from municipality.rag_answering import RagAnsweringService
+from municipality.rag_llm import RagLlmClient, build_rag_llm_client
+from municipality.rag_retrieval import RagRetrievalService
 from municipality.search import SearchService
 
 
@@ -117,6 +121,90 @@ def _semantic_node_payload(node: SemanticNode, *, child_count: int = 0) -> dict:
         "support_count": node.support_count,
         "status": node.status,
         "child_count": child_count,
+    }
+
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=1)
+    muni: str | None = None
+    top_k: int = Field(default=8, ge=1, le=50)
+    source_types: list[str] | None = None
+    required_source_types: list[str] | None = None
+    year: int | None = None
+    topic: str | None = None
+    semantic_mode: str = "off"
+
+
+def _run_ask(
+    *,
+    request: AskRequest,
+    db,
+    llm_client: RagLlmClient | None = None,
+) -> dict:
+    retrieval_service = RagRetrievalService(search_service=SearchService(db))
+    retrieval_result = retrieval_service.retrieve(
+        query=request.question,
+        top_k=request.top_k,
+        municipality_slug=request.muni,
+        source_kinds=request.source_types,
+        year=request.year,
+        topic=request.topic,
+        semantic_mode=request.semantic_mode,
+    )
+
+    answering_service = RagAnsweringService(llm_client=llm_client or build_rag_llm_client())
+    answer_result = answering_service.compose(
+        question=request.question,
+        retrieval=retrieval_result,
+        required_source_kinds=request.required_source_types,
+    )
+
+    limitations = list(answer_result.limitations)
+    if answer_result.status == "answer" and len(retrieval_result.source_kinds) <= 1:
+        limitations.append("הראיות חלקיות ומבוססות על סוג מקור אחד בלבד.")
+
+    citations_payload = [
+        {
+            "chunk_id": citation.chunk_id,
+            "source_type": citation.source_kind,
+            "citation": citation.citation_label,
+            "start_page": citation.start_page,
+            "end_page": citation.end_page,
+            "document": {
+                "id": citation.document_id,
+                "title": citation.document_title,
+                "url": citation.document_url,
+            },
+            "score": citation.score,
+        }
+        for citation in answer_result.citations
+    ]
+
+    refusal_payload = None
+    if answer_result.status == "refusal":
+        refusal_payload = {
+            "reason_code": answer_result.refusal_reason_code,
+            "message_he": answer_result.refusal_message_he,
+            "missing_source_types": answer_result.missing_source_kinds,
+        }
+
+    return {
+        "status": answer_result.status,
+        "question": request.question,
+        "answer": answer_result.answer,
+        "citations": citations_payload,
+        "limitations": limitations,
+        "refusal": refusal_payload,
+        "retrieval": {
+            "count": len(retrieval_result.contexts),
+            "source_types": sorted(retrieval_result.source_kinds),
+            "requested_source_types": retrieval_result.requested_source_kinds,
+            "top_k": retrieval_result.top_k,
+        },
+        "model": {
+            "provider": answer_result.provider,
+            "name": answer_result.model,
+        },
     }
 
 
@@ -304,6 +392,11 @@ def search(
         "count": len(hits),
         "results": results,
     }
+
+
+@app.post("/ask")
+def ask(request: AskRequest, db=Depends(get_db)) -> dict:
+    return _run_ask(request=request, db=db)
 
 
 @app.get("/semantic/tree")

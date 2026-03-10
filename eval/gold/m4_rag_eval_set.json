@@ -1,0 +1,54 @@
+{
+  "description": "M4 RAG bootstrap eval set seeded from persisted M2 chunk corpus (real municipality.db evidence)",
+  "cases": [
+    {
+      "case_id": "m4-t00-bootstrap-real-life-001",
+      "question": "אילו החלטות בטיחות בדרכים התקבלו ומה אישרה מועצת העיר בהסכם?",
+      "top_k": 8,
+      "required_evidence": [
+        {
+          "source_kind": "protocol",
+          "chunk_id": "72cfd3d013348e5ba31c2f5f53a1c6d1f5ce76e1",
+          "document_id": 483,
+          "document_version_id": 464,
+          "citation_label": "pp.2-3"
+        },
+        {
+          "source_kind": "attachment",
+          "chunk_id": "ee1a42618d5aa132b3f8821151d3620af5ea4fb0",
+          "document_id": 1,
+          "document_version_id": 1,
+          "citation_label": "p.1"
+        }
+      ],
+      "expected_grounded": {
+        "answer_must_include": [
+          "להעלות בשנית את קמפיין \"תסתכל לנהג בעיניים\"",
+          "להוסיף תמרורים מוארים",
+          "מועצת העיר אישרה ביום 7.1.2026 הסכם",
+          "עמותת \"לגישור חברה ויהדות\""
+        ],
+        "required_chunk_ids": [
+          "72cfd3d013348e5ba31c2f5f53a1c6d1f5ce76e1",
+          "ee1a42618d5aa132b3f8821151d3620af5ea4fb0"
+        ]
+      },
+      "expected_refusal": {
+        "must_include": [
+          "אין מספיק ראיות",
+          "חסר מקור"
+        ],
+        "cases": [
+          {
+            "missing_source_kind": "protocol",
+            "reason_code": "MISSING_PROTOCOL_EVIDENCE"
+          },
+          {
+            "missing_source_kind": "attachment",
+            "reason_code": "MISSING_ATTACHMENT_EVIDENCE"
+          }
+        ]
+      }
+    }
+  ]
+}

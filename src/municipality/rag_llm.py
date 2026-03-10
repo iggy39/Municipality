@@ -1,0 +1,404 @@
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass, field
+from typing import Any, Mapping, Protocol
+
+import httpx
+
+from municipality.fallback import BYTEZ_MODEL, BYTEZ_PROVIDER, DEFAULT_BYTEZ_API_URL
+
+
+RAG_CALL_ANSWER = "answer"
+RAG_CALL_VERIFY = "verify"
+RAG_CALL_REFUSE = "refuse"
+
+RAG_PROVIDER_BYTEZ = "bytez"
+RAG_PROVIDER_MOCK = "mock"
+
+RAG_ANSWER_PREFIX_DEFAULT = "answer question from provided hebrew municipal evidence with citations only"
+RAG_VERIFY_PREFIX_DEFAULT = "verify every claim against provided hebrew evidence and citations only"
+RAG_REFUSE_PREFIX_DEFAULT = "if evidence is insufficient, refuse in hebrew and explain missing evidence"
+
+
+@dataclass(slots=True)
+class RagPromptPrefixConfig:
+    answer: str = RAG_ANSWER_PREFIX_DEFAULT
+    verify: str = RAG_VERIFY_PREFIX_DEFAULT
+    refuse: str = RAG_REFUSE_PREFIX_DEFAULT
+
+    def for_call_type(self, call_type: str) -> str:
+        normalized = _normalize_call_type(call_type)
+        mapping = self.as_dict()
+        if normalized not in mapping:
+            raise ValueError(f"unsupported rag call type: {call_type}")
+        return mapping[normalized]
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            RAG_CALL_ANSWER: self.answer,
+            RAG_CALL_VERIFY: self.verify,
+            RAG_CALL_REFUSE: self.refuse,
+        }
+
+
+@dataclass(slots=True)
+class RagLlmConfig:
+    provider: str = RAG_PROVIDER_BYTEZ
+    model: str = BYTEZ_MODEL
+    bytez_endpoint: str = DEFAULT_BYTEZ_API_URL
+    timeout_seconds: float = 60.0
+    prompt_prefixes: RagPromptPrefixConfig = field(default_factory=RagPromptPrefixConfig)
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> RagLlmConfig:
+        source = env if env is not None else os.environ
+        provider = _normalize_provider(source.get("RAG_LLM_PROVIDER"))
+        model = (source.get("RAG_LLM_MODEL") or BYTEZ_MODEL).strip() or BYTEZ_MODEL
+        endpoint = (source.get("BYTEZ_API_URL") or DEFAULT_BYTEZ_API_URL).strip() or DEFAULT_BYTEZ_API_URL
+        timeout_raw = source.get("RAG_LLM_TIMEOUT_SECONDS")
+
+        timeout_seconds = 60.0
+        if timeout_raw:
+            try:
+                timeout_seconds = max(1.0, float(timeout_raw))
+            except ValueError:
+                timeout_seconds = 60.0
+
+        prefixes = RagPromptPrefixConfig(
+            answer=(source.get("RAG_PROMPT_PREFIX_ANSWER") or RAG_ANSWER_PREFIX_DEFAULT).strip()
+            or RAG_ANSWER_PREFIX_DEFAULT,
+            verify=(source.get("RAG_PROMPT_PREFIX_VERIFY") or RAG_VERIFY_PREFIX_DEFAULT).strip()
+            or RAG_VERIFY_PREFIX_DEFAULT,
+            refuse=(source.get("RAG_PROMPT_PREFIX_REFUSE") or RAG_REFUSE_PREFIX_DEFAULT).strip()
+            or RAG_REFUSE_PREFIX_DEFAULT,
+        )
+
+        return cls(
+            provider=provider,
+            model=model,
+            bytez_endpoint=endpoint,
+            timeout_seconds=timeout_seconds,
+            prompt_prefixes=prefixes,
+        )
+
+
+@dataclass(slots=True)
+class RagLlmResult:
+    provider: str
+    model: str
+    text: str | None
+    request_tokens: int | None
+    response_tokens: int | None
+    error_code: str | None
+    error_text: str | None
+    raw_payload: dict[str, Any] | None = None
+
+
+class RagLlmProvider(Protocol):
+    @property
+    def provider_name(self) -> str:
+        raise NotImplementedError
+
+    @property
+    def model_name(self) -> str:
+        raise NotImplementedError
+
+    def is_configured(self) -> bool:
+        raise NotImplementedError
+
+    def generate(
+        self,
+        *,
+        call_type: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.0,
+    ) -> RagLlmResult:
+        raise NotImplementedError
+
+
+class BytezRagProvider:
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        endpoint: str | None = None,
+        model_name: str = BYTEZ_MODEL,
+        timeout_seconds: float = 60.0,
+        transport: httpx.BaseTransport | None = None,
+    ):
+        self.api_key = api_key or os.getenv("BYTEZ_API_KEY")
+        self.endpoint = endpoint or os.getenv("BYTEZ_API_URL", DEFAULT_BYTEZ_API_URL)
+        self._model_name = model_name
+        self.timeout_seconds = timeout_seconds
+        self.transport = transport
+
+    @property
+    def provider_name(self) -> str:
+        return BYTEZ_PROVIDER
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    def is_configured(self) -> bool:
+        return bool(self.api_key)
+
+    def generate(
+        self,
+        *,
+        call_type: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.0,
+    ) -> RagLlmResult:
+        _normalize_call_type(call_type)
+        if not self.api_key:
+            return RagLlmResult(
+                provider=self.provider_name,
+                model=self.model_name,
+                text=None,
+                request_tokens=None,
+                response_tokens=None,
+                error_code="MODEL_NOT_CONFIGURED",
+                error_text="BYTEZ_API_KEY is not configured",
+            )
+
+        body = {
+            "model": self.model_name,
+            "temperature": temperature,
+            "messages": messages,
+        }
+
+        try:
+            with httpx.Client(timeout=self.timeout_seconds, transport=self.transport) as client:
+                response = client.post(
+                    self.endpoint,
+                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                    json=body,
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except Exception as exc:
+            return RagLlmResult(
+                provider=self.provider_name,
+                model=self.model_name,
+                text=None,
+                request_tokens=None,
+                response_tokens=None,
+                error_code="MODEL_REQUEST_FAILED",
+                error_text=f"{exc.__class__.__name__}:{exc}",
+            )
+
+        usage = payload.get("usage") if isinstance(payload, dict) else {}
+        request_tokens = _as_int(usage.get("prompt_tokens")) if isinstance(usage, dict) else None
+        response_tokens = _as_int(usage.get("completion_tokens")) if isinstance(usage, dict) else None
+        content = _extract_response_content(payload)
+        if content is None:
+            return RagLlmResult(
+                provider=self.provider_name,
+                model=self.model_name,
+                text=None,
+                request_tokens=request_tokens,
+                response_tokens=response_tokens,
+                error_code="MODEL_EMPTY_RESPONSE",
+                error_text="missing model response content",
+                raw_payload=payload if isinstance(payload, dict) else None,
+            )
+
+        return RagLlmResult(
+            provider=self.provider_name,
+            model=self.model_name,
+            text=content,
+            request_tokens=request_tokens,
+            response_tokens=response_tokens,
+            error_code=None,
+            error_text=None,
+            raw_payload=payload if isinstance(payload, dict) else None,
+        )
+
+
+class MockRagProvider:
+    def __init__(
+        self,
+        *,
+        provider_name: str = "MockProvider",
+        model_name: str = "mock-rag-v1",
+        configured: bool = True,
+        responses_by_call_type: Mapping[str, str] | None = None,
+    ):
+        self._provider_name = provider_name
+        self._model_name = model_name
+        self._configured = configured
+        self.requests: list[dict[str, Any]] = []
+
+        defaults = {
+            RAG_CALL_ANSWER: "mock-answer",
+            RAG_CALL_VERIFY: "mock-verify",
+            RAG_CALL_REFUSE: "mock-refuse",
+        }
+        if responses_by_call_type:
+            for key, value in responses_by_call_type.items():
+                normalized_key = _normalize_call_type(key)
+                defaults[normalized_key] = value
+        self._responses = defaults
+
+    @property
+    def provider_name(self) -> str:
+        return self._provider_name
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    def is_configured(self) -> bool:
+        return self._configured
+
+    def generate(
+        self,
+        *,
+        call_type: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.0,
+    ) -> RagLlmResult:
+        normalized_call_type = _normalize_call_type(call_type)
+        self.requests.append(
+            {
+                "call_type": normalized_call_type,
+                "messages": messages,
+                "temperature": temperature,
+            }
+        )
+
+        if not self._configured:
+            return RagLlmResult(
+                provider=self.provider_name,
+                model=self.model_name,
+                text=None,
+                request_tokens=None,
+                response_tokens=None,
+                error_code="MODEL_NOT_CONFIGURED",
+                error_text="mock provider marked as unconfigured",
+            )
+
+        return RagLlmResult(
+            provider=self.provider_name,
+            model=self.model_name,
+            text=self._responses.get(normalized_call_type),
+            request_tokens=0,
+            response_tokens=0,
+            error_code=None,
+            error_text=None,
+        )
+
+
+class RagLlmClient:
+    def __init__(self, *, provider: RagLlmProvider, prompt_prefixes: RagPromptPrefixConfig | None = None):
+        self.provider = provider
+        self.prompt_prefixes = prompt_prefixes or RagPromptPrefixConfig()
+
+    def generate(
+        self,
+        *,
+        call_type: str,
+        instruction: str,
+        payload: str | dict[str, Any] | list[Any],
+        temperature: float = 0.0,
+    ) -> RagLlmResult:
+        normalized_call_type = _normalize_call_type(call_type)
+        prefix = self.prompt_prefixes.for_call_type(normalized_call_type)
+        compact_instruction = instruction.strip()
+        system_content = prefix if not compact_instruction else f"{prefix}\n{compact_instruction}"
+
+        if isinstance(payload, str):
+            user_content = payload
+        else:
+            user_content = json.dumps(payload, ensure_ascii=False)
+
+        return self.provider.generate(
+            call_type=normalized_call_type,
+            messages=[
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=temperature,
+        )
+
+
+def build_rag_llm_client(
+    *,
+    config: RagLlmConfig | None = None,
+    provider: RagLlmProvider | None = None,
+) -> RagLlmClient:
+    resolved_config = config or RagLlmConfig.from_env()
+    resolved_provider = provider or build_rag_provider(config=resolved_config)
+    return RagLlmClient(provider=resolved_provider, prompt_prefixes=resolved_config.prompt_prefixes)
+
+
+def build_rag_provider(*, config: RagLlmConfig | None = None) -> RagLlmProvider:
+    resolved_config = config or RagLlmConfig.from_env()
+    provider_key = _normalize_provider(resolved_config.provider)
+
+    if provider_key == RAG_PROVIDER_BYTEZ:
+        return BytezRagProvider(
+            model_name=resolved_config.model,
+            endpoint=resolved_config.bytez_endpoint,
+            timeout_seconds=resolved_config.timeout_seconds,
+        )
+    if provider_key == RAG_PROVIDER_MOCK:
+        return MockRagProvider(model_name=resolved_config.model)
+    raise ValueError(f"unsupported rag llm provider: {resolved_config.provider}")
+
+
+def _normalize_call_type(call_type: str) -> str:
+    normalized = (call_type or "").strip().casefold()
+    if normalized not in {RAG_CALL_ANSWER, RAG_CALL_VERIFY, RAG_CALL_REFUSE}:
+        raise ValueError(f"unsupported rag call type: {call_type}")
+    return normalized
+
+
+def _normalize_provider(provider: str | None) -> str:
+    normalized = (provider or RAG_PROVIDER_BYTEZ).strip().casefold()
+    if normalized in {RAG_PROVIDER_BYTEZ, RAG_PROVIDER_MOCK}:
+        return normalized
+    return RAG_PROVIDER_BYTEZ
+
+
+def _extract_response_content(payload: dict[str, Any]) -> str | None:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(message, dict):
+        return None
+
+    content = message.get("content")
+    if isinstance(content, str):
+        compact = content.strip()
+        return compact or None
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text_value = item.get("text")
+            if isinstance(text_value, str) and text_value.strip():
+                parts.append(text_value.strip())
+        if parts:
+            return "\n".join(parts)
+
+    return None
+
+
+def _as_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        compact = value.strip()
+        if compact.isdigit():
+            return int(compact)
+    return None

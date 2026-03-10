@@ -28,14 +28,14 @@ Real-life bootstrap example (must be first):
 
 ## Exit Gate
 
-- [ ] Provider-agnostic LLM adapter layer is in place.
-- [ ] Retrieval uses indexed chunks with citation metadata.
-- [ ] `/ask` returns answer + citations or refusal only.
+- [x] Provider-agnostic LLM adapter layer is in place.
+- [x] Retrieval uses indexed chunks with citation metadata.
+- [x] `/ask` returns answer + citations or refusal only.
 - [ ] Citation correctness and refusal correctness pass evaluation.
 - [ ] Ask UI panel is usable in Hebrew-first workflow.
-- [ ] Prompt-prefix policy is enforced for answer, verification, and refusal calls.
-- [ ] M4 eval starts with a real-life M2-derived mixed-source case.
-- [ ] Default RAG provider/model is Bytez + `google/gemini-2.5-pro`.
+- [x] Prompt-prefix policy is enforced for answer, verification, and refusal calls.
+- [x] M4 eval starts with a real-life M2-derived mixed-source case.
+- [x] Default RAG provider/model is Bytez + `google/gemini-2.5-pro`.
 - [ ] Hybrid semantic topic+entity tree is persisted and integrated into retrieval with max one semantic API extraction call per document version.
 
 ## Ticket Board
@@ -61,71 +61,71 @@ Real-life bootstrap example (must be first):
 
 ### M4-T00 - Real-life RAG bootstrap from M2 products
 Checklist:
-- [ ] Build first `/ask` scenario from persisted M2 outputs (no synthetic-only source text).
-- [ ] Use one protocol chunk and one attachment chunk with citation labels.
-- [ ] Define expected grounded answer and paired expected refusal behavior.
-- [ ] Store stable source references (chunk IDs/document IDs) for reproducible eval.
+- [x] Build first `/ask` scenario from persisted M2 outputs (no synthetic-only source text).
+- [x] Use one protocol chunk and one attachment chunk with citation labels.
+- [x] Define expected grounded answer and paired expected refusal behavior.
+- [x] Store stable source references (chunk IDs/document IDs) for reproducible eval.
 
 Done when:
-- [ ] Bootstrap case passes citation checks and is item #1 in the M4 eval set.
+- [x] Bootstrap case passes citation checks and is item #1 in the M4 eval set.
 
 ### M4-T01 - Provider-agnostic LLM interface
 Checklist:
-- [ ] Define minimal interface for generation tasks.
-- [ ] Add pluggable provider adapters behind one config surface.
-- [ ] Ensure local config can switch providers without code changes.
-- [ ] Add mock provider for deterministic tests.
-- [ ] Set default provider/model to Bytez + `google/gemini-2.5-pro`.
-- [ ] Expose prompt-prefix config by call type (answer/verify/refuse).
+- [x] Define minimal interface for generation tasks.
+- [x] Add pluggable provider adapters behind one config surface.
+- [x] Ensure local config can switch providers without code changes.
+- [x] Add mock provider for deterministic tests.
+- [x] Set default provider/model to Bytez + `google/gemini-2.5-pro`.
+- [x] Expose prompt-prefix config by call type (answer/verify/refuse).
 
 Done when:
-- [ ] RAG tests run against mock provider without network dependency.
-- [ ] Production default resolves to M3-locked provider/model without code changes.
+- [x] RAG tests run against mock provider without network dependency.
+- [x] Production default resolves to M3-locked provider/model without code changes.
 
 ### M4-T02 - Retrieval orchestration for RAG
 Checklist:
-- [ ] Implement query normalization and retrieval from chunk index.
-- [ ] Retrieve across protocol and attachment sources.
-- [ ] Preserve chunk citation metadata through retrieval pipeline.
-- [ ] Add tunable top-k and source filters.
-- [ ] Confirm retrieval can reproduce M4-T00 mixed-source context.
+- [x] Implement query normalization and retrieval from chunk index.
+- [x] Retrieve across protocol and attachment sources.
+- [x] Preserve chunk citation metadata through retrieval pipeline.
+- [x] Add tunable top-k and source filters.
+- [x] Confirm retrieval can reproduce M4-T00 mixed-source context.
 
 Done when:
-- [ ] Retrieved context set includes citable chunks for known questions.
-- [ ] Bootstrap case retrieves both source kinds with citation-ready context.
+- [x] Retrieved context set includes citable chunks for known questions.
+- [x] Bootstrap case retrieves both source kinds with citation-ready context.
 
 ### M4-T03 - Answer composer with citation checks
 Checklist:
-- [ ] Build answer synthesis prompt/policy requiring citations.
-- [ ] Enforce answer-synthesis prefix on every generation call.
-- [ ] Add citation-verification pass with mandatory verification prefix.
-- [ ] Validate every major claim has citation support.
-- [ ] Return structured output: answer, citations, limitations.
+- [x] Build answer synthesis prompt/policy requiring citations.
+- [x] Enforce answer-synthesis prefix on every generation call.
+- [x] Add citation-verification pass with mandatory verification prefix.
+- [x] Validate every major claim has citation support.
+- [x] Return structured output: answer, citations, limitations.
 
 Done when:
-- [ ] Uncited claim paths are rejected before response is returned.
+- [x] Uncited claim paths are rejected before response is returned.
 
 ### M4-T04 - Refusal policy and confidence gate
 Checklist:
-- [ ] Define insufficient-evidence conditions.
-- [ ] Enforce refusal-decision prefix on refusal path.
-- [ ] Implement refusal response template in Hebrew.
-- [ ] Add logic to prevent speculative completion.
+- [x] Define insufficient-evidence conditions.
+- [x] Enforce refusal-decision prefix on refusal path.
+- [x] Implement refusal response template in Hebrew.
+- [x] Add logic to prevent speculative completion.
 
 Done when:
-- [ ] Weak retrieval cases consistently return refusal.
-- [ ] Missing mixed-source evidence in bootstrap case returns refusal.
+- [x] Weak retrieval cases consistently return refusal.
+- [x] Missing mixed-source evidence in bootstrap case returns refusal.
 
 ### M4-T05 - `/ask` API contract and handler
 Checklist:
-- [ ] Implement `POST /ask` request/response schema.
-- [ ] Include citations with document/page references.
-- [ ] Include limitations field when evidence is partial.
-- [ ] Include source type per citation.
-- [ ] Include refusal reason code when response is refusal.
+- [x] Implement `POST /ask` request/response schema.
+- [x] Include citations with document/page references.
+- [x] Include limitations field when evidence is partial.
+- [x] Include source type per citation.
+- [x] Include refusal reason code when response is refusal.
 
 Done when:
-- [ ] API is stable and backward-compatible with planned UI.
+- [x] API is stable and backward-compatible with planned UI.
 
 ### M4-T06 - Ask panel UI integration
 Checklist:
