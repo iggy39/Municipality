@@ -12,6 +12,7 @@ from municipality.decisions import DecisionExtractionService
 from municipality.extraction import PdfTextExtractor
 from municipality.models import Document, DocumentVersion, ExtractedDocument, PipelineRun, PipelineRunStep, SourceSite
 from municipality.search import SearchService
+from municipality.semantic_service import SemanticService
 from municipality.storage import RawStorage
 
 
@@ -23,12 +24,14 @@ class ProcessingService:
         storage_root: Path,
         extractor: PdfTextExtractor | None = None,
         decision_extraction: DecisionExtractionService | None = None,
+        semantic_service: SemanticService | None = None,
     ):
         self.session = session
         self.storage = RawStorage(storage_root)
         self.extractor = extractor or PdfTextExtractor()
         self.search = SearchService(session)
         self.decision_extraction = decision_extraction or DecisionExtractionService(session)
+        self.semantic_service = semantic_service or SemanticService(session)
 
     def run(self, doc_id: int | None = None, municipality_slug: str | None = None) -> int:
         run = PipelineRun(
@@ -100,6 +103,39 @@ class ProcessingService:
                 flags = ",".join(extraction.quality_flags)
                 step.status = "completed"
                 step.detail = f"chunks={len(chunks)}; quality={quality_score:.2f}; flags={flags or 'NONE'}"
+
+                semantic_step = PipelineRunStep(
+                    run_id=run.id,
+                    step_name="semantic_enrichment",
+                    status="running",
+                    item_ref=document.canonical_url,
+                )
+                self.session.add(semantic_step)
+                self.session.flush()
+
+                try:
+                    with self.session.begin_nested():
+                        semantic_result = self.semantic_service.run_for_document(
+                            source_site_id=document.source_site_id,
+                            document_id=document.id,
+                            document_version_id=document_version.id,
+                            source_kind=source_kind,
+                            extracted_text=extraction.full_text,
+                            citation_map=extraction.citation_map,
+                        )
+
+                    semantic_step.status = "completed" if semantic_result.status == "completed" else "failed"
+                    semantic_step.detail = (
+                        f"run_id={semantic_result.run_id}; status={semantic_result.status}; "
+                        f"from_cache={semantic_result.from_cache}; api_calls={semantic_result.api_call_count}; "
+                        f"accepted_nodes={semantic_result.accepted_nodes}; aliases={semantic_result.aliases}; "
+                        f"mentions={semantic_result.mentions}; chunk_links={semantic_result.chunk_links}; "
+                        f"decision_links={semantic_result.decision_links}; rejects={semantic_result.reject_rows}; "
+                        f"validation_issues={semantic_result.validation_issues}"
+                    )
+                except Exception as exc:
+                    semantic_step.status = "failed"
+                    semantic_step.detail = f"UNEXPECTED_ERROR:{exc.__class__.__name__}"
             except Exception as exc:
                 step.status = "failed"
                 step.detail = f"UNEXPECTED_ERROR:{exc.__class__.__name__}"

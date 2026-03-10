@@ -22,7 +22,15 @@ from municipality.models import (
     MeetingDocumentLink,
     PipelineRun,
     PipelineRunStep,
+    SemanticAlias,
+    SemanticCandidateReject,
+    SemanticDocumentRun,
+    SemanticMention,
+    SemanticNode,
+    ChunkSemanticLink,
+    DecisionSemanticLink,
     SourceSite,
+    TextChunk,
     Vote,
 )
 from municipality.pipeline import PipelineService
@@ -81,6 +89,35 @@ def _fallback_metadata_from_json(metadata_json: str | None) -> dict:
     if "api_model_reasons" in metadata and not isinstance(metadata["api_model_reasons"], list):
         metadata["api_model_reasons"] = []
     return metadata
+
+
+def _loads_json(value: str | None) -> dict | list | None:
+    if not value:
+        return None
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(payload, (dict, list)):
+        return payload
+    return None
+
+
+def _semantic_node_payload(node: SemanticNode, *, child_count: int = 0) -> dict:
+    return {
+        "id": node.id,
+        "label": node.pref_label_he,
+        "label_norm": node.pref_label_norm,
+        "kind": node.node_kind,
+        "semantic_type": node.semantic_type,
+        "depth": node.depth,
+        "parent_id": node.parent_node_id,
+        "specificity_score": node.specificity_score,
+        "confidence": node.confidence,
+        "support_count": node.support_count,
+        "status": node.status,
+        "child_count": child_count,
+    }
 
 
 def _decision_payload(decision_id: int, db) -> dict | None:
@@ -207,6 +244,10 @@ def search(
     source_type: str | None = None,
     year: int | None = None,
     topic: str | None = None,
+    semantic_node_id: int | None = None,
+    semantic_label: str | None = None,
+    semantic_mode: str = "boost",
+    include_semantic_debug: bool = False,
     limit: int = 20,
     db=Depends(get_db),
 ) -> dict:
@@ -217,30 +258,318 @@ def search(
         source_type=source_type,
         year=year,
         topic=topic,
+        semantic_node_id=semantic_node_id,
+        semantic_label=semantic_label,
+        semantic_mode=semantic_mode,
         limit=max(1, min(limit, 50)),
     )
+    results = [
+        {
+            "chunk_id": hit.chunk_id,
+            "score": hit.score,
+            "snippet": hit.snippet,
+            "citation": hit.citation,
+            "source_type": hit.source_type,
+            "document": {
+                "id": hit.document_id,
+                "title": hit.document_title,
+                "url": hit.document_url,
+            },
+            "municipality": hit.municipality_slug,
+            "meeting_external_id": hit.meeting_external_id,
+            "start_page": hit.start_page,
+            "end_page": hit.end_page,
+            "semantic_match_count": hit.semantic_match_count,
+            "semantic_boost": hit.semantic_boost,
+        }
+        for hit in hits
+    ]
+
+    if include_semantic_debug:
+        for idx, hit in enumerate(hits):
+            results[idx]["semantic_nodes"] = [
+                {
+                    "id": node.id,
+                    "label": node.label,
+                    "kind": node.kind,
+                    "type": node.semantic_type,
+                    "confidence": node.confidence,
+                }
+                for node in hit.semantic_nodes
+            ]
+            results[idx]["semantic_node_ids"] = list(hit.semantic_node_ids)
+
     return {
         "query": q,
         "count": len(hits),
-        "results": [
+        "results": results,
+    }
+
+
+@app.get("/semantic/tree")
+def semantic_tree(
+    muni: str | None = None,
+    root_id: int | None = None,
+    depth: int | None = None,
+    kind: str | None = None,
+    db=Depends(get_db),
+) -> dict:
+    stmt = select(SemanticNode)
+    if muni:
+        stmt = stmt.join(SourceSite, SourceSite.id == SemanticNode.source_site_id).where(
+            SourceSite.municipality_slug == muni
+        )
+    if kind:
+        stmt = stmt.where(SemanticNode.node_kind == kind)
+
+    nodes = db.execute(
+        stmt.order_by(SemanticNode.depth.asc(), SemanticNode.pref_label_norm.asc(), SemanticNode.id.asc())
+    ).scalars().all()
+    nodes_by_id = {node.id: node for node in nodes}
+    if root_id is not None and root_id not in nodes_by_id:
+        raise HTTPException(status_code=404, detail="semantic_root_not_found")
+
+    children_by_parent: dict[int, list[int]] = {}
+    for node in nodes:
+        if node.parent_node_id is None:
+            continue
+        children_by_parent.setdefault(node.parent_node_id, []).append(node.id)
+
+    included_ids: set[int]
+    if root_id is not None:
+        max_relative_depth = max(0, depth) if depth is not None else None
+        included_ids = {root_id}
+        frontier: list[tuple[int, int]] = [(root_id, 0)]
+        while frontier:
+            parent_id, relative_depth = frontier.pop(0)
+            if max_relative_depth is not None and relative_depth >= max_relative_depth:
+                continue
+            for child_id in children_by_parent.get(parent_id, []):
+                if child_id in included_ids:
+                    continue
+                included_ids.add(child_id)
+                frontier.append((child_id, relative_depth + 1))
+    else:
+        included_ids = {node.id for node in nodes}
+        if depth is not None:
+            max_depth = max(0, depth)
+            included_ids = {node.id for node in nodes if node.depth <= max_depth}
+
+    items = []
+    for node in nodes:
+        if node.id not in included_ids:
+            continue
+        child_count = sum(1 for child_id in children_by_parent.get(node.id, []) if child_id in included_ids)
+        items.append(_semantic_node_payload(node, child_count=child_count))
+
+    return {
+        "count": len(items),
+        "items": items,
+    }
+
+
+@app.get("/semantic/node/{node_id}")
+def semantic_node_detail(node_id: int, db=Depends(get_db)) -> dict:
+    node = db.execute(select(SemanticNode).where(SemanticNode.id == node_id)).scalar_one_or_none()
+    if node is None:
+        raise HTTPException(status_code=404, detail="semantic_node_not_found")
+
+    parent = None
+    if node.parent_node_id is not None:
+        parent = db.execute(select(SemanticNode).where(SemanticNode.id == node.parent_node_id)).scalar_one_or_none()
+
+    aliases = db.execute(
+        select(SemanticAlias)
+        .where(SemanticAlias.semantic_node_id == node.id)
+        .order_by(SemanticAlias.alias_kind.asc(), SemanticAlias.alias_label_norm.asc())
+    ).scalars().all()
+    children = db.execute(
+        select(SemanticNode)
+        .where(SemanticNode.parent_node_id == node.id)
+        .order_by(SemanticNode.pref_label_norm.asc(), SemanticNode.id.asc())
+    ).scalars().all()
+
+    decision_rows = db.execute(
+        select(DecisionSemanticLink, Decision, Document, Meeting)
+        .join(Decision, Decision.id == DecisionSemanticLink.decision_id)
+        .join(Document, Document.id == Decision.source_document_id)
+        .join(Meeting, Meeting.id == Decision.meeting_id)
+        .where(DecisionSemanticLink.semantic_node_id == node.id)
+        .order_by(Decision.id.asc())
+    ).all()
+
+    chunk_rows = db.execute(
+        select(ChunkSemanticLink, TextChunk, Document)
+        .join(TextChunk, TextChunk.chunk_id == ChunkSemanticLink.chunk_id)
+        .join(Document, Document.id == TextChunk.document_id)
+        .where(ChunkSemanticLink.semantic_node_id == node.id)
+        .order_by(TextChunk.document_id.asc(), TextChunk.chunk_index.asc())
+    ).all()
+
+    mention_rows = db.execute(
+        select(SemanticMention, Document)
+        .join(Document, Document.id == SemanticMention.document_id)
+        .where(SemanticMention.semantic_node_id == node.id)
+        .order_by(SemanticMention.id.desc())
+        .limit(30)
+    ).all()
+
+    return {
+        "node": _semantic_node_payload(node, child_count=len(children)),
+        "parent": _semantic_node_payload(parent, child_count=0) if parent else None,
+        "children": [_semantic_node_payload(child, child_count=0) for child in children],
+        "aliases": [
             {
-                "chunk_id": hit.chunk_id,
-                "score": hit.score,
-                "snippet": hit.snippet,
-                "citation": hit.citation,
-                "source_type": hit.source_type,
-                "document": {
-                    "id": hit.document_id,
-                    "title": hit.document_title,
-                    "url": hit.document_url,
-                },
-                "municipality": hit.municipality_slug,
-                "meeting_external_id": hit.meeting_external_id,
-                "start_page": hit.start_page,
-                "end_page": hit.end_page,
+                "id": alias.id,
+                "label": alias.alias_label_he,
+                "label_norm": alias.alias_label_norm,
+                "kind": alias.alias_kind,
+                "confidence": alias.confidence,
             }
-            for hit in hits
+            for alias in aliases
         ],
+        "linked_decisions": [
+            {
+                "decision_id": decision.id,
+                "relation_role": link.relation_role,
+                "confidence": link.confidence,
+                "source_mention_id": link.source_mention_id,
+                "decision_text": decision.decision_text,
+                "is_public": bool(decision.is_public),
+                "meeting_id": decision.meeting_id,
+                "meeting_external_id": meeting.meeting_external_id,
+                "document": {
+                    "id": document.id,
+                    "title": document.title_he,
+                    "url": document.canonical_url,
+                },
+            }
+            for link, decision, document, meeting in decision_rows
+        ],
+        "linked_chunks": [
+            {
+                "chunk_id": chunk.chunk_id,
+                "confidence": link.confidence,
+                "source_mention_id": link.source_mention_id,
+                "source_type": chunk.source_kind,
+                "citation": chunk.citation_label,
+                "start_page": chunk.start_page,
+                "end_page": chunk.end_page,
+                "document": {
+                    "id": document.id,
+                    "title": document.title_he,
+                    "url": document.canonical_url,
+                },
+                "snippet": chunk.chunk_text[:240],
+            }
+            for link, chunk, document in chunk_rows
+        ],
+        "mentions": [
+            {
+                "id": mention.id,
+                "document_id": mention.document_id,
+                "document_version_id": mention.document_version_id,
+                "start_offset": mention.start_offset,
+                "end_offset": mention.end_offset,
+                "start_page": mention.start_page,
+                "end_page": mention.end_page,
+                "mention_text": mention.mention_text,
+                "mention_confidence": mention.mention_confidence,
+                "evidence_hash": mention.evidence_hash,
+                "citation": (
+                    f"p.{mention.start_page}"
+                    if mention.start_page is not None and mention.start_page == mention.end_page
+                    else (
+                        f"pp.{mention.start_page}-{mention.end_page}"
+                        if mention.start_page is not None and mention.end_page is not None
+                        else None
+                    )
+                ),
+                "document": {
+                    "id": document.id,
+                    "title": document.title_he,
+                    "url": document.canonical_url,
+                },
+            }
+            for mention, document in mention_rows
+        ],
+    }
+
+
+@app.get("/semantic/runs/{document_version_id}")
+def semantic_runs(document_version_id: int, db=Depends(get_db)) -> dict:
+    runs = db.execute(
+        select(SemanticDocumentRun)
+        .where(SemanticDocumentRun.document_version_id == document_version_id)
+        .order_by(SemanticDocumentRun.started_at.desc(), SemanticDocumentRun.id.desc())
+    ).scalars().all()
+    if not runs:
+        return {
+            "document_version_id": document_version_id,
+            "count": 0,
+            "runs": [],
+        }
+
+    run_ids = [run.id for run in runs]
+    reject_rows = db.execute(
+        select(SemanticCandidateReject.semantic_document_run_id, SemanticCandidateReject.reason_code).where(
+            SemanticCandidateReject.semantic_document_run_id.in_(run_ids)
+        )
+    ).all()
+    reject_histogram_by_run: dict[int, dict[str, int]] = {}
+    for run_id, reason_code in reject_rows:
+        bucket = reject_histogram_by_run.setdefault(run_id, {})
+        bucket[reason_code] = bucket.get(reason_code, 0) + 1
+
+    runs_payload = []
+    for run in runs:
+        validation_payload = _loads_json(run.validation_report_json)
+        validation_dict = validation_payload if isinstance(validation_payload, dict) else {}
+        issues_payload_raw = validation_dict.get("issues")
+        issues_payload: list = issues_payload_raw if isinstance(issues_payload_raw, list) else []
+
+        canonical_payload = _loads_json(run.canonicalization_report_json)
+        canonical_dict = canonical_payload if isinstance(canonical_payload, dict) else {}
+        accepted_nodes_raw = canonical_dict.get("accepted_nodes")
+        rejected_nodes_raw = canonical_dict.get("rejected_nodes")
+        warnings_raw = canonical_dict.get("warnings")
+        accepted_nodes: list = accepted_nodes_raw if isinstance(accepted_nodes_raw, list) else []
+        rejected_nodes: list = rejected_nodes_raw if isinstance(rejected_nodes_raw, list) else []
+        warnings: list = warnings_raw if isinstance(warnings_raw, list) else []
+
+        runs_payload.append(
+            {
+                "run_id": run.id,
+                "status": run.status,
+                "api_call_count": run.api_call_count,
+                "prompt_hash": run.prompt_hash,
+                "model_provider": run.model_provider,
+                "model_name": run.model_name,
+                "request_tokens": run.request_tokens,
+                "response_tokens": run.response_tokens,
+                "error_code": run.error_code,
+                "error_text": run.error_text,
+                "started_at": run.started_at,
+                "finished_at": run.finished_at,
+                "validation": {
+                    "is_valid": bool(validation_dict.get("is_valid")),
+                    "issue_count": len(issues_payload),
+                    "issues": issues_payload,
+                },
+                "canonicalization": {
+                    "accepted_nodes": len(accepted_nodes),
+                    "rejected_nodes": len(rejected_nodes),
+                    "warning_count": len(warnings),
+                    "warnings": warnings,
+                },
+                "reject_reason_histogram": reject_histogram_by_run.get(run.id, {}),
+            }
+        )
+
+    return {
+        "document_version_id": document_version_id,
+        "count": len(runs_payload),
+        "runs": runs_payload,
     }
 
 

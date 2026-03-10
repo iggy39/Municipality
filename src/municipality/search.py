@@ -1,12 +1,76 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import and_, select, text
 from sqlalchemy.orm import Session
 
 from municipality.chunking import build_trigrams, normalize_for_search
-from municipality.models import AssetManifest, Document, SourceSite, TextChunk
+from municipality.models import (
+    AssetManifest,
+    ChunkSemanticLink,
+    Document,
+    SemanticAlias,
+    SemanticNode,
+    SourceSite,
+    TextChunk,
+)
+
+
+@dataclass(slots=True)
+class SemanticDebugNode:
+    id: int
+    label: str
+    kind: str
+    semantic_type: str
+    confidence: float
+
+
+@dataclass(slots=True)
+class _SemanticMatchScore:
+    node_id: int
+    label_he: str
+    node_kind: str
+    semantic_type: str
+    link_confidence: float
+    node_confidence: float
+    specificity_score: float
+    match_score: float
+
+
+def _semantic_text_match_score(query_norm: str, labels: list[str]) -> float:
+    if not query_norm:
+        return 0.0
+
+    best = 0.0
+    query_tokens = [token for token in query_norm.split(" ") if token]
+    for label in labels:
+        if not label:
+            continue
+        if label == query_norm:
+            return 1.0
+        if query_norm in label or label in query_norm:
+            best = max(best, 0.92)
+            continue
+        label_tokens = [token for token in label.split(" ") if token]
+        overlap = _token_overlap(query_tokens, label_tokens)
+        if overlap >= 0.6:
+            best = max(best, 0.55 + (0.35 * overlap))
+    return min(1.0, best)
+
+
+def _token_overlap(left: list[str], right: list[str]) -> float:
+    left_set = set(left)
+    right_set = set(right)
+    if not left_set or not right_set:
+        return 0.0
+    return len(left_set.intersection(right_set)) / max(len(left_set), len(right_set), 1)
+
+
+def _clamp(value: float | None) -> float:
+    if value is None:
+        return 0.0
+    return max(0.0, min(1.0, float(value)))
 
 
 @dataclass(slots=True)
@@ -23,6 +87,10 @@ class SearchHit:
     meeting_external_id: str | None
     start_page: int | None
     end_page: int | None
+    semantic_match_count: int = 0
+    semantic_node_ids: list[int] = field(default_factory=list)
+    semantic_boost: float = 0.0
+    semantic_nodes: list[SemanticDebugNode] = field(default_factory=list)
 
 
 class SearchService:
@@ -38,9 +106,11 @@ class SearchService:
         source_kind: str,
         chunks: list[dict],
     ) -> None:
-        existing_chunk_ids = self.session.execute(
-            select(TextChunk.chunk_id).where(TextChunk.document_version_id == document_version_id)
-        ).scalars().all()
+        existing_chunk_ids: list[str] = list(
+            self.session.execute(
+                select(TextChunk.chunk_id).where(TextChunk.document_version_id == document_version_id)
+            ).scalars().all()
+        )
         if existing_chunk_ids:
             self.session.query(TextChunk).filter(TextChunk.document_version_id == document_version_id).delete()
             self._delete_fts(existing_chunk_ids)
@@ -83,17 +153,33 @@ class SearchService:
         source_type: str | None = None,
         year: int | None = None,
         topic: str | None = None,
+        semantic_node_id: int | None = None,
+        semantic_label: str | None = None,
+        semantic_mode: str = "boost",
         limit: int = 20,
     ) -> list[SearchHit]:
         normalized_query = normalize_for_search(query)
         if not normalized_query:
             return []
 
+        normalized_semantic_label = normalize_for_search(semantic_label) if semantic_label else None
+        semantic_mode_normalized = (semantic_mode or "boost").strip().casefold()
+        if semantic_mode_normalized not in {"boost", "filter"}:
+            semantic_mode_normalized = "boost"
+        explicit_semantic_filter = semantic_node_id is not None or bool(normalized_semantic_label)
+
         candidate_scores = self._collect_candidate_scores(normalized_query)
         if not candidate_scores:
             return []
 
         chunk_ids = list(candidate_scores.keys())
+        semantic_by_chunk = self._collect_semantic_scores(
+            chunk_ids=chunk_ids,
+            normalized_query=normalized_query,
+            semantic_node_id=semantic_node_id,
+            normalized_semantic_label=normalized_semantic_label,
+            explicit_semantic_filter=explicit_semantic_filter,
+        )
         stmt = (
             select(TextChunk, Document, SourceSite, AssetManifest)
             .join(Document, TextChunk.document_id == Document.id)
@@ -136,7 +222,31 @@ class SearchService:
             trigram_overlap = scores.get("trigram_overlap", 0)
             fts_score = _fts_rank_to_score(fts_rank)
             trigram_score = min(1.0, trigram_overlap / max(query_trigram_count, chunk.trigram_count, 1))
-            score = (0.72 * fts_score) + (0.28 * trigram_score)
+            lexical_score = (0.72 * fts_score) + (0.28 * trigram_score)
+
+            semantic_rows = semantic_by_chunk.get(chunk.chunk_id, [])
+            semantic_match_count = len(semantic_rows)
+            if semantic_mode_normalized == "filter" and explicit_semantic_filter and semantic_match_count == 0:
+                continue
+
+            semantic_overlap_score = max(
+                (row.link_confidence * row.match_score for row in semantic_rows),
+                default=0.0,
+            )
+            specificity_prior = max((row.specificity_score for row in semantic_rows), default=0.0)
+            semantic_boost = (0.25 * semantic_overlap_score) + (0.10 * specificity_prior)
+            score = min(1.0, lexical_score + semantic_boost)
+
+            semantic_nodes = [
+                SemanticDebugNode(
+                    id=row.node_id,
+                    label=row.label_he,
+                    kind=row.node_kind,
+                    semantic_type=row.semantic_type,
+                    confidence=row.link_confidence,
+                )
+                for row in semantic_rows
+            ]
             hits.append(
                 SearchHit(
                     chunk_id=chunk.chunk_id,
@@ -151,6 +261,10 @@ class SearchService:
                     meeting_external_id=manifest.source_node_external_id if manifest else None,
                     start_page=chunk.start_page,
                     end_page=chunk.end_page,
+                    semantic_match_count=semantic_match_count,
+                    semantic_node_ids=[row.node_id for row in semantic_rows],
+                    semantic_boost=round(semantic_boost, 6),
+                    semantic_nodes=semantic_nodes,
                 )
             )
 
@@ -202,6 +316,86 @@ class SearchService:
         for chunk_id in fallback_rows:
             candidate_scores[chunk_id] = {"fts_rank": 1.0, "trigram_overlap": 0.0}
         return candidate_scores
+
+    def _collect_semantic_scores(
+        self,
+        *,
+        chunk_ids: list[str],
+        normalized_query: str,
+        semantic_node_id: int | None,
+        normalized_semantic_label: str | None,
+        explicit_semantic_filter: bool,
+    ) -> dict[str, list[_SemanticMatchScore]]:
+        if not chunk_ids:
+            return {}
+
+        rows = self.session.execute(
+            select(ChunkSemanticLink, SemanticNode)
+            .join(SemanticNode, ChunkSemanticLink.semantic_node_id == SemanticNode.id)
+            .where(ChunkSemanticLink.chunk_id.in_(chunk_ids))
+        ).all()
+        if not rows:
+            return {}
+
+        node_ids = sorted({node.id for _link, node in rows})
+        alias_rows = self.session.execute(
+            select(SemanticAlias.semantic_node_id, SemanticAlias.alias_label_norm).where(
+                SemanticAlias.semantic_node_id.in_(node_ids)
+            )
+        ).all()
+        aliases_by_node: dict[int, list[str]] = {}
+        for alias_node_id, alias_label_norm in alias_rows:
+            aliases_by_node.setdefault(alias_node_id, []).append(alias_label_norm)
+
+        scored_by_chunk: dict[str, dict[int, _SemanticMatchScore]] = {}
+        for link, node in rows:
+            labels = [node.pref_label_norm]
+            labels.extend(aliases_by_node.get(node.id, []))
+
+            query_score = _semantic_text_match_score(normalized_query, labels)
+            explicit_score = 0.0
+            if semantic_node_id is not None and node.id == semantic_node_id:
+                explicit_score = 1.0
+            if normalized_semantic_label:
+                explicit_score = max(explicit_score, _semantic_text_match_score(normalized_semantic_label, labels))
+
+            match_score = explicit_score if explicit_semantic_filter else query_score
+            if match_score <= 0.0:
+                continue
+
+            candidate_row = _SemanticMatchScore(
+                node_id=node.id,
+                label_he=node.pref_label_he,
+                node_kind=node.node_kind,
+                semantic_type=node.semantic_type,
+                link_confidence=_clamp(link.confidence),
+                node_confidence=_clamp(node.confidence),
+                specificity_score=_clamp(node.specificity_score),
+                match_score=_clamp(match_score),
+            )
+
+            bucket = scored_by_chunk.setdefault(link.chunk_id, {})
+            existing = bucket.get(node.id)
+            if existing is None:
+                bucket[node.id] = candidate_row
+                continue
+
+            existing_signal = existing.link_confidence * existing.match_score
+            candidate_signal = candidate_row.link_confidence * candidate_row.match_score
+            if candidate_signal > existing_signal:
+                bucket[node.id] = candidate_row
+
+        return {
+            chunk_id: sorted(
+                node_rows.values(),
+                key=lambda row: (
+                    row.link_confidence * row.match_score,
+                    row.specificity_score,
+                ),
+                reverse=True,
+            )
+            for chunk_id, node_rows in scored_by_chunk.items()
+        }
 
     def _delete_fts(self, chunk_ids: list[str]) -> None:
         if not chunk_ids:

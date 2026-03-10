@@ -1,0 +1,82 @@
+{
+  "description": "M4 semantic topic+entity evaluation set for one-call extraction, evidence-backed persistence, and retrieval lift checks",
+  "retrieval_cases": [
+    {
+      "case_id": "m4-r01",
+      "query": "אישור פרויקט תחבורה עירונית",
+      "top_k": 5,
+      "semantic_mode": "boost",
+      "expected_semantic_nodes": [
+        {
+          "label": "תחבורה עירונית",
+          "aliases": ["פרויקט תחבורה"]
+        }
+      ],
+      "expected_evidence": [
+        {
+          "chunk_id": "seed:transport:chunk-1",
+          "source_kind": "protocol"
+        }
+      ],
+      "expected_min_semantic_match_count": 1
+    },
+    {
+      "case_id": "m4-r02",
+      "query": "תקציב תחבורה לשנת 2026",
+      "top_k": 5,
+      "semantic_mode": "boost",
+      "expected_semantic_nodes": [
+        {
+          "label": "תקציב תחבורה",
+          "aliases": ["מסגרת תקציב תחבורה"]
+        }
+      ],
+      "expected_evidence": [
+        {
+          "chunk_id": "seed:budget:chunk-2",
+          "source_kind": "protocol"
+        }
+      ],
+      "expected_min_semantic_match_count": 1
+    },
+    {
+      "case_id": "m4-r03",
+      "query": "ניקיון שכונתי",
+      "top_k": 5,
+      "semantic_mode": "filter",
+      "semantic_label": "ניקיון שכונתי",
+      "expected_semantic_nodes": [
+        {
+          "label": "ניקיון שכונתי",
+          "aliases": []
+        }
+      ],
+      "expected_evidence": [
+        {
+          "chunk_id": "seed:clean:chunk-1",
+          "source_kind": "protocol"
+        }
+      ],
+      "expected_min_semantic_match_count": 1
+    }
+  ],
+  "negative_cases": [
+    {
+      "case_id": "m4-n01",
+      "query": "כללי",
+      "expected_reject_reason": "TOO_GENERIC",
+      "disallowed_node_labels": ["כללי", "עדכונים", "שונות"]
+    },
+    {
+      "case_id": "m4-n02",
+      "query": "12345",
+      "expected_reject_reason": "NUMERIC_ONLY_LABEL",
+      "disallowed_node_labels": ["12345"]
+    }
+  ],
+  "run_quality_thresholds": {
+    "one_call_compliance_min": 1.0,
+    "evidence_backed_active_nodes_min": 1.0,
+    "semantic_hit_rate_min": 0.8
+  }
+}
