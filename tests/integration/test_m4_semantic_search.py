@@ -67,6 +67,17 @@ def test_m4_search_supports_semantic_boost_and_filter(tmp_path: Path) -> None:
         assert boosted_hits[0].semantic_match_count >= 1
         assert any(hit.semantic_boost == 0.0 for hit in boosted_hits if hit.document_id != transport_doc_id)
 
+        lexical_only_hits = search_service.search(
+            query="פרויקט",
+            semantic_node_id=transport_node_id,
+            semantic_mode="off",
+            limit=10,
+        )
+        assert lexical_only_hits
+        assert all(hit.semantic_boost == 0.0 for hit in lexical_only_hits)
+        assert all(hit.semantic_match_count == 0 for hit in lexical_only_hits)
+        assert all(not hit.semantic_nodes for hit in lexical_only_hits)
+
 
 def _seed_semantic_search_fixture(session: Session, search_service: SearchService) -> tuple[int, int]:
     site = SourceSite(municipality_slug="ashdod", name="Ashdod", root_url="https://example.local")
