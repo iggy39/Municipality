@@ -31,8 +31,8 @@ Real-life bootstrap example (must be first):
 - [x] Provider-agnostic LLM adapter layer is in place.
 - [x] Retrieval uses indexed chunks with citation metadata.
 - [x] `/ask` returns answer + citations or refusal only.
-- [ ] Citation correctness and refusal correctness pass evaluation.
-- [ ] Ask UI panel is usable in Hebrew-first workflow.
+- [x] Citation correctness and refusal correctness pass evaluation.
+- [x] Ask UI panel is usable in Hebrew-first workflow.
 - [x] Prompt-prefix policy is enforced for answer, verification, and refusal calls.
 - [x] M4 eval starts with a real-life M2-derived mixed-source case.
 - [x] Default RAG provider/model is Bytez + `google/gemini-2.5-pro`.
@@ -129,34 +129,34 @@ Done when:
 
 ### M4-T06 - Ask panel UI integration
 Checklist:
-- [ ] Add Ask panel to meeting/topic context.
-- [ ] Render answer, citations, and refusal state clearly.
-- [ ] Enable click-through from citation to source document context.
+- [x] Add Ask panel to meeting/topic context.
+- [x] Render answer, citations, and refusal state clearly.
+- [x] Enable click-through from citation to source document context.
 
 Done when:
-- [ ] User can ask and inspect evidence without leaving workflow.
+- [x] User can ask and inspect evidence without leaving workflow.
 
 ### M4-T07 - RAG eval set and scoring harness
 Checklist:
-- [ ] Start eval set with the real-life M4-T00 mixed-source case.
-- [ ] Create question set with expected evidence references.
-- [ ] Score citation correctness and answer correctness.
-- [ ] Score refusal correctness for insufficient-evidence items.
-- [ ] Define pass/fail thresholds for citation and refusal metrics.
+- [x] Start eval set with the real-life M4-T00 mixed-source case.
+- [x] Create question set with expected evidence references.
+- [x] Score citation correctness and answer correctness.
+- [x] Score refusal correctness for insufficient-evidence items.
+- [x] Define pass/fail thresholds for citation and refusal metrics.
 
 Done when:
-- [ ] Evaluation report shows pass/fail against thresholds.
-- [ ] Report includes bootstrap-case traceability to source chunk IDs.
+- [x] Evaluation report shows pass/fail against thresholds.
+- [x] Report includes bootstrap-case traceability to source chunk IDs.
 
 ### M4-T08 - Hallucination guard regression tests
 Checklist:
-- [ ] Add tests for common hallucination failure modes.
-- [ ] Add tests for mixed protocol/attachment evidence.
-- [ ] Add tests for intentionally ambiguous queries.
-- [ ] Add regression test that missing required prompt prefix fails fast.
+- [x] Add tests for common hallucination failure modes.
+- [x] Add tests for mixed protocol/attachment evidence.
+- [x] Add tests for intentionally ambiguous queries.
+- [x] Add regression test that missing required prompt prefix fails fast.
 
 Done when:
-- [ ] Regression suite catches uncited/unsupported outputs and missing-prefix calls.
+- [x] Regression suite catches uncited/unsupported outputs and missing-prefix calls.
 
 ### M4-T09 - RAG observability and tracing
 Checklist:

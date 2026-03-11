@@ -1,10 +1,17 @@
 {
   "description": "M4 RAG bootstrap eval set seeded from persisted M2 chunk corpus (real municipality.db evidence)",
+  "thresholds": {
+    "citation_correctness_min": 1.0,
+    "answer_correctness_min": 1.0,
+    "refusal_correctness_min": 1.0
+  },
   "cases": [
     {
       "case_id": "m4-t00-bootstrap-real-life-001",
       "question": "אילו החלטות בטיחות בדרכים התקבלו ומה אישרה מועצת העיר בהסכם?",
       "top_k": 8,
+      "muni": "ashdod",
+      "semantic_mode": "off",
       "required_evidence": [
         {
           "source_kind": "protocol",

@@ -802,6 +802,8 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
         )
         for item in linked_documents
     )
+    default_muni_json = json.dumps(decision.get("municipality") or "", ensure_ascii=False)
+    default_topic_json = json.dumps(decision.get("agenda_item") or "", ensure_ascii=False)
 
     html_page = f"""
 <!doctype html>
@@ -862,8 +864,48 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
     .vote.uncertain {{ color: var(--warn); }}
     .grid {{ display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top: 14px; }}
     .panel {{ border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; background: #fff; }}
+    .ask-panel {{ margin-top: 14px; }}
+    .ask-form {{ display: grid; gap: 8px; margin-top: 8px; }}
+    .ask-form label {{ font-weight: 600; font-size: 0.92rem; }}
+    .ask-form textarea {{
+      width: 100%;
+      min-height: 104px;
+      border: 1px solid #bfd3cb;
+      border-radius: 10px;
+      padding: 10px;
+      font-family: inherit;
+      line-height: 1.6;
+      resize: vertical;
+    }}
+    .ask-controls {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }}
+    .ask-controls input {{
+      width: 84px;
+      border: 1px solid #bfd3cb;
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-family: inherit;
+    }}
+    .ask-controls button {{
+      border: 1px solid #0e6d72;
+      background: #0f7b80;
+      color: #fff;
+      border-radius: 999px;
+      padding: 8px 16px;
+      font-family: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }}
+    .ask-controls button:hover {{ background: #0c666b; }}
+    .ask-output {{ margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }}
+    .ask-output.refusal {{ border-color: #e6d1be; background: #fff8f2; }}
+    .ask-output h3 {{ margin: 0 0 8px; font-size: 0.98rem; }}
+    .hidden {{ display: none; }}
     a {{ color: #00696f; text-decoration: none; border-bottom: 1px dotted #86b7bb; }}
     a:hover {{ border-bottom-style: solid; }}
+    @media (max-width: 640px) {{
+      body {{ padding: 14px; }}
+      .card {{ padding: 16px; border-radius: 14px; }}
+    }}
   </style>
 </head>
 <body>
@@ -887,8 +929,191 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
         <ul>{document_items or '<li class="muted">לא נמצאו מסמכים קשורים.</li>'}</ul>
       </section>
     </section>
+    <section class="panel ask-panel" id="ask-panel">
+      <h2>שאלו על הישיבה (ציטוטים בלבד)</h2>
+      <p class="muted">השאלה נשלחת אל <code>POST /ask</code> עם הקשר הישיבה והסעיף הנוכחי.</p>
+      <form id="ask-form" class="ask-form">
+        <label for="ask-question">שאלה</label>
+        <textarea id="ask-question" name="question" required placeholder="לדוגמה: אילו צעדים אושרו ומה הראיות לכך?"></textarea>
+        <div class="ask-controls">
+          <label for="ask-top-k" class="muted">top_k</label>
+          <input id="ask-top-k" name="top_k" type="number" min="1" max="50" value="8" />
+          <button type="submit">שאל</button>
+        </div>
+      </form>
+      <p id="ask-status" class="muted" aria-live="polite"></p>
+      <section id="ask-answer-panel" class="ask-output hidden">
+        <h3>תשובה</h3>
+        <p id="ask-answer-text"></p>
+        <ul id="ask-limitations"></ul>
+      </section>
+      <section id="ask-refusal-panel" class="ask-output refusal hidden">
+        <h3>מצב סירוב</h3>
+        <p id="ask-refusal-text"></p>
+      </section>
+      <section id="ask-citations-panel" class="ask-output hidden">
+        <h3>ציטוטים תומכים</h3>
+        <ul id="ask-citations-list"></ul>
+      </section>
+    </section>
     <p class="muted" style="margin-top: 12px;">סטטוס אימות fallback: {html.escape(str(metadata.get('fallback_validation_status')))}</p>
   </article>
+  <script>
+    (() => {{
+      const form = document.getElementById("ask-form");
+      if (!form) {{
+        return;
+      }}
+
+      const questionInput = document.getElementById("ask-question");
+      const topKInput = document.getElementById("ask-top-k");
+      const statusNode = document.getElementById("ask-status");
+      const answerPanel = document.getElementById("ask-answer-panel");
+      const answerText = document.getElementById("ask-answer-text");
+      const limitationsList = document.getElementById("ask-limitations");
+      const refusalPanel = document.getElementById("ask-refusal-panel");
+      const refusalText = document.getElementById("ask-refusal-text");
+      const citationsPanel = document.getElementById("ask-citations-panel");
+      const citationsList = document.getElementById("ask-citations-list");
+
+      const defaultMuni = {default_muni_json};
+      const defaultTopic = {default_topic_json};
+      const requiredSourceTypes = ["protocol", "attachment"];
+
+      const hide = (node) => {{
+        if (node) {{
+          node.classList.add("hidden");
+        }}
+      }};
+      const show = (node) => {{
+        if (node) {{
+          node.classList.remove("hidden");
+        }}
+      }};
+
+      const clearList = (listNode) => {{
+        if (listNode) {{
+          listNode.innerHTML = "";
+        }}
+      }};
+
+      const appendListItem = (listNode, textValue) => {{
+        if (!listNode || !textValue) {{
+          return;
+        }}
+        const item = document.createElement("li");
+        item.textContent = textValue;
+        listNode.appendChild(item);
+      }};
+
+      form.addEventListener("submit", async (event) => {{
+        event.preventDefault();
+        const question = (questionInput.value || "").trim();
+        if (!question) {{
+          statusNode.textContent = "יש להזין שאלה לפני השליחה.";
+          return;
+        }}
+
+        const topKRaw = parseInt(topKInput.value || "8", 10);
+        const topK = Number.isFinite(topKRaw) ? Math.max(1, Math.min(50, topKRaw)) : 8;
+        const payload = {{
+          question: question,
+          top_k: topK,
+          source_types: requiredSourceTypes,
+          required_source_types: requiredSourceTypes,
+          semantic_mode: "off",
+        }};
+        if (defaultMuni) {{
+          payload.muni = defaultMuni;
+        }}
+        if (defaultTopic) {{
+          payload.topic = defaultTopic;
+        }}
+
+        statusNode.textContent = "שולח שאלה...";
+        hide(answerPanel);
+        hide(refusalPanel);
+        hide(citationsPanel);
+        clearList(limitationsList);
+        clearList(citationsList);
+
+        try {{
+          const response = await fetch("/ask", {{
+            method: "POST",
+            headers: {{ "Content-Type": "application/json" }},
+            body: JSON.stringify(payload),
+          }});
+          if (!response.ok) {{
+            throw new Error(`HTTP ${{response.status}}`);
+          }}
+
+          const data = await response.json();
+          if (data.status === "answer") {{
+            answerText.textContent = data.answer || "";
+            const limitations = Array.isArray(data.limitations) ? data.limitations : [];
+            if (limitations.length === 0) {{
+              appendListItem(limitationsList, "לא צוינו מגבלות נוספות.");
+            }} else {{
+              for (const limitation of limitations) {{
+                appendListItem(limitationsList, limitation);
+              }}
+            }}
+
+            const citationRows = Array.isArray(data.citations) ? data.citations : [];
+            if (citationRows.length === 0) {{
+              appendListItem(citationsList, "לא הוחזרו ציטוטים.");
+            }} else {{
+              for (const citation of citationRows) {{
+                const documentPayload = citation.document && typeof citation.document === "object" ? citation.document : {{}};
+                const page = Number.isFinite(Number(citation.start_page)) ? Number(citation.start_page) : null;
+                const hrefBase = documentPayload.url || "#";
+                const link = document.createElement("a");
+                link.href = page ? `${{hrefBase}}#page=${{page}}` : hrefBase;
+                link.target = "_blank";
+                link.rel = "noopener";
+                link.textContent = citation.citation || (page ? `עמוד ${{page}}` : "מקור");
+
+                const meta = document.createElement("span");
+                meta.className = "muted";
+                const sourceType = citation.source_type || "source";
+                const title = documentPayload.title || "מסמך";
+                meta.textContent = ` [${{sourceType}}] ${{title}}`;
+
+                const item = document.createElement("li");
+                item.appendChild(link);
+                item.appendChild(meta);
+                citationsList.appendChild(item);
+              }}
+            }}
+
+            show(answerPanel);
+            show(citationsPanel);
+            hide(refusalPanel);
+            statusNode.textContent = "התקבלה תשובה מבוססת ציטוטים.";
+            return;
+          }}
+
+          const refusalPayload = data.refusal && typeof data.refusal === "object" ? data.refusal : {{}};
+          const refusalMessage = refusalPayload.message_he || "אין מספיק ראיות כדי להשיב.";
+          const missingTypes = Array.isArray(refusalPayload.missing_source_types)
+            ? refusalPayload.missing_source_types.filter((value) => typeof value === "string" && value)
+            : [];
+          const missingHint = missingTypes.length ? ` חסרים: ${{missingTypes.join(", ")}}.` : "";
+          refusalText.textContent = `${{refusalMessage}}${{missingHint}}`;
+
+          show(refusalPanel);
+          hide(answerPanel);
+          hide(citationsPanel);
+          statusNode.textContent = "המערכת סירבה להשיב בגלל חוסר ראיות מספק.";
+        }} catch (_err) {{
+          hide(answerPanel);
+          hide(refusalPanel);
+          hide(citationsPanel);
+          statusNode.textContent = "שליחת השאלה נכשלה. נסו שוב בעוד רגע.";
+        }}
+      }});
+    }})();
+  </script>
 </body>
 </html>
 """

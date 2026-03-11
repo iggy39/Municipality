@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 
 from municipality.rag_answering import (
+    REASON_INSUFFICIENT_EVIDENCE,
+    REASON_INVALID_VERIFICATION_FORMAT,
     REASON_MISSING_ATTACHMENT_EVIDENCE,
     REASON_UNCITED_CLAIMS,
     REASON_UNSUPPORTED_CLAIMS,
@@ -199,6 +201,129 @@ def test_rag_answering_refuses_when_verification_marks_unsupported_claims() -> N
 
     assert result.status == "refusal"
     assert result.refusal_reason_code == REASON_UNSUPPORTED_CLAIMS
+    assert [request["call_type"] for request in provider.requests] == ["answer", "verify", "refuse"]
+
+
+def test_rag_answering_refuses_when_mixed_answer_cites_only_protocol_side() -> None:
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "answer": json.dumps(
+                {
+                    "answer": "הוחלט לקדם מהלך בטיחות.",
+                    "claims": [
+                        {
+                            "text": "הוחלט לקדם מהלך בטיחות",
+                            "citation_chunk_ids": ["chunk-protocol"],
+                        }
+                    ],
+                    "limitations": [],
+                },
+                ensure_ascii=False,
+            ),
+            "verify": json.dumps(
+                {
+                    "all_supported": True,
+                    "claims": [
+                        {
+                            "text": "הוחלט לקדם מהלך בטיחות",
+                            "supported": True,
+                            "citation_chunk_ids": ["chunk-protocol"],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            "refuse": json.dumps({"refusal_message_he": "אין מספיק ראיות"}, ensure_ascii=False),
+        }
+    )
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+
+    result = service.compose(
+        question="מה הוחלט?",
+        retrieval=_retrieval_result_with_mixed_sources(),
+        required_source_kinds=["protocol", "attachment"],
+    )
+
+    assert result.status == "refusal"
+    assert result.refusal_reason_code == REASON_MISSING_ATTACHMENT_EVIDENCE
+    assert result.missing_source_kinds == ["attachment"]
+    assert [request["call_type"] for request in provider.requests] == ["answer", "verify", "refuse"]
+
+
+def test_rag_answering_refuses_ambiguous_query_without_context() -> None:
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "refuse": json.dumps(
+                {
+                    "refusal_message_he": "אין מספיק ראיות כדי להשיב.",
+                    "missing_source_kinds": ["protocol", "attachment"],
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+
+    retrieval = RagRetrievalResult(
+        query="מה המצב?",
+        normalized_query="מה המצב",
+        top_k=5,
+        requested_source_kinds=["protocol", "attachment"],
+        contexts=[],
+    )
+    result = service.compose(question="מה המצב?", retrieval=retrieval)
+
+    assert result.status == "refusal"
+    assert result.refusal_reason_code == REASON_INSUFFICIENT_EVIDENCE
+    assert set(result.missing_source_kinds) == {"protocol", "attachment"}
+    assert [request["call_type"] for request in provider.requests] == ["refuse"]
+
+
+def test_rag_answering_refuses_when_verification_cites_unknown_context_chunk() -> None:
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "answer": json.dumps(
+                {
+                    "answer": "טיוטה",
+                    "claims": [
+                        {
+                            "text": "טענה",
+                            "citation_chunk_ids": ["chunk-protocol"],
+                        }
+                    ],
+                    "limitations": [],
+                },
+                ensure_ascii=False,
+            ),
+            "verify": json.dumps(
+                {
+                    "all_supported": True,
+                    "claims": [
+                        {
+                            "text": "טענה",
+                            "supported": True,
+                            "citation_chunk_ids": ["missing-from-retrieval"],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            "refuse": json.dumps({"refusal_message_he": "אין מספיק ראיות"}, ensure_ascii=False),
+        }
+    )
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+
+    result = service.compose(
+        question="מה הוחלט?",
+        retrieval=_retrieval_result_with_mixed_sources(),
+        required_source_kinds=["protocol", "attachment"],
+    )
+
+    assert result.status == "refusal"
+    assert result.refusal_reason_code == REASON_INVALID_VERIFICATION_FORMAT
     assert [request["call_type"] for request in provider.requests] == ["answer", "verify", "refuse"]
 
 

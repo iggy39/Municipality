@@ -33,7 +33,10 @@ class RagPromptPrefixConfig:
         mapping = self.as_dict()
         if normalized not in mapping:
             raise ValueError(f"unsupported rag call type: {call_type}")
-        return mapping[normalized]
+        prefix = mapping[normalized].strip()
+        if not prefix:
+            raise ValueError(f"missing required prompt prefix for call type: {normalized}")
+        return prefix
 
     def as_dict(self) -> dict[str, str]:
         return {

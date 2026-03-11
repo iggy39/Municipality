@@ -1,43 +1,63 @@
-# M4 QA Report - RAG + Semantic Retrieval Foundation
+# M4 QA Report - Ask UI + RAG Evaluation + Hallucination Guards
 
 Date: 2026-03-10
-Scope: M4 semantic quality gate artifacts (M4-T11 completion support)
+Scope: M4-T06, M4-T07, M4-T08 (with existing semantic retrieval baseline)
 
 ## Exit Gate Snapshot
 
-- PASS: One-call semantic extraction guard remains enforced by run-call unique key and cache reuse.
-- PASS: Accepted active semantic nodes are evidence-backed through persisted mention spans.
-- PASS: Retrieval supports `semantic_mode=boost|filter|off` for semantic usage and lexical-only baseline checks.
-- PASS: Semantic eval harness is published and wired to integration tests.
+- PASS: Decision workflow UI now includes an Ask panel wired to `POST /ask` with Hebrew-first answer/refusal rendering.
+- PASS: Ask panel renders answer text, limitations, refusal state, and citation links that click through to document page context.
+- PASS: RAG eval harness scores citation correctness, answer correctness, and refusal correctness from live `POST /ask` response payloads.
+- PASS: Eval set starts with bootstrap case `m4-t00-bootstrap-real-life-001` and keeps traceable source chunk IDs.
+- PASS: Hallucination/prefix regressions expanded for uncited claims, mixed-source gaps, ambiguous queries, and missing prompt-prefix fail-fast behavior.
 
-## Semantic Eval Harness
+## M4-T06 Ask Panel UI Integration
 
-- Harness: `src/municipality/eval_semantic.py`
-- Gold set: `eval/gold/m4_semantic_eval_set.json`
-- Regression test: `tests/integration/test_m4_semantic_eval.py`
+- UI route: `GET /ui/decision/{decision_id}`
+- Integration contract:
+  - Ask form submits to `POST /ask` using meeting/topic context (`muni`, `topic`) and mixed evidence requirements.
+  - Answer path renders answer body + limitations + citation list.
+  - Refusal path renders refusal message and missing source hints.
+  - Citation entries link to source documents with `#page=` anchors for click-through context.
+- Regression coverage: `tests/integration/test_m3_decisions_api.py`
 
-Published metrics from deterministic integration fixture:
+## M4-T07 RAG Eval Harness + Scoring
 
-- Semantic hit rate: 1.00
-- Lexical-only hit rate: 1.00
-- Retrieval lift vs lexical baseline: 0.00
-- One-call compliance rate: 1.00
-- Evidence-backed active node rate: 1.00
-- Duplicate active-node rate: 0.00
-- Negative reject hit rate: 1.00
+- Harness module: `src/municipality/eval_rag.py`
+- Gold set: `eval/gold/m4_rag_eval_set.json`
+- Integration regression: `tests/integration/test_m4_rag_bootstrap.py`
+- Scoring dimensions:
+  - Citation correctness (`required_chunk_ids` present in `citations[].chunk_id`)
+  - Answer correctness (`expected_grounded.answer_must_include` fragments)
+  - Refusal correctness (reason code + missing source type + refusal message fragments)
+- Thresholds (from eval set):
+  - Citation correctness >= 1.00
+  - Answer correctness >= 1.00
+  - Refusal correctness >= 1.00
 
-## Retrieval Debugging Contract
+Published deterministic bootstrap-run metrics:
 
-- `GET /search` adds semantic diagnostics (`semantic_match_count`, `semantic_boost`, optional semantic node debug payloads).
-- `GET /semantic/node/{id}` exposes aliases, linked chunks/decisions, and mention evidence.
-- `GET /semantic/runs/{document_version_id}` exposes run-level compliance and reject histogram details.
+- Citation correctness: 1.00
+- Answer correctness: 1.00
+- Refusal correctness: 1.00
+- Bootstrap traceability: PASS (`m4-t00-bootstrap-real-life-001` links back to fixed chunk IDs)
 
-## Known Limitations
+## M4-T08 Hallucination + Prefix Regression Expansion
 
-- Current retrieval lift metric is measured on seeded integration fixture scenarios; municipality-scale production benchmark is still pending.
-- `semantic_mode=off` is provided for controlled lexical baseline evaluation and tuning, not for end-user defaults.
-- Hierarchy descendant expansion for semantic filters is not implemented yet.
+- Unit regressions: `tests/unit/test_rag_answering.py`
+  - Refuse when answer cites only one side of required mixed protocol/attachment evidence
+  - Refuse ambiguous query when retrieval context is empty (`INSUFFICIENT_EVIDENCE`)
+  - Refuse when verification cites chunk IDs not present in retrieved context (`INVALID_VERIFICATION_FORMAT`)
+- Prefix policy regression: `tests/unit/test_rag_llm.py`
+  - Missing required prompt prefix now fails fast before provider call.
+
+## Existing Semantic Baseline (M4-T11 Context)
+
+- Semantic retrieval controls and API diagnostics remain available and unchanged.
+- Semantic quality harness/report remains in:
+  - `src/municipality/eval_semantic.py`
+  - `eval/reports/m4_semantic_tree_report.md`
 
 ## Signoff Note
 
-M4 semantic quality gates are now measurable and regression-tested. Remaining M4 signoff should combine this semantic gate with final citation/refusal QA artifacts for complete milestone closure.
+M4 UI and RAG quality gates are now measurable end-to-end on top of `POST /ask` outputs, with explicit hallucination and prompt-prefix regression coverage.

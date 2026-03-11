@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from municipality.eval_rag import load_rag_eval_set, required_source_kinds
+from municipality.api import AskRequest, _run_ask
+from municipality.eval_rag import evaluate_rag_eval_set, load_rag_eval_set, required_source_kinds
 from municipality.rag_answering import REASON_MISSING_ATTACHMENT_EVIDENCE, RagAnsweringService
 from municipality.rag_llm import MockRagProvider, RagLlmConfig, build_rag_llm_client
 from municipality.rag_retrieval import RagRetrievalService
@@ -28,6 +30,9 @@ def test_m4_bootstrap_case_retrieval_returns_mixed_source_citation_context() -> 
     assert set(case.expected_grounded.required_chunk_ids) == {evidence.chunk_id for evidence in case.required_evidence}
     assert case.expected_refusal.must_include
     assert {item.missing_source_kind for item in case.expected_refusal.cases} == {"protocol", "attachment"}
+    assert eval_set.thresholds.citation_correctness_min == 1.0
+    assert eval_set.thresholds.answer_correctness_min == 1.0
+    assert eval_set.thresholds.refusal_correctness_min == 1.0
 
     db_path = PROJECT_ROOT / "municipality.db"
     assert db_path.exists(), "expected persisted municipality.db with M2 outputs"
@@ -100,3 +105,82 @@ def test_m4_bootstrap_missing_mixed_source_evidence_returns_refusal() -> None:
     assert result.refusal_reason_code == REASON_MISSING_ATTACHMENT_EVIDENCE
     assert "אין מספיק ראיות" in (result.refusal_message_he or "")
     assert result.missing_source_kinds == ["attachment"]
+
+
+def test_m4_rag_eval_harness_scores_new_ask_outputs() -> None:
+    eval_set = load_rag_eval_set(BOOTSTRAP_EVAL_SET_PATH)
+    assert eval_set.cases
+
+    case = eval_set.cases[0]
+    required_chunk_ids = list(case.expected_grounded.required_chunk_ids)
+    assert len(required_chunk_ids) >= 2
+
+    claim_labels = [f"טענה מבוססת {idx + 1}" for idx in range(len(required_chunk_ids))]
+    answer_text = " ".join(case.expected_grounded.answer_must_include)
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "answer": json.dumps(
+                {
+                    "answer": answer_text,
+                    "limitations": ["מבוסס על קטעי ראיות שנשלפו"],
+                    "claims": [
+                        {
+                            "text": claim_labels[idx],
+                            "citation_chunk_ids": [chunk_id],
+                        }
+                        for idx, chunk_id in enumerate(required_chunk_ids)
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            "verify": json.dumps(
+                {
+                    "all_supported": True,
+                    "claims": [
+                        {
+                            "text": claim_labels[idx],
+                            "supported": True,
+                            "citation_chunk_ids": [chunk_id],
+                        }
+                        for idx, chunk_id in enumerate(required_chunk_ids)
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            "refuse": json.dumps({"refusal_message_he": "אין מספיק ראיות"}, ensure_ascii=False),
+        }
+    )
+    llm_client = build_rag_llm_client(
+        config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}),
+        provider=provider,
+    )
+
+    db_path = PROJECT_ROOT / "municipality.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    with Session(engine) as session:
+
+        def ask_fn(**kwargs) -> dict:
+            request = AskRequest(
+                question=str(kwargs.get("question") or ""),
+                top_k=int(kwargs.get("top_k") or 8),
+                source_types=kwargs.get("source_types"),
+                required_source_types=kwargs.get("required_source_types"),
+                muni=kwargs.get("muni"),
+                year=kwargs.get("year"),
+                topic=kwargs.get("topic"),
+                semantic_mode=str(kwargs.get("semantic_mode") or "off"),
+            )
+            return _run_ask(request=request, db=session, llm_client=llm_client)
+
+        summary, case_results = evaluate_rag_eval_set(eval_set=eval_set, ask_fn=ask_fn)
+
+    engine.dispose()
+
+    assert case_results
+    assert summary.total_cases >= 1
+    assert summary.bootstrap_case_id == BOOTSTRAP_CASE_ID
+    assert summary.bootstrap_traceable
+    assert summary.citation_correctness >= eval_set.thresholds.citation_correctness_min
+    assert summary.answer_correctness >= eval_set.thresholds.answer_correctness_min
+    assert summary.refusal_correctness >= eval_set.thresholds.refusal_correctness_min
+    assert summary.thresholds_passed

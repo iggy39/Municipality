@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from municipality.fallback import BYTEZ_MODEL
 from municipality.rag_llm import (
     RAG_ANSWER_PREFIX_DEFAULT,
@@ -76,3 +78,19 @@ def test_bytez_provider_returns_not_configured_without_api_key() -> None:
 
     assert result.error_code == "MODEL_NOT_CONFIGURED"
     assert result.text is None
+
+
+def test_rag_llm_missing_required_prompt_prefix_fails_fast() -> None:
+    provider = MockRagProvider()
+    config = RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"})
+    config.prompt_prefixes.answer = "   "
+    client = build_rag_llm_client(config=config, provider=provider)
+
+    with pytest.raises(ValueError, match="missing required prompt prefix"):
+        client.generate(
+            call_type=RAG_CALL_ANSWER,
+            instruction="respond in hebrew",
+            payload={"question": "שאלה", "evidence": []},
+        )
+
+    assert provider.requests == []
