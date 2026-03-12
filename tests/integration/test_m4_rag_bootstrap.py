@@ -7,8 +7,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from municipality.api import AskRequest, _run_ask
-from municipality.eval_rag import evaluate_rag_eval_set, load_rag_eval_set, required_source_kinds
-from municipality.rag_answering import REASON_MISSING_ATTACHMENT_EVIDENCE, RagAnsweringService
+from municipality.eval_rag import evaluate_rag_eval_set, load_rag_eval_set, required_source_kinds, retrieval_source_kinds
+from municipality.rag_answering import REASON_MISSING_PROTOCOL_EVIDENCE, RagAnsweringService
 from municipality.rag_llm import MockRagProvider, RagLlmConfig, build_rag_llm_client
 from municipality.rag_retrieval import RagRetrievalService
 from municipality.search import SearchService
@@ -25,11 +25,12 @@ def test_m4_bootstrap_case_retrieval_returns_mixed_source_citation_context() -> 
     assert eval_set.cases
     case = eval_set.cases[0]
     assert case.case_id == BOOTSTRAP_CASE_ID
-    assert required_source_kinds(case) == {"protocol", "attachment"}
+    assert required_source_kinds(case) == {"protocol"}
+    assert retrieval_source_kinds(case) == {"protocol", "attachment"}
     assert case.expected_grounded.answer_must_include
     assert set(case.expected_grounded.required_chunk_ids) == {evidence.chunk_id for evidence in case.required_evidence}
     assert case.expected_refusal.must_include
-    assert {item.missing_source_kind for item in case.expected_refusal.cases} == {"protocol", "attachment"}
+    assert {item.missing_source_kind for item in case.expected_refusal.cases} == {"protocol"}
     assert eval_set.thresholds.citation_correctness_min == 1.0
     assert eval_set.thresholds.answer_correctness_min == 1.0
     assert eval_set.thresholds.refusal_correctness_min == 1.0
@@ -42,13 +43,14 @@ def test_m4_bootstrap_case_retrieval_returns_mixed_source_citation_context() -> 
         retrieval = RagRetrievalService(search_service=SearchService(session))
         retrieval_result = retrieval.retrieve(
             query=case.question,
-            source_kinds=sorted(required_source_kinds(case)),
+            source_kinds=sorted(retrieval_source_kinds(case)),
             semantic_mode="off",
             top_k=max(case.top_k, 8),
         )
 
         hit_by_chunk_id = {hit.chunk_id: hit for hit in retrieval_result.contexts}
-        found_source_kinds: set[str] = set()
+        found_required_source_kinds: set[str] = set()
+        found_supporting_source_kinds: set[str] = set()
 
         for evidence in case.required_evidence:
             hit = hit_by_chunk_id.get(evidence.chunk_id)
@@ -60,14 +62,23 @@ def test_m4_bootstrap_case_retrieval_returns_mixed_source_citation_context() -> 
             assert hit.document_url
             assert hit.start_page is not None
             assert hit.end_page is not None
-            found_source_kinds.add(hit.source_kind)
+            found_required_source_kinds.add(hit.source_kind)
+
+        for evidence in case.supporting_evidence:
+            hit = hit_by_chunk_id.get(evidence.chunk_id)
+            assert hit is not None, f"supporting bootstrap chunk not retrieved: {evidence.chunk_id}"
+            assert hit.source_kind == evidence.source_kind
+            assert hit.document_id == evidence.document_id
+            assert hit.citation == evidence.citation_label
+            found_supporting_source_kinds.add(hit.source_kind)
 
     engine.dispose()
 
-    assert found_source_kinds == {"protocol", "attachment"}
+    assert found_required_source_kinds == {"protocol"}
+    assert found_supporting_source_kinds == {"attachment"}
 
 
-def test_m4_bootstrap_missing_mixed_source_evidence_returns_refusal() -> None:
+def test_m4_bootstrap_missing_protocol_evidence_returns_refusal() -> None:
     eval_set = load_rag_eval_set(BOOTSTRAP_EVAL_SET_PATH)
     case = eval_set.cases[0]
 
@@ -77,7 +88,7 @@ def test_m4_bootstrap_missing_mixed_source_evidence_returns_refusal() -> None:
         retrieval = RagRetrievalService(search_service=SearchService(session))
         retrieval_result = retrieval.retrieve(
             query=case.question,
-            source_kinds=["protocol"],
+            source_kinds=["attachment"],
             semantic_mode="off",
             top_k=max(case.top_k, 8),
         )
@@ -102,9 +113,9 @@ def test_m4_bootstrap_missing_mixed_source_evidence_returns_refusal() -> None:
 
     assert result.status == "refusal"
     assert result.answer is None
-    assert result.refusal_reason_code == REASON_MISSING_ATTACHMENT_EVIDENCE
+    assert result.refusal_reason_code == REASON_MISSING_PROTOCOL_EVIDENCE
     assert "אין מספיק ראיות" in (result.refusal_message_he or "")
-    assert result.missing_source_kinds == ["attachment"]
+    assert result.missing_source_kinds == ["protocol"]
 
 
 def test_m4_rag_eval_harness_scores_new_ask_outputs() -> None:
@@ -113,7 +124,7 @@ def test_m4_rag_eval_harness_scores_new_ask_outputs() -> None:
 
     case = eval_set.cases[0]
     required_chunk_ids = list(case.expected_grounded.required_chunk_ids)
-    assert len(required_chunk_ids) >= 2
+    assert len(required_chunk_ids) >= 1
 
     claim_labels = [f"טענה מבוססת {idx + 1}" for idx in range(len(required_chunk_ids))]
     answer_text = " ".join(case.expected_grounded.answer_must_include)

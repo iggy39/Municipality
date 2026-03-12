@@ -224,8 +224,10 @@ def _run_ask(
         "question": request.question,
         "answer": answer_result.answer,
         "citations": citations_payload,
+        "claim_assessments": list(answer_result.claim_assessments),
         "limitations": limitations,
         "refusal": refusal_payload,
+        "scoring": dict(answer_result.scoring),
         "retrieval": {
             "retrieval_set_id": retrieval_result.retrieval_set_id,
             "count": len(retrieval_result.contexts),

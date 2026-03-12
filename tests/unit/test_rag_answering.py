@@ -78,9 +78,104 @@ def test_rag_answering_returns_structured_answer_with_citations_and_limitations(
     assert {row.source_kind for row in result.citations} == {"protocol", "attachment"}
     assert result.limitations == ["מבוסס על שני קטעי מקור בלבד"]
     assert result.refusal_reason_code is None
+    assert len(result.claim_assessments) == 2
     assert [request["call_type"] for request in provider.requests] == ["answer", "verify"]
     assert provider.requests[0]["messages"][0]["content"].splitlines()[0] == RAG_ANSWER_PREFIX_DEFAULT
     assert provider.requests[1]["messages"][0]["content"].splitlines()[0] == RAG_VERIFY_PREFIX_DEFAULT
+
+
+def test_rag_answering_claim_scores_warn_on_low_relevance_claims() -> None:
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "answer": json.dumps(
+                {
+                    "answer": "התקבלו שלוש החלטות.",
+                    "limitations": [],
+                    "claims": [
+                        {
+                            "text": "להעלות בשנית את קמפיין תסתכל לנהג בעיניים מטה בטיחות בדרכים",
+                            "citation_chunk_ids": ["chunk-protocol"],
+                        },
+                        {
+                            "text": "להוסיף תמרורים מוארים לגבי איסור פניה שמאלה במקומות המתאימים",
+                            "citation_chunk_ids": ["chunk-protocol"],
+                        },
+                        {
+                            "text": "בדיקת בטיחות לבית הספר ברחוב רבי טרפון בעקבות תחנת אוטובוס במקום",
+                            "citation_chunk_ids": ["chunk-protocol"],
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            "verify": json.dumps(
+                {
+                    "all_supported": True,
+                    "claims": [
+                        {
+                            "text": "להעלות בשנית את קמפיין תסתכל לנהג בעיניים מטה בטיחות בדרכים",
+                            "supported": True,
+                            "citation_chunk_ids": ["chunk-protocol"],
+                        },
+                        {
+                            "text": "להוסיף תמרורים מוארים לגבי איסור פניה שמאלה במקומות המתאימים",
+                            "supported": True,
+                            "citation_chunk_ids": ["chunk-protocol"],
+                        },
+                        {
+                            "text": "בדיקת בטיחות לבית הספר ברחוב רבי טרפון בעקבות תחנת אוטובוס במקום",
+                            "supported": True,
+                            "citation_chunk_ids": ["chunk-protocol"],
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        }
+    )
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+
+    retrieval = RagRetrievalResult(
+        query="אילו החלטות בטיחות בדרכים התקבלו?",
+        normalized_query="אילו החלטות בטיחות בדרכים התקבלו",
+        top_k=5,
+        retrieval_set_id="set-road-safety",
+        requested_source_kinds=["protocol"],
+        contexts=[
+            RagContextChunk(
+                chunk_id="chunk-protocol",
+                score=0.9,
+                snippet=(
+                    "החלטות: להעלות בשנית את קמפיין תסתכל לנהג בעיניים מטה בטיחות בדרכים; "
+                    "להוסיף תמרורים מוארים; בדיקת בטיחות לבית הספר; מח תנועה ותחבורה."
+                ),
+                citation="pp.2-3",
+                source_kind="protocol",
+                document_id=11,
+                document_title="פרוטוקול ועדת בטיחות בדרכים",
+                document_url="https://example.local/protocol.pdf",
+                municipality_slug="ashdod",
+                meeting_external_id="meeting:1",
+                start_page=2,
+                end_page=3,
+            )
+        ],
+    )
+
+    result = service.compose(
+        question="אילו החלטות בטיחות בדרכים התקבלו?",
+        retrieval=retrieval,
+        required_source_kinds=["protocol"],
+    )
+
+    assert result.status == "answer"
+    assert len(result.claim_assessments) == 3
+    low_claims = [item for item in result.claim_assessments if item["score_band"] == "low"]
+    assert low_claims
+    assert any("התאמה נמוכה" in (item.get("warning") or "") for item in low_claims)
+    assert any("טענות בעלות התאמה נמוכה" in line for line in result.limitations)
+    assert result.scoring.get("low_score_warning_applied") is True
 
 
 def test_rag_answering_refuses_when_attachment_side_is_missing() -> None:

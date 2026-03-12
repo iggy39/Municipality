@@ -39,6 +39,7 @@ class RagEvalCase:
     question: str
     top_k: int
     required_evidence: list[RagEvidenceReference]
+    supporting_evidence: list[RagEvidenceReference]
     expected_grounded: RagExpectedGroundedAnswer
     expected_refusal: RagExpectedRefusal
     muni: str | None = None
@@ -92,25 +93,8 @@ def load_rag_eval_set(path: Path) -> RagEvalSet:
     cases: list[RagEvalCase] = []
 
     for row in payload.get("cases", []):
-        required_evidence: list[RagEvidenceReference] = []
-        for evidence in row.get("required_evidence", []):
-            if not isinstance(evidence, dict):
-                continue
-            chunk_id = _as_str(evidence.get("chunk_id"))
-            source_kind = _as_str(evidence.get("source_kind"))
-            document_id = _as_int(evidence.get("document_id"))
-            if not chunk_id or not source_kind or document_id is None:
-                continue
-
-            required_evidence.append(
-                RagEvidenceReference(
-                    source_kind=source_kind,
-                    chunk_id=chunk_id,
-                    document_id=document_id,
-                    document_version_id=_as_int(evidence.get("document_version_id")),
-                    citation_label=_as_str(evidence.get("citation_label")),
-                )
-            )
+        required_evidence = _parse_evidence_references(row.get("required_evidence"))
+        supporting_evidence = _parse_evidence_references(row.get("supporting_evidence"))
 
         grounded_payload = row.get("expected_grounded", {})
         grounded = RagExpectedGroundedAnswer(
@@ -154,6 +138,7 @@ def load_rag_eval_set(path: Path) -> RagEvalSet:
                 question=question,
                 top_k=max(1, _as_int(row.get("top_k")) or 5),
                 required_evidence=required_evidence,
+                supporting_evidence=supporting_evidence,
                 expected_grounded=grounded,
                 expected_refusal=refusal,
                 muni=_as_str(row.get("muni")),
@@ -182,6 +167,13 @@ def required_source_kinds(case: RagEvalCase) -> set[str]:
     return {evidence.source_kind for evidence in case.required_evidence}
 
 
+def retrieval_source_kinds(case: RagEvalCase) -> set[str]:
+    kinds: set[str] = set()
+    kinds.update(required_source_kinds(case))
+    kinds.update(evidence.source_kind for evidence in case.supporting_evidence)
+    return kinds
+
+
 def evaluate_rag_eval_set(
     *,
     eval_set: RagEvalSet,
@@ -196,12 +188,13 @@ def evaluate_rag_eval_set(
 
     for case in eval_set.cases:
         required_sources = sorted(required_source_kinds(case))
+        retrieval_sources = sorted(retrieval_source_kinds(case))
         required_chunk_ids = _required_chunk_ids_for_case(case)
 
         response = ask_fn(
             question=case.question,
             top_k=case.top_k,
-            source_types=required_sources or None,
+            source_types=retrieval_sources or None,
             required_source_types=required_sources or None,
             muni=case.muni,
             year=case.year,
@@ -222,6 +215,7 @@ def evaluate_rag_eval_set(
         case_refusal_total, case_refusal_passed, refusal_failures = _evaluate_refusal_cases(
             case=case,
             required_sources=required_sources,
+            retrieval_sources=retrieval_sources,
             ask_fn=ask_fn,
         )
 
@@ -319,6 +313,7 @@ def _evaluate_refusal_cases(
     *,
     case: RagEvalCase,
     required_sources: list[str],
+    retrieval_sources: list[str],
     ask_fn: Callable[..., Mapping[str, Any]],
 ) -> tuple[int, int, list[str]]:
     total = 0
@@ -327,7 +322,13 @@ def _evaluate_refusal_cases(
 
     for refusal_case in case.expected_refusal.cases:
         total += 1
-        source_types = [source_kind for source_kind in required_sources if source_kind != refusal_case.missing_source_kind]
+        source_types = [source_kind for source_kind in retrieval_sources if source_kind != refusal_case.missing_source_kind]
+        if not source_types:
+            source_types = [
+                source_kind
+                for source_kind in ["protocol", "attachment", "other"]
+                if source_kind != refusal_case.missing_source_kind
+            ]
         response = ask_fn(
             question=case.question,
             top_k=case.top_k,
@@ -415,3 +416,28 @@ def _as_str_list(value: object) -> list[str]:
         if normalized:
             out.append(normalized)
     return out
+
+
+def _parse_evidence_references(value: object) -> list[RagEvidenceReference]:
+    if not isinstance(value, list):
+        return []
+
+    rows: list[RagEvidenceReference] = []
+    for evidence in value:
+        if not isinstance(evidence, dict):
+            continue
+        chunk_id = _as_str(evidence.get("chunk_id"))
+        source_kind = _as_str(evidence.get("source_kind"))
+        document_id = _as_int(evidence.get("document_id"))
+        if not chunk_id or not source_kind or document_id is None:
+            continue
+        rows.append(
+            RagEvidenceReference(
+                source_kind=source_kind,
+                chunk_id=chunk_id,
+                document_id=document_id,
+                document_version_id=_as_int(evidence.get("document_version_id")),
+                citation_label=_as_str(evidence.get("citation_label")),
+            )
+        )
+    return rows

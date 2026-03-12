@@ -20,11 +20,11 @@ Processing prompt prefixes (mandatory):
 
 Real-life bootstrap example (must be first):
 - Build the first M4 evaluation case from existing M2 outputs in `municipality.db`.
-- Use a mixed-source question that requires both protocol and attachment evidence.
+- Protocol evidence is mandatory for bootstrap pass/fail; attachment evidence is supporting when same-topic context exists.
 - Seed evidence references:
   - Protocol chunk `text_chunk.chunk_id=72cfd3d013348e5ba31c2f5f53a1c6d1f5ce76e1` (`source_kind=protocol`, citation `pp.2-3`).
-  - Attachment chunk `text_chunk.chunk_id=ee1a42618d5aa132b3f8821151d3620af5ea4fb0` (`source_kind=attachment`, citation `p.1`).
-- Required behavior: return answer with both citations, or refusal if one evidence side is missing.
+  - Supporting attachment chunk `text_chunk.chunk_id=ab0ed12f9373d2130119a1e20faf951fe1da4490` (`source_kind=attachment`, citation `pp.2-3`).
+- Required behavior: return a citation-grounded answer from protocol evidence; include supporting attachment citation when available and same-topic; refuse when protocol evidence is missing or cross-topic evidence is detected.
 
 ## Exit Gate
 
@@ -62,7 +62,7 @@ Real-life bootstrap example (must be first):
 ### M4-T00 - Real-life RAG bootstrap from M2 products
 Checklist:
 - [x] Build first `/ask` scenario from persisted M2 outputs (no synthetic-only source text).
-- [x] Use one protocol chunk and one attachment chunk with citation labels.
+- [x] Use one mandatory protocol chunk and one same-topic supporting attachment chunk with citation labels.
 - [x] Define expected grounded answer and paired expected refusal behavior.
 - [x] Store stable source references (chunk IDs/document IDs) for reproducible eval.
 

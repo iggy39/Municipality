@@ -91,6 +91,7 @@ class SearchHit:
     semantic_node_ids: list[int] = field(default_factory=list)
     semantic_boost: float = 0.0
     semantic_nodes: list[SemanticDebugNode] = field(default_factory=list)
+    chunk_text: str = ""
 
 
 class SearchService:
@@ -273,6 +274,7 @@ class SearchService:
                     semantic_node_ids=[row.node_id for row in semantic_rows],
                     semantic_boost=round(semantic_boost, 6),
                     semantic_nodes=semantic_nodes,
+                    chunk_text=chunk.chunk_text,
                 )
             )
 

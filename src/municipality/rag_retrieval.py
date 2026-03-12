@@ -21,6 +21,7 @@ class RagContextChunk:
     meeting_external_id: str | None
     start_page: int | None
     end_page: int | None
+    chunk_text: str = ""
 
 
 @dataclass(slots=True)
@@ -210,4 +211,5 @@ def _to_context(hit) -> RagContextChunk:
         meeting_external_id=hit.meeting_external_id,
         start_page=hit.start_page,
         end_page=hit.end_page,
+        chunk_text=getattr(hit, "chunk_text", "") or hit.snippet,
     )
