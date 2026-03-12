@@ -4,6 +4,11 @@
 
 # Common additional ignores (optional)
 .env
+/local_llm/
+municipality.db
+__pycache__/
+*.py[cod]
+*$py.class
 node_modules/
 .DS_Store
 Thumbs.db
