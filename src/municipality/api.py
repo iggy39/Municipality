@@ -38,6 +38,13 @@ from municipality.pipeline import PipelineService
 from municipality.processing import ProcessingService
 from municipality.rag_answering import RagAnsweringService
 from municipality.rag_llm import RagLlmClient, build_rag_llm_client
+from municipality.rag_observability import (
+    audit_sample_rate,
+    hash_text,
+    log_rag_event,
+    new_ask_request_id,
+    should_sample_audit,
+)
 from municipality.rag_retrieval import RagRetrievalService
 from municipality.search import SearchService
 
@@ -132,6 +139,8 @@ class AskRequest(BaseModel):
     required_source_types: list[str] | None = None
     year: int | None = None
     topic: str | None = None
+    semantic_node_id: int | None = None
+    semantic_label: str | None = None
     semantic_mode: str = "off"
 
 
@@ -141,6 +150,23 @@ def _run_ask(
     db,
     llm_client: RagLlmClient | None = None,
 ) -> dict:
+    ask_request_id = new_ask_request_id()
+    question_hash = hash_text(request.question)
+    log_rag_event(
+        "rag.ask.request",
+        ask_request_id=ask_request_id,
+        question_hash=question_hash,
+        top_k=request.top_k,
+        municipality_slug=request.muni,
+        source_types=request.source_types or [],
+        required_source_types=request.required_source_types or [],
+        year=request.year,
+        topic=request.topic,
+        semantic_node_id=request.semantic_node_id,
+        semantic_label=request.semantic_label,
+        semantic_mode=request.semantic_mode,
+    )
+
     retrieval_service = RagRetrievalService(search_service=SearchService(db))
     retrieval_result = retrieval_service.retrieve(
         query=request.question,
@@ -149,7 +175,10 @@ def _run_ask(
         source_kinds=request.source_types,
         year=request.year,
         topic=request.topic,
+        semantic_node_id=request.semantic_node_id,
+        semantic_label=request.semantic_label,
         semantic_mode=request.semantic_mode,
+        ask_request_id=ask_request_id,
     )
 
     answering_service = RagAnsweringService(llm_client=llm_client or build_rag_llm_client())
@@ -157,6 +186,7 @@ def _run_ask(
         question=request.question,
         retrieval=retrieval_result,
         required_source_kinds=request.required_source_types,
+        ask_request_id=ask_request_id,
     )
 
     limitations = list(answer_result.limitations)
@@ -188,7 +218,8 @@ def _run_ask(
             "missing_source_types": answer_result.missing_source_kinds,
         }
 
-    return {
+    response_payload = {
+        "ask_request_id": ask_request_id,
         "status": answer_result.status,
         "question": request.question,
         "answer": answer_result.answer,
@@ -196,16 +227,51 @@ def _run_ask(
         "limitations": limitations,
         "refusal": refusal_payload,
         "retrieval": {
+            "retrieval_set_id": retrieval_result.retrieval_set_id,
             "count": len(retrieval_result.contexts),
             "source_types": sorted(retrieval_result.source_kinds),
             "requested_source_types": retrieval_result.requested_source_kinds,
             "top_k": retrieval_result.top_k,
+            "semantic_mode": request.semantic_mode,
+            "semantic_node_id": request.semantic_node_id,
+            "semantic_label": request.semantic_label,
         },
         "model": {
             "provider": answer_result.provider,
             "name": answer_result.model,
         },
     }
+
+    log_rag_event(
+        "rag.ask.response",
+        ask_request_id=ask_request_id,
+        question_hash=question_hash,
+        status=answer_result.status,
+        retrieval_set_id=retrieval_result.retrieval_set_id,
+        retrieval_count=len(retrieval_result.contexts),
+        retrieval_source_types=sorted(retrieval_result.source_kinds),
+        citation_count=len(citations_payload),
+        refusal_reason_code=answer_result.refusal_reason_code,
+        provider=answer_result.provider,
+        model=answer_result.model,
+    )
+
+    sample_rate = audit_sample_rate()
+    if should_sample_audit(rate=sample_rate):
+        log_rag_event(
+            "rag.ask.audit_sample",
+            ask_request_id=ask_request_id,
+            question_hash=question_hash,
+            sample_rate=sample_rate,
+            status=answer_result.status,
+            retrieval_set_id=retrieval_result.retrieval_set_id,
+            citation_chunk_ids=[citation["chunk_id"] for citation in citations_payload],
+            refusal_reason_code=answer_result.refusal_reason_code,
+            missing_source_types=answer_result.missing_source_kinds,
+            answer_preview=(answer_result.answer or "")[:280],
+        )
+
+    return response_payload
 
 
 def _decision_payload(decision_id: int, db) -> dict | None:

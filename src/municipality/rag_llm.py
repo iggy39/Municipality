@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
 
 import httpx
 
 from municipality.fallback import BYTEZ_MODEL, BYTEZ_PROVIDER, DEFAULT_BYTEZ_API_URL
+from municipality.rag_observability import log_rag_event
 
 
 RAG_CALL_ANSWER = "answer"
@@ -307,6 +309,7 @@ class RagLlmClient:
         instruction: str,
         payload: str | dict[str, Any] | list[Any],
         temperature: float = 0.0,
+        ask_request_id: str | None = None,
     ) -> RagLlmResult:
         normalized_call_type = _normalize_call_type(call_type)
         prefix = self.prompt_prefixes.for_call_type(normalized_call_type)
@@ -318,7 +321,19 @@ class RagLlmClient:
         else:
             user_content = json.dumps(payload, ensure_ascii=False)
 
-        return self.provider.generate(
+        log_rag_event(
+            "rag.llm.call",
+            ask_request_id=ask_request_id,
+            call_type=normalized_call_type,
+            prompt_prefix_category=normalized_call_type,
+            provider=self.provider.provider_name,
+            model=self.provider.model_name,
+            payload_chars=len(user_content),
+            temperature=temperature,
+        )
+
+        started = time.perf_counter()
+        result = self.provider.generate(
             call_type=normalized_call_type,
             messages=[
                 {"role": "system", "content": system_content},
@@ -326,6 +341,20 @@ class RagLlmClient:
             ],
             temperature=temperature,
         )
+        latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
+        log_rag_event(
+            "rag.llm.result",
+            ask_request_id=ask_request_id,
+            call_type=normalized_call_type,
+            prompt_prefix_category=normalized_call_type,
+            provider=result.provider,
+            model=result.model,
+            latency_ms=latency_ms,
+            request_tokens=result.request_tokens,
+            response_tokens=result.response_tokens,
+            error_code=result.error_code,
+        )
+        return result
 
 
 def build_rag_llm_client(

@@ -1,7 +1,7 @@
 # M4-T11 Semantic Tree Report
 
-Date: 2026-03-05
-Scope: M4 semantic topic+entity tree phases 1-6
+Date: 2026-03-11
+Scope: M4 semantic topic+entity tree phases 1-6 (signoff refresh)
 
 ## Exit Gate Status
 
@@ -9,6 +9,7 @@ Scope: M4 semantic topic+entity tree phases 1-6
 - PASS: Processing pipeline persists accepted semantic artifacts (nodes, aliases, mentions, chunk links, decision links) and reject audit rows.
 - PASS: Processing rerun remains idempotent for semantic artifacts and does not roll back extraction/chunking when semantic stage fails.
 - PASS: Search supports `semantic_mode=boost|filter` with `semantic_node_id` and `semantic_label` selectors and additive debug payloads.
+- PASS: `/ask` pathway supports semantic selectors (`semantic_node_id`, `semantic_label`, `semantic_mode`) while keeping citation-first refusal behavior.
 - PASS: Semantic API endpoints are available: `/semantic/tree`, `/semantic/node/{id}`, `/semantic/runs/{document_version_id}`.
 
 ## Metrics Snapshot
@@ -28,9 +29,11 @@ Coverage: integration scenarios + seeded semantic runs
 
 - Processing integration and semantic persistence: `src/municipality/processing.py`, `src/municipality/semantic_service.py`
 - Retrieval integration: `src/municipality/search.py`
+- RAG retrieval bridge: `src/municipality/rag_retrieval.py`, `src/municipality/api.py`
 - API contract extensions: `src/municipality/api.py`
 - Processing idempotency test: `tests/integration/test_m4_semantic_processing.py`
 - Search semantic behavior test: `tests/integration/test_m4_semantic_search.py`
+- Ask semantic/citation-first behavior test: `tests/integration/test_m4_ask_api.py`
 - API semantic endpoints test: `tests/integration/test_m4_semantic_api.py`
 
 ## Known Issues / Follow-ups

@@ -11,7 +11,15 @@ from municipality.api import AskRequest, _run_ask
 from municipality.chunking import build_chunks
 from municipality.extraction import parse_extracted_text
 from municipality.migrations import apply_all
-from municipality.models import Document, DocumentVersion, ExtractedDocument, SourceSite, TextChunk
+from municipality.models import (
+    ChunkSemanticLink,
+    Document,
+    DocumentVersion,
+    ExtractedDocument,
+    SemanticNode,
+    SourceSite,
+    TextChunk,
+)
 from municipality.rag_llm import MockRagProvider, RagLlmConfig, build_rag_llm_client
 from municipality.search import SearchService
 
@@ -83,10 +91,17 @@ def test_m4_ask_api_returns_answer_with_citation_contract(tmp_path: Path) -> Non
             llm_client=llm_client,
         )
 
+        assert isinstance(payload["ask_request_id"], str)
+        assert payload["ask_request_id"]
         assert payload["status"] == "answer"
         assert payload["answer"]
         assert payload["refusal"] is None
         assert payload["citations"]
+        assert isinstance(payload["retrieval"]["retrieval_set_id"], str)
+        assert payload["retrieval"]["retrieval_set_id"]
+        assert payload["retrieval"]["semantic_mode"] == "off"
+        assert payload["retrieval"]["semantic_node_id"] is None
+        assert payload["retrieval"]["semantic_label"] is None
         assert {row["source_type"] for row in payload["citations"]} == {"protocol", "attachment"}
         assert all(row["document"]["id"] for row in payload["citations"])
         assert all(row["document"]["title"] for row in payload["citations"])
@@ -120,12 +135,95 @@ def test_m4_ask_api_returns_refusal_with_reason_code_when_source_missing(tmp_pat
             llm_client=llm_client,
         )
 
+        assert isinstance(payload["ask_request_id"], str)
+        assert payload["ask_request_id"]
         assert payload["status"] == "refusal"
         assert payload["answer"] is None
         assert payload["citations"] == []
+        assert isinstance(payload["retrieval"]["retrieval_set_id"], str)
+        assert payload["retrieval"]["retrieval_set_id"]
+        assert payload["retrieval"]["semantic_mode"] == "off"
+        assert payload["retrieval"]["semantic_node_id"] is None
+        assert payload["retrieval"]["semantic_label"] is None
         assert payload["refusal"] is not None
         assert payload["refusal"]["reason_code"] == "MISSING_ATTACHMENT_EVIDENCE"
         assert "אין מספיק ראיות" in (payload["refusal"]["message_he"] or "")
+        assert payload["refusal"]["missing_source_types"] == ["attachment"]
+
+
+def test_m4_ask_api_semantic_filter_preserves_citation_first_refusal(tmp_path: Path) -> None:
+    db_path = tmp_path / "m4_ask_semantic_filter.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    apply_all(engine, Path("migrations"))
+
+    with Session(engine) as session:
+        protocol_chunk_id, _attachment_chunk_id = _seed_mixed_source_chunks(session)
+
+        protocol_chunk = session.execute(
+            select(TextChunk).where(TextChunk.chunk_id == protocol_chunk_id)
+        ).scalar_one()
+        protocol_document = session.execute(
+            select(Document).where(Document.id == protocol_chunk.document_id)
+        ).scalar_one()
+
+        semantic_node = SemanticNode(
+            source_site_id=protocol_document.source_site_id,
+            node_key_hash="9" * 40,
+            node_kind="topic",
+            semantic_type="road_safety",
+            pref_label_he="בטיחות בדרכים",
+            pref_label_norm="בטיחות בדרכים",
+            parent_node_id=None,
+            depth=0,
+            specificity_score=0.81,
+            confidence=0.91,
+            support_count=1,
+            status="active",
+            first_seen_document_version_id=protocol_chunk.document_version_id,
+            last_seen_document_version_id=protocol_chunk.document_version_id,
+            metadata_json=json.dumps({"seed": True}),
+            updated_at=datetime.utcnow(),
+        )
+        session.add(semantic_node)
+        session.flush()
+
+        session.add(
+            ChunkSemanticLink(
+                chunk_id=protocol_chunk_id,
+                semantic_node_id=semantic_node.id,
+                confidence=0.95,
+                source_mention_id=None,
+                metadata_json=json.dumps({"seed": True}),
+            )
+        )
+        session.commit()
+
+        llm_client = build_rag_llm_client(
+            config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}),
+            provider=MockRagProvider(),
+        )
+        payload = _run_ask(
+            request=AskRequest(
+                question="מה אושר בעיר?",
+                top_k=8,
+                source_types=["protocol", "attachment"],
+                required_source_types=["protocol", "attachment"],
+                semantic_mode="filter",
+                semantic_label="בטיחות",
+            ),
+            db=session,
+            llm_client=llm_client,
+        )
+
+        assert payload["status"] == "refusal"
+        assert payload["answer"] is None
+        assert payload["citations"] == []
+        assert payload["retrieval"]["semantic_mode"] == "filter"
+        assert payload["retrieval"]["semantic_label"] == "בטיחות"
+        assert payload["retrieval"]["semantic_node_id"] is None
+        assert payload["retrieval"]["source_types"] == ["protocol"]
+        assert payload["refusal"] is not None
+        assert payload["refusal"]["reason_code"] == "MISSING_ATTACHMENT_EVIDENCE"
         assert payload["refusal"]["missing_source_types"] == ["attachment"]
 
 

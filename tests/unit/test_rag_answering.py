@@ -6,6 +6,7 @@ from municipality.rag_answering import (
     REASON_INSUFFICIENT_EVIDENCE,
     REASON_INVALID_VERIFICATION_FORMAT,
     REASON_MISSING_ATTACHMENT_EVIDENCE,
+    REASON_TOPIC_MISMATCH_EVIDENCE,
     REASON_UNCITED_CLAIMS,
     REASON_UNSUPPORTED_CLAIMS,
     RagAnsweringService,
@@ -101,6 +102,7 @@ def test_rag_answering_refuses_when_attachment_side_is_missing() -> None:
         query="מה אושר?",
         normalized_query="מה אושר",
         top_k=5,
+        retrieval_set_id="set-protocol-only",
         requested_source_kinds=["protocol"],
         contexts=[_protocol_context()],
     )
@@ -204,6 +206,58 @@ def test_rag_answering_refuses_when_verification_marks_unsupported_claims() -> N
     assert [request["call_type"] for request in provider.requests] == ["answer", "verify", "refuse"]
 
 
+def test_rag_answering_accepts_markdown_fenced_json_from_model() -> None:
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "answer": """```json
+{
+  "answer": "אושרו צעדי בטיחות ואושר הסכם עירוני.",
+  "limitations": ["מבוסס על שני קטעים"],
+  "claims": [
+    {
+      "text": "אושרו צעדי בטיחות",
+      "citation_chunk_ids": ["chunk-protocol"]
+    },
+    {
+      "text": "אושר הסכם עירוני",
+      "citation_chunk_ids": ["chunk-attachment"]
+    }
+  ]
+}
+```""",
+            "verify": """```json
+{
+  "all_supported": true,
+  "claims": [
+    {
+      "text": "אושרו צעדי בטיחות",
+      "supported": true,
+      "citation_chunk_ids": ["chunk-protocol"]
+    },
+    {
+      "text": "אושר הסכם עירוני",
+      "supported": true,
+      "citation_chunk_ids": ["chunk-attachment"]
+    }
+  ]
+}
+```""",
+        }
+    )
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+
+    result = service.compose(
+        question="מה הוחלט?",
+        retrieval=_retrieval_result_with_mixed_sources(),
+        required_source_kinds=["protocol", "attachment"],
+    )
+
+    assert result.status == "answer"
+    assert result.answer is not None
+    assert {row.chunk_id for row in result.citations} == {"chunk-protocol", "chunk-attachment"}
+
+
 def test_rag_answering_refuses_when_mixed_answer_cites_only_protocol_side() -> None:
     provider = MockRagProvider(
         responses_by_call_type={
@@ -270,6 +324,7 @@ def test_rag_answering_refuses_ambiguous_query_without_context() -> None:
         query="מה המצב?",
         normalized_query="מה המצב",
         top_k=5,
+        retrieval_set_id="set-empty",
         requested_source_kinds=["protocol", "attachment"],
         contexts=[],
     )
@@ -327,11 +382,49 @@ def test_rag_answering_refuses_when_verification_cites_unknown_context_chunk() -
     assert [request["call_type"] for request in provider.requests] == ["answer", "verify", "refuse"]
 
 
+def test_rag_answering_refuses_when_mixed_sources_do_not_match_question_topic() -> None:
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "answer": json.dumps(
+                {
+                    "answer": "אושרו צעדי בטיחות ובנוסף אושר הסכם כללי.",
+                    "claims": [
+                        {
+                            "text": "אושרו צעדי בטיחות",
+                            "citation_chunk_ids": ["chunk-protocol"],
+                        },
+                        {
+                            "text": "אושר הסכם כללי",
+                            "citation_chunk_ids": ["chunk-attachment"],
+                        },
+                    ],
+                    "limitations": [],
+                },
+                ensure_ascii=False,
+            ),
+            "refuse": json.dumps({"refusal_message_he": "אין מספיק ראיות"}, ensure_ascii=False),
+        }
+    )
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+
+    result = service.compose(
+        question="אילו החלטות בטיחות בדרכים התקבלו ומה אישרה מועצת העיר בהסכם?",
+        retrieval=_retrieval_result_with_mixed_sources(),
+        required_source_kinds=["protocol", "attachment"],
+    )
+
+    assert result.status == "refusal"
+    assert result.refusal_reason_code == REASON_TOPIC_MISMATCH_EVIDENCE
+    assert [request["call_type"] for request in provider.requests] == ["answer", "refuse"]
+
+
 def _retrieval_result_with_mixed_sources() -> RagRetrievalResult:
     return RagRetrievalResult(
         query="מה הוחלט",
         normalized_query="מה הוחלט",
         top_k=5,
+        retrieval_set_id="set-mixed",
         requested_source_kinds=["protocol", "attachment"],
         contexts=[
             _protocol_context(),

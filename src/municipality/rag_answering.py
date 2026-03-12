@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from municipality.chunking import normalize_for_search
 from municipality.rag_llm import RAG_CALL_ANSWER, RAG_CALL_REFUSE, RAG_CALL_VERIFY, RagLlmClient
+from municipality.rag_observability import log_rag_event
 from municipality.rag_retrieval import RagContextChunk, RagRetrievalResult
 
 
@@ -18,6 +21,41 @@ REASON_UNCITED_CLAIMS = "UNCITED_CLAIMS"
 REASON_VERIFICATION_FAILED = "VERIFICATION_FAILED"
 REASON_INVALID_VERIFICATION_FORMAT = "INVALID_VERIFICATION_FORMAT"
 REASON_UNSUPPORTED_CLAIMS = "UNSUPPORTED_CLAIMS"
+REASON_TOPIC_MISMATCH_EVIDENCE = "TOPIC_MISMATCH_EVIDENCE"
+
+
+TOPIC_CLAUSE_SPLIT_RE = re.compile(r"\b(?:וגם|ומה|בנוסף)\b")
+HEBREW_TOKEN_RE = re.compile(r"[\u0590-\u05FF]{2,}")
+GENERIC_QUERY_TOKENS = {
+    "אילו",
+    "איזה",
+    "איזו",
+    "מה",
+    "מי",
+    "למה",
+    "כמה",
+    "מתי",
+    "האם",
+    "הוחלט",
+    "החלטה",
+    "החלטות",
+    "התקבל",
+    "התקבלו",
+    "אושר",
+    "אושרה",
+    "אישר",
+    "אישרה",
+    "מועצת",
+    "העיר",
+    "עיר",
+    "בעיר",
+    "עירייה",
+    "העירייה",
+    "הסכם",
+    "בהסכם",
+    "בפרוטוקול",
+    "פרוטוקול",
+}
 
 
 @dataclass(slots=True)
@@ -75,8 +113,18 @@ class RagAnsweringService:
         question: str,
         retrieval: RagRetrievalResult,
         required_source_kinds: list[str] | None = None,
+        ask_request_id: str | None = None,
     ) -> RagAnswerResult:
         required_sources = _normalize_source_kinds(required_source_kinds or retrieval.requested_source_kinds)
+        log_rag_event(
+            "rag.answering.start",
+            ask_request_id=ask_request_id,
+            retrieval_set_id=retrieval.retrieval_set_id,
+            required_source_types=required_sources,
+            retrieved_source_types=sorted(retrieval.source_kinds),
+            retrieval_context_count=len(retrieval.contexts),
+        )
+
         reason_code, missing_sources = _insufficient_evidence_reason(
             contexts=retrieval.contexts,
             required_source_kinds=required_sources,
@@ -87,6 +135,7 @@ class RagAnsweringService:
                 retrieval=retrieval,
                 reason_code=reason_code,
                 missing_source_kinds=missing_sources,
+                ask_request_id=ask_request_id,
             )
 
         answer_call = self.llm_client.generate(
@@ -97,6 +146,7 @@ class RagAnsweringService:
                 "claims (array of objects with text and citation_chunk_ids)."
             ),
             payload=_answer_payload(question=question, retrieval=retrieval),
+            ask_request_id=ask_request_id,
         )
         if answer_call.error_code or not answer_call.text:
             return self._build_refusal(
@@ -106,6 +156,7 @@ class RagAnsweringService:
                 missing_source_kinds=[],
                 provider=answer_call.provider,
                 model=answer_call.model,
+                ask_request_id=ask_request_id,
             )
 
         answer_draft = _parse_answer_draft(answer_call.text)
@@ -117,6 +168,7 @@ class RagAnsweringService:
                 missing_source_kinds=[],
                 provider=answer_call.provider,
                 model=answer_call.model,
+                ask_request_id=ask_request_id,
             )
 
         context_by_chunk = {context.chunk_id: context for context in retrieval.contexts}
@@ -129,6 +181,29 @@ class RagAnsweringService:
                 missing_source_kinds=[],
                 provider=answer_call.provider,
                 model=answer_call.model,
+                ask_request_id=ask_request_id,
+            )
+
+        topic_mismatch_chunk_ids = _topic_mismatch_chunk_ids(
+            question=question,
+            used_chunk_ids=used_chunk_ids,
+            context_by_chunk=context_by_chunk,
+        )
+        if topic_mismatch_chunk_ids:
+            log_rag_event(
+                "rag.answering.topic_mismatch",
+                ask_request_id=ask_request_id,
+                retrieval_set_id=retrieval.retrieval_set_id,
+                mismatch_chunk_ids=topic_mismatch_chunk_ids,
+            )
+            return self._build_refusal(
+                question=question,
+                retrieval=retrieval,
+                reason_code=REASON_TOPIC_MISMATCH_EVIDENCE,
+                missing_source_kinds=[],
+                provider=answer_call.provider,
+                model=answer_call.model,
+                ask_request_id=ask_request_id,
             )
 
         verify_call = self.llm_client.generate(
@@ -138,7 +213,12 @@ class RagAnsweringService:
                 "Return strict JSON object with keys: all_supported (boolean), "
                 "claims (array of objects with text, supported, citation_chunk_ids)."
             ),
-            payload=_verification_payload(question=question, answer_draft=answer_draft),
+            payload=_verification_payload(
+                question=question,
+                answer_draft=answer_draft,
+                retrieval=retrieval,
+            ),
+            ask_request_id=ask_request_id,
         )
         if verify_call.error_code or not verify_call.text:
             return self._build_refusal(
@@ -148,6 +228,7 @@ class RagAnsweringService:
                 missing_source_kinds=[],
                 provider=verify_call.provider,
                 model=verify_call.model,
+                ask_request_id=ask_request_id,
             )
 
         verification = _parse_verification(verify_call.text, context_by_chunk)
@@ -159,6 +240,7 @@ class RagAnsweringService:
                 missing_source_kinds=[],
                 provider=verify_call.provider,
                 model=verify_call.model,
+                ask_request_id=ask_request_id,
             )
         if not verification.all_supported:
             return self._build_refusal(
@@ -168,6 +250,7 @@ class RagAnsweringService:
                 missing_source_kinds=[],
                 provider=verify_call.provider,
                 model=verify_call.model,
+                ask_request_id=ask_request_id,
             )
 
         citations = _build_citations(retrieval.contexts, used_chunk_ids)
@@ -179,6 +262,7 @@ class RagAnsweringService:
                 missing_source_kinds=[],
                 provider=verify_call.provider,
                 model=verify_call.model,
+                ask_request_id=ask_request_id,
             )
 
         missing_sources = sorted(set(required_sources) - {citation.source_kind for citation in citations})
@@ -190,9 +274,10 @@ class RagAnsweringService:
                 missing_source_kinds=missing_sources,
                 provider=verify_call.provider,
                 model=verify_call.model,
+                ask_request_id=ask_request_id,
             )
 
-        return RagAnswerResult(
+        result = RagAnswerResult(
             status="answer",
             answer=answer_draft.answer,
             citations=citations,
@@ -200,6 +285,19 @@ class RagAnsweringService:
             provider=verify_call.provider,
             model=verify_call.model,
         )
+        log_rag_event(
+            "rag.answering.answer",
+            ask_request_id=ask_request_id,
+            retrieval_set_id=retrieval.retrieval_set_id,
+            citation_count=len(result.citations),
+            citation_chunk_ids=[citation.chunk_id for citation in result.citations],
+            limitation_count=len(result.limitations),
+            provider=result.provider,
+            model=result.model,
+            required_source_types=required_sources,
+            covered_source_types=sorted({citation.source_kind for citation in result.citations}),
+        )
+        return result
 
     def _build_refusal(
         self,
@@ -210,6 +308,7 @@ class RagAnsweringService:
         missing_source_kinds: list[str],
         provider: str | None = None,
         model: str | None = None,
+        ask_request_id: str | None = None,
     ) -> RagAnswerResult:
         refusal_call = self.llm_client.generate(
             call_type=RAG_CALL_REFUSE,
@@ -230,6 +329,7 @@ class RagAnsweringService:
                     for context in retrieval.contexts
                 ],
             },
+            ask_request_id=ask_request_id,
         )
 
         refusal_message = _hebrew_refusal_message(
@@ -237,7 +337,7 @@ class RagAnsweringService:
             missing_source_kinds=missing_source_kinds,
         )
 
-        return RagAnswerResult(
+        result = RagAnswerResult(
             status="refusal",
             answer=None,
             citations=[],
@@ -248,6 +348,19 @@ class RagAnsweringService:
             provider=provider or refusal_call.provider,
             model=model or refusal_call.model,
         )
+        log_rag_event(
+            "rag.answering.refusal",
+            ask_request_id=ask_request_id,
+            retrieval_set_id=retrieval.retrieval_set_id,
+            reason_code=reason_code,
+            missing_source_types=missing_source_kinds,
+            retrieval_context_count=len(retrieval.contexts),
+            retrieved_source_types=sorted({context.source_kind for context in retrieval.contexts}),
+            provider=result.provider,
+            model=result.model,
+            refusal_call_error_code=refusal_call.error_code,
+        )
+        return result
 
 
 def _answer_payload(*, question: str, retrieval: RagRetrievalResult) -> dict[str, Any]:
@@ -272,7 +385,12 @@ def _answer_payload(*, question: str, retrieval: RagRetrievalResult) -> dict[str
     }
 
 
-def _verification_payload(*, question: str, answer_draft: _AnswerDraft) -> dict[str, Any]:
+def _verification_payload(
+    *,
+    question: str,
+    answer_draft: _AnswerDraft,
+    retrieval: RagRetrievalResult,
+) -> dict[str, Any]:
     return {
         "question": question,
         "answer": answer_draft.answer,
@@ -282,6 +400,16 @@ def _verification_payload(*, question: str, answer_draft: _AnswerDraft) -> dict[
                 "citation_chunk_ids": claim.citation_chunk_ids,
             }
             for claim in answer_draft.claims
+        ],
+        "contexts": [
+            {
+                "chunk_id": context.chunk_id,
+                "source_kind": context.source_kind,
+                "citation": context.citation,
+                "document_title": context.document_title,
+                "snippet": context.snippet,
+            }
+            for context in retrieval.contexts
         ],
         "rules": [
             "Mark supported true only if citations back the exact claim",
@@ -478,6 +606,12 @@ def _hebrew_refusal_message(*, reason_code: str, missing_source_kinds: list[str]
     if reason_code == REASON_UNSUPPORTED_CLAIMS:
         return "אין מספיק ראיות כדי לאמת את כל הטענות בתשובה. לכן אני מסרב להשיב ללא ביסוס מלא."
 
+    if reason_code == REASON_TOPIC_MISMATCH_EVIDENCE:
+        return (
+            "אין מספיק ראיות ממוקדות לנושא השאלה. "
+            "נשלפו מקורות שאינם באותו תחום תוכן, ולכן אני מסרב להשיב תשובה מאוחדת."
+        )
+
     if reason_code in {
         REASON_UNCITED_CLAIMS,
         REASON_INVALID_ANSWER_FORMAT,
@@ -492,8 +626,53 @@ def _parse_json_object(value: str) -> dict[str, Any] | None:
     compact = value.strip()
     if not compact:
         return None
+
+    candidates: list[str] = [compact]
+    stripped_fence = _strip_markdown_code_fence(compact)
+    if stripped_fence and stripped_fence != compact:
+        candidates.append(stripped_fence)
+
+    for candidate in candidates:
+        payload = _loads_json_object(candidate)
+        if payload is not None:
+            return payload
+
+        json_slice = _extract_json_object_slice(candidate)
+        if json_slice:
+            payload = _loads_json_object(json_slice)
+            if payload is not None:
+                return payload
+
+    return None
+
+
+def _strip_markdown_code_fence(value: str) -> str:
+    stripped = value.strip()
+    if not stripped.startswith("```"):
+        return stripped
+
+    lines = stripped.splitlines()
+    if not lines:
+        return stripped
+
+    if lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _extract_json_object_slice(value: str) -> str | None:
+    start = value.find("{")
+    end = value.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    return value[start : end + 1].strip()
+
+
+def _loads_json_object(value: str) -> dict[str, Any] | None:
     try:
-        payload = json.loads(compact)
+        payload = json.loads(value)
     except json.JSONDecodeError:
         return None
     if not isinstance(payload, dict):
@@ -525,3 +704,34 @@ def _normalize_source_kinds(source_kinds: list[str]) -> list[str]:
             out.append(normalized)
             seen.add(normalized)
     return out
+
+
+def _topic_mismatch_chunk_ids(
+    *,
+    question: str,
+    used_chunk_ids: list[str],
+    context_by_chunk: dict[str, RagContextChunk],
+) -> list[str]:
+    topic_tokens = _primary_topic_tokens(question)
+    if not topic_tokens:
+        return []
+
+    mismatched: list[str] = []
+    for chunk_id in used_chunk_ids:
+        context = context_by_chunk.get(chunk_id)
+        if context is None:
+            continue
+        haystack = normalize_for_search(f"{context.document_title} {context.snippet}")
+        if not any(token in haystack for token in topic_tokens):
+            mismatched.append(chunk_id)
+    return mismatched
+
+
+def _primary_topic_tokens(question: str) -> set[str]:
+    normalized_question = normalize_for_search(question)
+    if not normalized_question:
+        return set()
+
+    first_clause = TOPIC_CLAUSE_SPLIT_RE.split(normalized_question, maxsplit=1)[0]
+    tokens = [token for token in HEBREW_TOKEN_RE.findall(first_clause) if len(token) >= 3]
+    return {token for token in tokens if token not in GENERIC_QUERY_TOKENS}

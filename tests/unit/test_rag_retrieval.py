@@ -36,6 +36,8 @@ def test_rag_retrieval_backfills_missing_source_kinds_and_keeps_citations() -> N
     assert {item.source_kind for item in result.contexts} == {"protocol", "attachment"}
     assert {item.citation for item in result.contexts} == {"pp.2-3", "p.1"}
     assert any(call.get("source_type") == "attachment" for call in search.calls)
+    assert isinstance(result.retrieval_set_id, str)
+    assert result.retrieval_set_id
 
 
 def test_rag_retrieval_source_filter_and_top_k_are_tunable() -> None:
@@ -60,6 +62,35 @@ def test_rag_retrieval_source_filter_and_top_k_are_tunable() -> None:
     assert len(result.contexts) == 1
     assert result.contexts[0].source_kind == "protocol"
     assert result.contexts[0].chunk_id == "p-1"
+    assert isinstance(result.retrieval_set_id, str)
+    assert result.retrieval_set_id
+
+
+def test_rag_retrieval_forwards_semantic_selector_params_to_search() -> None:
+    search = StubSearchService(
+        {
+            "all": [
+                _hit(chunk_id="p-1", source_type="protocol", score=0.95, citation="p.1"),
+            ]
+        }
+    )
+    retrieval = RagRetrievalService(search_service=search)
+
+    result = retrieval.retrieve(
+        query="תחבורה",
+        source_kinds=["protocol"],
+        semantic_mode="filter",
+        semantic_node_id=77,
+        semantic_label="תחבורה עירונית",
+        top_k=3,
+    )
+
+    assert result.contexts
+    assert search.calls
+    first_call = search.calls[0]
+    assert first_call["semantic_mode"] == "filter"
+    assert first_call["semantic_node_id"] == 77
+    assert first_call["semantic_label"] == "תחבורה עירונית"
 
 
 def _hit(*, chunk_id: str, source_type: str, score: float, citation: str) -> SearchHit:

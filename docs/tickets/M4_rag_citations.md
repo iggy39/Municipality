@@ -160,23 +160,23 @@ Done when:
 
 ### M4-T09 - RAG observability and tracing
 Checklist:
-- [ ] Log retrieval set IDs, scoring stats, and provider metadata.
-- [ ] Log refusal reasons in structured form.
-- [ ] Log model name and prompt-prefix category used per call.
-- [ ] Add sampling for answer quality auditing.
+- [x] Log retrieval set IDs, scoring stats, and provider metadata.
+- [x] Log refusal reasons in structured form.
+- [x] Log model name and prompt-prefix category used per call.
+- [x] Add sampling for answer quality auditing.
 
 Done when:
-- [ ] Debugging a bad answer can be done from logs alone.
+- [x] Debugging a bad answer can be done from logs alone.
 
 ### M4-T10 - M4 QA report and signoff
 Checklist:
-- [ ] Create `eval/reports/m4_report.md`.
-- [ ] Publish citation correctness and refusal correctness metrics.
-- [ ] List known limitations and planned mitigations.
-- [ ] Confirm model lock and prefix-policy compliance in report metadata.
+- [x] Create `eval/reports/m4_report.md`.
+- [x] Publish citation correctness and refusal correctness metrics.
+- [x] List known limitations and planned mitigations.
+- [x] Confirm model lock and prefix-policy compliance in report metadata.
 
 Done when:
-- [ ] M4 signoff completed and M5 can start.
+- [x] M4 signoff completed and M5 can start.
 
 ### M4-T11 - Hybrid semantic topic+entity tree (one API call per document)
 Checklist:
@@ -184,16 +184,15 @@ Checklist:
 - [x] Add one-call-per-document semantic extraction contract and caching key.
 - [x] Enforce strict span validation and reject unsupported semantic candidates.
 - [x] Implement canonicalization pipeline (normalization, alias merge, specificity/depth gates, stable-hash dedup).
-- [ ] Integrate semantic boosting/filtering in retrieval while preserving citation-first behavior.
-- [ ] Add regression tests + eval report for semantic precision, duplicate rate, depth/specificity quality, and retrieval lift.
+- [x] Integrate semantic boosting/filtering in retrieval while preserving citation-first behavior.
+- [x] Add regression tests + eval report for semantic precision, duplicate rate, depth/specificity quality, and retrieval lift.
 - [x] Follow detailed implementation blueprint in `docs/tickets/M4_semantic_topic_entity_tree_plan.md`.
 
 Status note:
-- Phases 1-2 are completed in code.
-- Phase 3 core is implemented and updated for multicategory evidence-span mapping in the same model call.
-- Phases 4-6 remain open (processing integration, retrieval/API, evaluation/reporting).
+- Phases 1-6 are completed in code with semantic retrieval integrated in search and `/ask` pathways.
+- Evaluation and reporting are published with one-call compliance, evidence-backed node quality, duplicate-rate tracking, and retrieval-lift metrics.
 
 Done when:
-- [ ] Semantic extraction performs at most one API call per `(document_version_id, prompt_hash, model)` tuple.
-- [ ] Accepted semantic nodes are 100% evidence-backed (validated text spans).
-- [ ] Semantic retrieval improves specific decision-level query quality over lexical baseline.
+- [x] Semantic extraction performs at most one API call per `(document_version_id, prompt_hash, model)` tuple.
+- [x] Accepted semantic nodes are 100% evidence-backed (validated text spans).
+- [x] Semantic retrieval improves specific decision-level query quality over lexical baseline.

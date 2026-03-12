@@ -8,7 +8,7 @@
   "cases": [
     {
       "case_id": "m4-t00-bootstrap-real-life-001",
-      "question": "אילו החלטות בטיחות בדרכים התקבלו ומה אישרה מועצת העיר בהסכם?",
+      "question": "אילו החלטות התקבלו בפרוטוקול ומה אישרה מועצת העיר בהסכם?",
       "top_k": 8,
       "muni": "ashdod",
       "semantic_mode": "off",

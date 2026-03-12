@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from municipality.chunking import normalize_for_search
+from municipality.rag_observability import build_retrieval_set_id, hash_text, log_rag_event
 
 
 @dataclass(slots=True)
@@ -27,6 +28,7 @@ class RagRetrievalResult:
     query: str
     normalized_query: str
     top_k: int
+    retrieval_set_id: str
     requested_source_kinds: list[str]
     contexts: list[RagContextChunk]
 
@@ -48,20 +50,57 @@ class RagRetrievalService:
         source_kinds: list[str] | None = None,
         year: int | None = None,
         topic: str | None = None,
+        semantic_node_id: int | None = None,
+        semantic_label: str | None = None,
         semantic_mode: str = "off",
+        ask_request_id: str | None = None,
     ) -> RagRetrievalResult:
         normalized_query = normalize_for_search(query)
         effective_top_k = max(1, top_k)
         requested_source_kinds = _normalize_source_kinds(source_kinds)
+        query_hash = hash_text(query)
+
+        log_rag_event(
+            "rag.retrieval.start",
+            ask_request_id=ask_request_id,
+            query_hash=query_hash,
+            top_k=effective_top_k,
+            requested_source_types=requested_source_kinds,
+            municipality_slug=municipality_slug,
+            year=year,
+            topic=topic,
+            semantic_node_id=semantic_node_id,
+            semantic_label=semantic_label,
+            semantic_mode=semantic_mode,
+        )
+
+        empty_retrieval_set_id = build_retrieval_set_id(
+            normalized_query=normalized_query,
+            requested_source_kinds=requested_source_kinds,
+            top_k=effective_top_k,
+            chunk_ids=[],
+        )
 
         if not normalized_query:
-            return RagRetrievalResult(
+            result = RagRetrievalResult(
                 query=query,
                 normalized_query=normalized_query,
                 top_k=effective_top_k,
+                retrieval_set_id=empty_retrieval_set_id,
                 requested_source_kinds=requested_source_kinds,
                 contexts=[],
             )
+            log_rag_event(
+                "rag.retrieval.result",
+                ask_request_id=ask_request_id,
+                query_hash=query_hash,
+                retrieval_set_id=result.retrieval_set_id,
+                context_count=0,
+                requested_source_types=requested_source_kinds,
+                retrieved_source_types=[],
+                score_stats={"max": None, "min": None, "avg": None},
+            )
+            return result
 
         initial_limit = max(effective_top_k * 3, effective_top_k)
         hits = self.search_service.search(
@@ -70,6 +109,8 @@ class RagRetrievalService:
             source_type=None,
             year=year,
             topic=topic,
+            semantic_node_id=semantic_node_id,
+            semantic_label=semantic_label,
             semantic_mode=semantic_mode,
             limit=initial_limit,
         )
@@ -86,6 +127,8 @@ class RagRetrievalService:
                 source_type=source_kind,
                 year=year,
                 topic=topic,
+                semantic_node_id=semantic_node_id,
+                semantic_label=semantic_label,
                 semantic_mode=semantic_mode,
                 limit=effective_top_k,
             )
@@ -94,13 +137,38 @@ class RagRetrievalService:
 
         selected_hits.sort(key=lambda row: row.score, reverse=True)
         contexts = [_to_context(row) for row in selected_hits[:effective_top_k]]
-        return RagRetrievalResult(
+        retrieval_set_id = build_retrieval_set_id(
+            normalized_query=normalized_query,
+            requested_source_kinds=requested_source_kinds,
+            top_k=effective_top_k,
+            chunk_ids=[row.chunk_id for row in contexts],
+        )
+        result = RagRetrievalResult(
             query=query,
             normalized_query=normalized_query,
             top_k=effective_top_k,
+            retrieval_set_id=retrieval_set_id,
             requested_source_kinds=requested_source_kinds,
             contexts=contexts,
         )
+        scores = [row.score for row in contexts]
+        score_stats = {
+            "max": round(max(scores), 6) if scores else None,
+            "min": round(min(scores), 6) if scores else None,
+            "avg": round((sum(scores) / len(scores)), 6) if scores else None,
+        }
+        log_rag_event(
+            "rag.retrieval.result",
+            ask_request_id=ask_request_id,
+            query_hash=query_hash,
+            retrieval_set_id=result.retrieval_set_id,
+            context_count=len(contexts),
+            requested_source_types=requested_source_kinds,
+            retrieved_source_types=sorted(result.source_kinds),
+            chunk_ids=[row.chunk_id for row in contexts],
+            score_stats=score_stats,
+        )
+        return result
 
 
 def _normalize_source_kinds(source_kinds: list[str] | None) -> list[str]:
