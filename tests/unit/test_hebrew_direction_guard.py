@@ -15,7 +15,7 @@ TEXT_FILE_SUFFIXES = {
     ".yaml",
     ".txt",
 }
-SKIP_DIR_NAMES = {".git", "__pycache__", ".pytest_cache", ".venv", "venv"}
+SKIP_DIR_NAMES = {".git", "__pycache__", ".pytest_cache", ".venv", "venv", "local_llm"}
 
 BIDI_CONTROL_RE = re.compile(r"[\u200E\u200F\u202A-\u202E\u2066-\u2069]")
 HEBREW_WORD_RE = re.compile(r"[א-ת]{2,}")

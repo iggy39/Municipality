@@ -27,6 +27,37 @@ CLAIM_SCORE_HIGH_MIN = 0.67
 CLAIM_SCORE_MEDIUM_MIN = 0.34
 LOW_SCORE_WARNING_LIMIT = 0.34
 
+CLAIM_TOPIC_COVERAGE_WEIGHT = 0.75
+EVIDENCE_TOPIC_COVERAGE_WEIGHT = 0.15
+SUPPORT_HINT_BONUS = 0.15
+CROSS_DOMAIN_PENALTY = 0.2
+
+
+def rag_answering_thresholds_snapshot() -> dict[str, Any]:
+    return {
+        "evidence_gate": {
+            "missing_source_rule": "refuse if any required source kind is missing",
+            "topic_mismatch_rule": "reject if mismatch_count > 0",
+        },
+        "claim_score_thresholds": {
+            "high_min": CLAIM_SCORE_HIGH_MIN,
+            "medium_min": CLAIM_SCORE_MEDIUM_MIN,
+            "low_warning_below": LOW_SCORE_WARNING_LIMIT,
+        },
+        "fallback_heuristic_weights": {
+            "claim_topic_coverage_weight": CLAIM_TOPIC_COVERAGE_WEIGHT,
+            "evidence_topic_coverage_weight": EVIDENCE_TOPIC_COVERAGE_WEIGHT,
+            "support_hint_bonus": SUPPORT_HINT_BONUS,
+            "cross_domain_penalty": CROSS_DOMAIN_PENALTY,
+        },
+        "semantic_similarity_rubric": {
+            "core_direct": "0.90-1.00",
+            "related_operational": "0.65-0.85",
+            "adjacent_context": "0.35-0.64",
+            "unrelated": "<0.35",
+        },
+    }
+
 TOPIC_SUPPORT_HINT_TOKENS = {
     "בטיחות",
     "בדרכים",
@@ -1066,19 +1097,21 @@ def _assess_claims(
         evidence_topic_coverage = len(evidence_topic_hits) / max(len(topic_tokens), 1)
 
         support_hits = sorted(token for token in TOPIC_SUPPORT_HINT_TOKENS if token in claim_tokens or token in evidence_tokens)
-        support_bonus = 0.15 if support_hits else 0.0
+        support_bonus = SUPPORT_HINT_BONUS if support_hits else 0.0
 
         secondary_context_hits = sorted(token for token in SECONDARY_CONTEXT_HINT_TOKENS if token in claim_tokens)
         cross_domain_penalty = 0.0
         if secondary_context_hits and {"בטיחות", "בדרכים"}.intersection(topic_tokens):
-            cross_domain_penalty = 0.2
+            cross_domain_penalty = CROSS_DOMAIN_PENALTY
 
         score = _round_score(
             max(
                 0.0,
                 min(
                     1.0,
-                    (0.75 * claim_topic_coverage) + (0.15 * evidence_topic_coverage) + support_bonus,
+                    (CLAIM_TOPIC_COVERAGE_WEIGHT * claim_topic_coverage)
+                    + (EVIDENCE_TOPIC_COVERAGE_WEIGHT * evidence_topic_coverage)
+                    + support_bonus,
                 )
                 - cross_domain_penalty,
             )

@@ -290,6 +290,9 @@ def test_m3_processing_builds_public_cited_decisions_and_api_payloads(tmp_path: 
         assert "Fallback Bytez" not in body
         assert 'id="ask-panel"' in body
         assert 'id="ask-form"' in body
+        assert 'id="ask-debug-mode"' in body
+        assert 'id="ask-thresholds-panel"' in body
         assert 'fetch("/ask"' in body
+        assert "debug_mode" in body
         assert 'defaultMuni = "ashdod"' in body
         assert f'defaultTopic = "{HE_AGENDA_ALIGNMENT}"' in body

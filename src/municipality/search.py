@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy import and_, select, text
 from sqlalchemy.orm import Session
@@ -15,6 +16,22 @@ from municipality.models import (
     SourceSite,
     TextChunk,
 )
+
+
+SEMANTIC_SUBSTRING_MATCH_SCORE = 0.92
+SEMANTIC_TOKEN_OVERLAP_MIN = 0.6
+SEMANTIC_TOKEN_OVERLAP_BASE = 0.55
+SEMANTIC_TOKEN_OVERLAP_SCALE = 0.35
+
+LEXICAL_FTS_WEIGHT = 0.72
+LEXICAL_TRIGRAM_WEIGHT = 0.28
+SEMANTIC_OVERLAP_WEIGHT = 0.25
+SEMANTIC_SPECIFICITY_WEIGHT = 0.10
+
+FTS_TOKEN_LIMIT = 8
+SEARCH_FTS_CANDIDATE_LIMIT = 250
+SEARCH_TRIGRAM_CANDIDATE_LIMIT = 250
+SEARCH_FALLBACK_CONTAINS_LIMIT = 100
 
 
 @dataclass(slots=True)
@@ -50,13 +67,38 @@ def _semantic_text_match_score(query_norm: str, labels: list[str]) -> float:
         if label == query_norm:
             return 1.0
         if query_norm in label or label in query_norm:
-            best = max(best, 0.92)
+            best = max(best, SEMANTIC_SUBSTRING_MATCH_SCORE)
             continue
         label_tokens = [token for token in label.split(" ") if token]
         overlap = _token_overlap(query_tokens, label_tokens)
-        if overlap >= 0.6:
-            best = max(best, 0.55 + (0.35 * overlap))
+        if overlap >= SEMANTIC_TOKEN_OVERLAP_MIN:
+            best = max(best, SEMANTIC_TOKEN_OVERLAP_BASE + (SEMANTIC_TOKEN_OVERLAP_SCALE * overlap))
     return min(1.0, best)
+
+
+def search_thresholds_snapshot() -> dict[str, Any]:
+    return {
+        "semantic_text_match": {
+            "substring_match_score": SEMANTIC_SUBSTRING_MATCH_SCORE,
+            "token_overlap_min": SEMANTIC_TOKEN_OVERLAP_MIN,
+            "token_overlap_base": SEMANTIC_TOKEN_OVERLAP_BASE,
+            "token_overlap_scale": SEMANTIC_TOKEN_OVERLAP_SCALE,
+        },
+        "score_weights": {
+            "lexical_fts_weight": LEXICAL_FTS_WEIGHT,
+            "lexical_trigram_weight": LEXICAL_TRIGRAM_WEIGHT,
+            "semantic_overlap_weight": SEMANTIC_OVERLAP_WEIGHT,
+            "semantic_specificity_weight": SEMANTIC_SPECIFICITY_WEIGHT,
+        },
+        "candidate_limits": {
+            "fts_token_limit": FTS_TOKEN_LIMIT,
+            "fts_candidate_limit": SEARCH_FTS_CANDIDATE_LIMIT,
+            "trigram_candidate_limit": SEARCH_TRIGRAM_CANDIDATE_LIMIT,
+            "fallback_contains_limit": SEARCH_FALLBACK_CONTAINS_LIMIT,
+        },
+        "semantic_modes": ["off", "boost", "filter"],
+        "semantic_filter_rule": "filter mode with explicit semantic selector drops chunks with semantic_match_count == 0",
+    }
 
 
 def _token_overlap(left: list[str], right: list[str]) -> float:
@@ -228,7 +270,7 @@ class SearchService:
             trigram_overlap = scores.get("trigram_overlap", 0)
             fts_score = _fts_rank_to_score(fts_rank)
             trigram_score = min(1.0, trigram_overlap / max(query_trigram_count, chunk.trigram_count, 1))
-            lexical_score = (0.72 * fts_score) + (0.28 * trigram_score)
+            lexical_score = (LEXICAL_FTS_WEIGHT * fts_score) + (LEXICAL_TRIGRAM_WEIGHT * trigram_score)
 
             semantic_rows = semantic_by_chunk.get(chunk.chunk_id, []) if semantic_enabled else []
             semantic_match_count = len(semantic_rows)
@@ -243,7 +285,9 @@ class SearchService:
                     default=0.0,
                 )
                 specificity_prior = max((row.specificity_score for row in semantic_rows), default=0.0)
-                semantic_boost = (0.25 * semantic_overlap_score) + (0.10 * specificity_prior)
+                semantic_boost = (SEMANTIC_OVERLAP_WEIGHT * semantic_overlap_score) + (
+                    SEMANTIC_SPECIFICITY_WEIGHT * specificity_prior
+                )
                 score = min(1.0, lexical_score + semantic_boost)
 
             semantic_nodes = [
@@ -285,13 +329,13 @@ class SearchService:
         candidate_scores: dict[str, dict[str, float]] = {}
 
         tokens = [token for token in normalized_query.split(" ") if token]
-        fts_query = " OR ".join(tokens[:8])
+        fts_query = " OR ".join(tokens[:FTS_TOKEN_LIMIT])
         if fts_query:
             try:
                 rows = self.session.execute(
                     text(
                         "SELECT chunk_id, bm25(chunk_fts) AS rank FROM chunk_fts "
-                        "WHERE chunk_fts MATCH :q LIMIT 250"
+                        f"WHERE chunk_fts MATCH :q LIMIT {SEARCH_FTS_CANDIDATE_LIMIT}"
                     ),
                     {"q": fts_query},
                 ).mappings().all()
@@ -309,7 +353,7 @@ class SearchService:
                 text(
                     "SELECT chunk_id, COUNT(*) AS overlap FROM chunk_trigram "
                     f"WHERE trigram IN ({placeholders}) "
-                    "GROUP BY chunk_id ORDER BY overlap DESC LIMIT 250"
+                    f"GROUP BY chunk_id ORDER BY overlap DESC LIMIT {SEARCH_TRIGRAM_CANDIDATE_LIMIT}"
                 ),
                 params,
             ).mappings().all()
@@ -321,7 +365,9 @@ class SearchService:
             return candidate_scores
 
         fallback_rows = self.session.execute(
-            select(TextChunk.chunk_id).where(TextChunk.chunk_text_norm.contains(normalized_query)).limit(100)
+            select(TextChunk.chunk_id)
+            .where(TextChunk.chunk_text_norm.contains(normalized_query))
+            .limit(SEARCH_FALLBACK_CONTAINS_LIMIT)
         ).scalars().all()
         for chunk_id in fallback_rows:
             candidate_scores[chunk_id] = {"fts_rank": 1.0, "trigram_overlap": 0.0}

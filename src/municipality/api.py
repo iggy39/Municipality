@@ -36,8 +36,8 @@ from municipality.models import (
 )
 from municipality.pipeline import PipelineService
 from municipality.processing import ProcessingService
-from municipality.rag_answering import RagAnsweringService
-from municipality.rag_llm import RagLlmClient, build_rag_llm_client
+from municipality.rag_answering import RagAnsweringService, rag_answering_thresholds_snapshot
+from municipality.rag_llm import RagLlmClient, RagLlmConfig, build_rag_llm_client
 from municipality.rag_observability import (
     audit_sample_rate,
     hash_text,
@@ -46,7 +46,7 @@ from municipality.rag_observability import (
     should_sample_audit,
 )
 from municipality.rag_retrieval import RagRetrievalService
-from municipality.search import SearchService
+from municipality.search import SearchService, search_thresholds_snapshot
 
 
 def _default_html_fetcher(url: str) -> str:
@@ -142,6 +142,36 @@ class AskRequest(BaseModel):
     semantic_node_id: int | None = None
     semantic_label: str | None = None
     semantic_mode: str = "off"
+    debug_mode: bool = False
+
+
+def _llm_thresholds_payload(llm_client: RagLlmClient) -> dict:
+    provider = llm_client.provider
+    timeout_seconds = getattr(provider, "timeout_seconds", None)
+    config_snapshot = RagLlmConfig.from_env()
+    return {
+        "call_order": ["answer", "verify", "refuse"],
+        "temperature_default": 0.0,
+        "provider": provider.provider_name,
+        "model": provider.model_name,
+        "call_timeout_seconds": timeout_seconds,
+        "default_timeout_seconds": config_snapshot.timeout_seconds,
+        "prompt_prefixes": llm_client.prompt_prefixes.as_dict(),
+        "missing_prefix_policy": "fail_fast",
+    }
+
+
+def _ask_thresholds_payload(*, request: AskRequest, llm_client: RagLlmClient) -> dict:
+    return {
+        "request_validation": {
+            "top_k_min": 1,
+            "top_k_max": 50,
+            "top_k_effective": max(1, request.top_k),
+        },
+        "retrieval": search_thresholds_snapshot(),
+        "answering": rag_answering_thresholds_snapshot(),
+        "llm": _llm_thresholds_payload(llm_client),
+    }
 
 
 def _run_ask(
@@ -181,7 +211,8 @@ def _run_ask(
         ask_request_id=ask_request_id,
     )
 
-    answering_service = RagAnsweringService(llm_client=llm_client or build_rag_llm_client())
+    resolved_llm_client = llm_client or build_rag_llm_client()
+    answering_service = RagAnsweringService(llm_client=resolved_llm_client)
     answer_result = answering_service.compose(
         question=request.question,
         retrieval=retrieval_result,
@@ -243,6 +274,16 @@ def _run_ask(
             "name": answer_result.model,
         },
     }
+    if request.debug_mode:
+        response_payload["debug"] = {
+            "enabled": True,
+            "thresholds": _ask_thresholds_payload(request=request, llm_client=resolved_llm_client),
+            "pipeline": {
+                "stage_order": ["retrieve", "answer", "verify", "refuse_if_needed"],
+                "effective_required_source_types": request.required_source_types
+                or retrieval_result.requested_source_kinds,
+            },
+        }
 
     log_rag_event(
         "rag.ask.response",
@@ -465,6 +506,443 @@ def search(
 @app.post("/ask")
 def ask(request: AskRequest, db=Depends(get_db)) -> dict:
     return _run_ask(request=request, db=db)
+
+
+@app.get("/ui/ask", response_class=HTMLResponse)
+def ask_playground_page() -> HTMLResponse:
+    html_page = """
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ask Playground</title>
+  <style>
+    :root {
+      --bg-a: #f3f7fb;
+      --bg-b: #fcfaf4;
+      --ink: #15313c;
+      --muted: #536b75;
+      --panel: #ffffff;
+      --line: #d6e3ec;
+      --accent: #0b7380;
+      --warn: #a4511a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Inter", "Segoe UI", "Helvetica Neue", sans-serif;
+      color: var(--ink);
+      background: radial-gradient(1000px 420px at 100% -10%, #dceff7 0%, transparent 70%),
+                  radial-gradient(820px 340px at -8% 110%, #f9ecd3 0%, transparent 70%),
+                  linear-gradient(135deg, var(--bg-a), var(--bg-b));
+      min-height: 100vh;
+      padding: 22px;
+    }
+    .card {
+      max-width: 980px;
+      margin: 0 auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 24px;
+      box-shadow: 0 16px 34px rgba(21, 49, 60, 0.11);
+    }
+    h1 { margin: 0 0 8px; font-size: 1.62rem; }
+    p { margin: 0; line-height: 1.7; }
+    .muted { color: var(--muted); font-size: 0.92rem; }
+    .ask-form { margin-top: 14px; display: grid; gap: 12px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 10px;
+    }
+    .field { display: grid; gap: 6px; }
+    .field label, .group legend { font-weight: 600; font-size: 0.92rem; }
+    textarea,
+    input,
+    select {
+      width: 100%;
+      border: 1px solid #bfd3de;
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-family: inherit;
+      color: inherit;
+      background: #fff;
+    }
+    textarea {
+      min-height: 108px;
+      line-height: 1.65;
+      resize: vertical;
+      direction: rtl;
+      text-align: right;
+    }
+    .he-input { direction: rtl; text-align: right; }
+    .group {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+      margin: 0;
+    }
+    .checks { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+    .checks label { display: flex; align-items: center; gap: 6px; font-size: 0.92rem; }
+    .checks input { width: auto; }
+    .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    button {
+      border: 1px solid #0e6a76;
+      background: var(--accent);
+      color: #fff;
+      border-radius: 999px;
+      padding: 8px 18px;
+      font-family: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:hover { background: #095f6a; }
+    .output {
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      background: #fff;
+    }
+    .output.refusal { border-color: #ebd6c5; background: #fff8f2; }
+    .answer-text, .refusal-text { direction: rtl; text-align: right; }
+    ul { margin: 8px 0 0; padding-inline-start: 20px; }
+    li { margin: 6px 0; line-height: 1.5; }
+    a { color: #00696f; text-decoration: none; border-bottom: 1px dotted #8fbac2; }
+    a:hover { border-bottom-style: solid; }
+    pre {
+      margin: 8px 0 0;
+      border-radius: 10px;
+      border: 1px solid #d9e6ee;
+      background: #f9fbfd;
+      padding: 10px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      font-size: 0.84rem;
+      line-height: 1.45;
+      direction: ltr;
+      text-align: left;
+      max-height: 260px;
+    }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <article class="card">
+    <h1>Ask Playground</h1>
+    <p class="muted">General UI for <code>POST /ask</code>. Fill optional filters and inspect full debug thresholds for retrieval, answering, and LLM stages.</p>
+    <form id="ask-playground-form" class="ask-form">
+      <div class="field">
+        <label for="ask-question">Question (Hebrew recommended)</label>
+        <textarea id="ask-question" name="question" required placeholder="מה הוחלט בעיר?">מה הוחלט בעיר?</textarea>
+      </div>
+      <section class="grid">
+        <div class="field">
+          <label for="ask-muni">muni</label>
+          <input id="ask-muni" name="muni" type="text" value="ashdod" />
+        </div>
+        <div class="field">
+          <label for="ask-topic">topic</label>
+          <input id="ask-topic" class="he-input" name="topic" type="text" placeholder="optional" />
+        </div>
+        <div class="field">
+          <label for="ask-year">year</label>
+          <input id="ask-year" name="year" type="number" min="2000" max="2100" placeholder="optional" />
+        </div>
+        <div class="field">
+          <label for="ask-top-k">top_k</label>
+          <input id="ask-top-k" name="top_k" type="number" min="1" max="50" value="8" />
+        </div>
+      </section>
+      <fieldset class="group">
+        <legend>source_types (retrieval filter)</legend>
+        <div class="checks">
+          <label><input type="checkbox" name="source_types" value="protocol" checked />protocol</label>
+          <label><input type="checkbox" name="source_types" value="attachment" />attachment</label>
+        </div>
+      </fieldset>
+      <fieldset class="group">
+        <legend>required_source_types (coverage gate)</legend>
+        <div class="checks">
+          <label><input type="checkbox" name="required_source_types" value="protocol" checked />protocol</label>
+          <label><input type="checkbox" name="required_source_types" value="attachment" />attachment</label>
+        </div>
+      </fieldset>
+      <section class="grid">
+        <div class="field">
+          <label for="ask-semantic-mode">semantic_mode</label>
+          <select id="ask-semantic-mode" name="semantic_mode">
+            <option value="off" selected>off</option>
+            <option value="boost">boost</option>
+            <option value="filter">filter</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="ask-semantic-node-id">semantic_node_id</label>
+          <input id="ask-semantic-node-id" name="semantic_node_id" type="number" min="1" placeholder="optional" />
+        </div>
+        <div class="field">
+          <label for="ask-semantic-label">semantic_label</label>
+          <input id="ask-semantic-label" class="he-input" name="semantic_label" type="text" placeholder="optional" />
+        </div>
+      </section>
+      <div class="actions">
+        <label class="muted"><input id="ask-debug-mode" type="checkbox" checked /> debug mode (show thresholds)</label>
+        <button type="submit">Send Ask Request</button>
+        <span id="ask-playground-status" class="muted" aria-live="polite"></span>
+      </div>
+    </form>
+
+    <section id="ask-playground-answer" class="output hidden">
+      <h3>Answer</h3>
+      <p id="ask-playground-answer-text" class="answer-text"></p>
+      <ul id="ask-playground-limitations"></ul>
+    </section>
+
+    <section id="ask-playground-refusal" class="output refusal hidden">
+      <h3>Refusal</h3>
+      <p id="ask-playground-refusal-text" class="refusal-text"></p>
+    </section>
+
+    <section id="ask-playground-citations" class="output hidden">
+      <h3>Citations</h3>
+      <ul id="ask-playground-citations-list"></ul>
+    </section>
+
+    <section id="ask-playground-thresholds" class="output hidden">
+      <h3>Thresholds and calculation rules</h3>
+      <pre id="ask-playground-thresholds-json"></pre>
+    </section>
+
+    <section class="output">
+      <h3>Debug</h3>
+      <ul id="ask-playground-meta"></ul>
+      <details>
+        <summary>Raw JSON</summary>
+        <pre id="ask-playground-json"></pre>
+      </details>
+    </section>
+  </article>
+  <script>
+    (() => {
+      const form = document.getElementById("ask-playground-form");
+      if (!form) {
+        return;
+      }
+
+      const questionInput = document.getElementById("ask-question");
+      const muniInput = document.getElementById("ask-muni");
+      const topicInput = document.getElementById("ask-topic");
+      const yearInput = document.getElementById("ask-year");
+      const topKInput = document.getElementById("ask-top-k");
+      const semanticModeInput = document.getElementById("ask-semantic-mode");
+      const semanticNodeIdInput = document.getElementById("ask-semantic-node-id");
+      const semanticLabelInput = document.getElementById("ask-semantic-label");
+      const debugModeInput = document.getElementById("ask-debug-mode");
+
+      const statusNode = document.getElementById("ask-playground-status");
+      const answerPanel = document.getElementById("ask-playground-answer");
+      const answerText = document.getElementById("ask-playground-answer-text");
+      const limitationsList = document.getElementById("ask-playground-limitations");
+      const refusalPanel = document.getElementById("ask-playground-refusal");
+      const refusalText = document.getElementById("ask-playground-refusal-text");
+      const citationsPanel = document.getElementById("ask-playground-citations");
+      const citationsList = document.getElementById("ask-playground-citations-list");
+      const thresholdsPanel = document.getElementById("ask-playground-thresholds");
+      const thresholdsJson = document.getElementById("ask-playground-thresholds-json");
+      const metaList = document.getElementById("ask-playground-meta");
+      const rawJson = document.getElementById("ask-playground-json");
+
+      const hide = (node) => {
+        if (node) {
+          node.classList.add("hidden");
+        }
+      };
+      const show = (node) => {
+        if (node) {
+          node.classList.remove("hidden");
+        }
+      };
+      const resetList = (node) => {
+        if (node) {
+          node.innerHTML = "";
+        }
+      };
+      const appendItem = (node, text) => {
+        if (!node || !text) {
+          return;
+        }
+        const item = document.createElement("li");
+        item.textContent = text;
+        node.appendChild(item);
+      };
+      const getCheckedValues = (name) => {
+        return Array.from(document.querySelectorAll(`input[name=\"${name}\"]:checked`)).map((box) => box.value);
+      };
+      const cleanText = (value) => {
+        const compact = String(value || "").trim();
+        return compact || null;
+      };
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const question = cleanText(questionInput.value);
+        if (!question) {
+          statusNode.textContent = "Please enter a question before submitting.";
+          return;
+        }
+
+        const topKRaw = parseInt(topKInput.value || "8", 10);
+        const topK = Number.isFinite(topKRaw) ? Math.max(1, Math.min(50, topKRaw)) : 8;
+        const payload = {
+          question: question,
+          top_k: topK,
+          semantic_mode: semanticModeInput.value || "off",
+          debug_mode: Boolean(debugModeInput && debugModeInput.checked),
+        };
+
+        const sourceTypes = getCheckedValues("source_types");
+        const requiredSourceTypes = getCheckedValues("required_source_types");
+        const muni = cleanText(muniInput.value);
+        const topic = cleanText(topicInput.value);
+        const yearRaw = parseInt(yearInput.value || "", 10);
+        const semanticNodeIdRaw = parseInt(semanticNodeIdInput.value || "", 10);
+        const semanticLabel = cleanText(semanticLabelInput.value);
+
+        if (sourceTypes.length > 0) {
+          payload.source_types = sourceTypes;
+        }
+        if (requiredSourceTypes.length > 0) {
+          payload.required_source_types = requiredSourceTypes;
+        }
+        if (muni) {
+          payload.muni = muni;
+        }
+        if (topic) {
+          payload.topic = topic;
+        }
+        if (Number.isFinite(yearRaw)) {
+          payload.year = Math.max(2000, Math.min(2100, yearRaw));
+        }
+        if (Number.isFinite(semanticNodeIdRaw) && semanticNodeIdRaw > 0) {
+          payload.semantic_node_id = semanticNodeIdRaw;
+        }
+        if (semanticLabel) {
+          payload.semantic_label = semanticLabel;
+        }
+
+        statusNode.textContent = "Submitting ask request...";
+        hide(answerPanel);
+        hide(refusalPanel);
+        hide(citationsPanel);
+        hide(thresholdsPanel);
+        resetList(limitationsList);
+        resetList(citationsList);
+        resetList(metaList);
+        rawJson.textContent = "";
+        thresholdsJson.textContent = "";
+
+        try {
+          const response = await fetch("/ask", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const data = await response.json();
+          rawJson.textContent = JSON.stringify(data, null, 2);
+
+          const retrieval = data.retrieval && typeof data.retrieval === "object" ? data.retrieval : {};
+          const model = data.model && typeof data.model === "object" ? data.model : {};
+          appendItem(metaList, `ask_request_id: ${data.ask_request_id || "-"}`);
+          appendItem(metaList, `status: ${data.status || "-"}`);
+          appendItem(metaList, `retrieval_set_id: ${retrieval.retrieval_set_id || "-"}`);
+          appendItem(metaList, `retrieval_count: ${retrieval.count || 0}`);
+          appendItem(metaList, `retrieved_source_types: ${(retrieval.source_types || []).join(", ") || "-"}`);
+          appendItem(metaList, `model: ${model.provider || "-"} / ${model.name || "-"}`);
+
+          const thresholds = data.debug && data.debug.thresholds ? data.debug.thresholds : null;
+          if (thresholds) {
+            thresholdsJson.textContent = JSON.stringify(thresholds, null, 2);
+            show(thresholdsPanel);
+          }
+
+          if (data.status === "answer") {
+            answerText.textContent = data.answer || "";
+            const limitations = Array.isArray(data.limitations) ? data.limitations : [];
+            if (limitations.length === 0) {
+              appendItem(limitationsList, "No limitations were returned.");
+            } else {
+              for (const limitation of limitations) {
+                appendItem(limitationsList, limitation);
+              }
+            }
+
+            const citations = Array.isArray(data.citations) ? data.citations : [];
+            if (citations.length === 0) {
+              appendItem(citationsList, "No citations were returned.");
+            } else {
+              for (const citation of citations) {
+                const doc = citation.document && typeof citation.document === "object" ? citation.document : {};
+                const page = Number.isFinite(Number(citation.start_page)) ? Number(citation.start_page) : null;
+                const hrefBase = doc.url || "#";
+                const anchor = document.createElement("a");
+                anchor.href = page ? `${hrefBase}#page=${page}` : hrefBase;
+                anchor.target = "_blank";
+                anchor.rel = "noopener";
+                anchor.textContent = citation.citation || citation.chunk_id || "source";
+
+                const meta = document.createElement("span");
+                meta.className = "muted";
+                meta.textContent = ` [${citation.source_type || "source"}] ${doc.title || "document"}`;
+
+                const item = document.createElement("li");
+                item.appendChild(anchor);
+                item.appendChild(meta);
+                citationsList.appendChild(item);
+              }
+            }
+
+            show(answerPanel);
+            show(citationsPanel);
+            hide(refusalPanel);
+            statusNode.textContent = "Received grounded answer with citations.";
+            return;
+          }
+
+          const refusalPayload = data.refusal && typeof data.refusal === "object" ? data.refusal : {};
+          const missingTypes = Array.isArray(refusalPayload.missing_source_types)
+            ? refusalPayload.missing_source_types.filter((value) => typeof value === "string" && value)
+            : [];
+          const refusalMessage = refusalPayload.message_he || "אין מספיק ראיות כדי להשיב.";
+          const reasonCode = refusalPayload.reason_code || "-";
+          const missingHint = missingTypes.length ? ` Missing sources: ${missingTypes.join(", ")}.` : "";
+          refusalText.textContent = `${refusalMessage}${missingHint}`;
+          appendItem(metaList, `reason_code: ${reasonCode}`);
+
+          hide(answerPanel);
+          hide(citationsPanel);
+          show(refusalPanel);
+          statusNode.textContent = "Model refused due to evidence policy.";
+        } catch (_err) {
+          hide(answerPanel);
+          hide(citationsPanel);
+          hide(refusalPanel);
+          hide(thresholdsPanel);
+          statusNode.textContent = "Request failed. Try again in a moment.";
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
+"""
+    return HTMLResponse(html_page)
 
 
 @app.get("/semantic/tree")
@@ -967,6 +1445,21 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
     .ask-output {{ margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }}
     .ask-output.refusal {{ border-color: #e6d1be; background: #fff8f2; }}
     .ask-output h3 {{ margin: 0 0 8px; font-size: 0.98rem; }}
+    pre {{
+      margin: 0;
+      border: 1px solid #d5e4ea;
+      border-radius: 10px;
+      padding: 10px;
+      background: #f8fbfd;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.82rem;
+      line-height: 1.45;
+      direction: ltr;
+      text-align: left;
+      max-height: 260px;
+      overflow: auto;
+    }}
     .hidden {{ display: none; }}
     a {{ color: #00696f; text-decoration: none; border-bottom: 1px dotted #86b7bb; }}
     a:hover {{ border-bottom-style: solid; }}
@@ -1006,6 +1499,7 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
         <div class="ask-controls">
           <label for="ask-top-k" class="muted">top_k</label>
           <input id="ask-top-k" name="top_k" type="number" min="1" max="50" value="8" />
+          <label class="muted"><input id="ask-debug-mode" type="checkbox" checked /> מצב debug (ספי חישוב)</label>
           <button type="submit">שאל</button>
         </div>
       </form>
@@ -1023,6 +1517,10 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
         <h3>ציטוטים תומכים</h3>
         <ul id="ask-citations-list"></ul>
       </section>
+      <section id="ask-thresholds-panel" class="ask-output hidden">
+        <h3>Debug thresholds</h3>
+        <pre id="ask-thresholds-json"></pre>
+      </section>
     </section>
     <p class="muted" style="margin-top: 12px;">סטטוס אימות fallback: {html.escape(str(metadata.get('fallback_validation_status')))}</p>
   </article>
@@ -1035,6 +1533,7 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
 
       const questionInput = document.getElementById("ask-question");
       const topKInput = document.getElementById("ask-top-k");
+      const debugModeInput = document.getElementById("ask-debug-mode");
       const statusNode = document.getElementById("ask-status");
       const answerPanel = document.getElementById("ask-answer-panel");
       const answerText = document.getElementById("ask-answer-text");
@@ -1043,6 +1542,8 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
       const refusalText = document.getElementById("ask-refusal-text");
       const citationsPanel = document.getElementById("ask-citations-panel");
       const citationsList = document.getElementById("ask-citations-list");
+      const thresholdsPanel = document.getElementById("ask-thresholds-panel");
+      const thresholdsJson = document.getElementById("ask-thresholds-json");
 
       const defaultMuni = {default_muni_json};
       const defaultTopic = {default_topic_json};
@@ -1090,6 +1591,7 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
           source_types: requiredSourceTypes,
           required_source_types: requiredSourceTypes,
           semantic_mode: "off",
+          debug_mode: Boolean(debugModeInput && debugModeInput.checked),
         }};
         if (defaultMuni) {{
           payload.muni = defaultMuni;
@@ -1102,8 +1604,12 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
         hide(answerPanel);
         hide(refusalPanel);
         hide(citationsPanel);
+        hide(thresholdsPanel);
         clearList(limitationsList);
         clearList(citationsList);
+        if (thresholdsJson) {{
+          thresholdsJson.textContent = "";
+        }}
 
         try {{
           const response = await fetch("/ask", {{
@@ -1116,6 +1622,13 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
           }}
 
           const data = await response.json();
+          const debugPayload = data.debug && typeof data.debug === "object" ? data.debug : null;
+          if (debugPayload && debugPayload.thresholds && thresholdsJson) {{
+            thresholdsJson.textContent = JSON.stringify(debugPayload.thresholds, null, 2);
+            show(thresholdsPanel);
+          }} else {{
+            hide(thresholdsPanel);
+          }}
           if (data.status === "answer") {{
             answerText.textContent = data.answer || "";
             const limitations = Array.isArray(data.limitations) ? data.limitations : [];
@@ -1177,6 +1690,7 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
           hide(answerPanel);
           hide(refusalPanel);
           hide(citationsPanel);
+          hide(thresholdsPanel);
           statusNode.textContent = "שליחת השאלה נכשלה. נסו שוב בעוד רגע.";
         }}
       }});

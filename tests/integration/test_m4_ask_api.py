@@ -4,10 +4,11 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from fastapi.responses import HTMLResponse
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from municipality.api import AskRequest, _run_ask
+from municipality.api import AskRequest, _run_ask, ask_playground_page
 from municipality.chunking import build_chunks
 from municipality.extraction import parse_extracted_text
 from municipality.migrations import apply_all
@@ -26,6 +27,22 @@ from municipality.search import SearchService
 
 HE_PROTOCOL_TEXT = "הוחלט לאשר צעדי בטיחות בדרכים ברחבי העיר."
 HE_ATTACHMENT_TEXT = "מועצת העיר אישרה הסכם מול עמותת לגישור חברה ויהדות."
+
+
+def test_m4_ask_ui_playground_exposes_debug_threshold_panels() -> None:
+    page = ask_playground_page()
+    assert isinstance(page, HTMLResponse)
+
+    body = bytes(page.body).decode("utf-8")
+    assert 'lang="en"' in body
+    assert 'dir="ltr"' in body
+    assert 'id="ask-playground-form"' in body
+    assert 'id="ask-debug-mode"' in body
+    assert 'id="ask-playground-thresholds"' in body
+    assert 'id="ask-playground-thresholds-json"' in body
+    assert "debug mode (show thresholds)" in body
+    assert 'fetch("/ask"' in body
+    assert "debug_mode" in body
 
 
 def test_m4_ask_api_returns_answer_with_citation_contract(tmp_path: Path) -> None:
@@ -86,6 +103,7 @@ def test_m4_ask_api_returns_answer_with_citation_contract(tmp_path: Path) -> Non
                 source_types=["protocol", "attachment"],
                 required_source_types=["protocol", "attachment"],
                 semantic_mode="off",
+                debug_mode=True,
             ),
             db=session,
             llm_client=llm_client,
@@ -109,6 +127,13 @@ def test_m4_ask_api_returns_answer_with_citation_contract(tmp_path: Path) -> Non
         assert all(row["start_page"] is not None for row in payload["citations"])
         assert all(row["end_page"] is not None for row in payload["citations"])
         assert isinstance(payload["limitations"], list)
+        assert payload["debug"]["enabled"] is True
+        thresholds = payload["debug"]["thresholds"]
+        assert thresholds["request_validation"]["top_k_min"] == 1
+        assert thresholds["request_validation"]["top_k_max"] == 50
+        assert "retrieval" in thresholds
+        assert "answering" in thresholds
+        assert "llm" in thresholds
 
 
 def test_m4_ask_api_returns_refusal_with_reason_code_when_source_missing(tmp_path: Path) -> None:
