@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import time
 from pathlib import Path
 from typing import Generator
 
@@ -174,12 +175,28 @@ def _ask_thresholds_payload(*, request: AskRequest, llm_client: RagLlmClient) ->
     }
 
 
+def _normalized_answering_trace(scoring: dict | None) -> dict:
+    trace = dict(scoring or {})
+    trace.setdefault("semantic_scoring_source", "not_reached")
+    trace.setdefault("verify_route", "not_reached")
+    trace.setdefault("fallback_verify_attempted", False)
+    trace.setdefault("fallback_provider", "none")
+    trace.setdefault("similarity_external_api_called", False)
+    trace.setdefault("answer_external_api_called", False)
+    trace.setdefault("external_call_count", 0)
+    timing_payload = trace.get("timing_ms")
+    if not isinstance(timing_payload, dict):
+        trace["timing_ms"] = {}
+    return trace
+
+
 def _run_ask(
     *,
     request: AskRequest,
     db,
     llm_client: RagLlmClient | None = None,
 ) -> dict:
+    request_started = time.perf_counter()
     ask_request_id = new_ask_request_id()
     question_hash = hash_text(request.question)
     log_rag_event(
@@ -198,6 +215,7 @@ def _run_ask(
     )
 
     retrieval_service = RagRetrievalService(search_service=SearchService(db))
+    retrieval_started = time.perf_counter()
     retrieval_result = retrieval_service.retrieve(
         query=request.question,
         top_k=request.top_k,
@@ -210,15 +228,19 @@ def _run_ask(
         semantic_mode=request.semantic_mode,
         ask_request_id=ask_request_id,
     )
+    retrieval_ms = round((time.perf_counter() - retrieval_started) * 1000.0, 3)
 
     resolved_llm_client = llm_client or build_rag_llm_client()
     answering_service = RagAnsweringService(llm_client=resolved_llm_client)
+    answering_started = time.perf_counter()
     answer_result = answering_service.compose(
         question=request.question,
         retrieval=retrieval_result,
         required_source_kinds=request.required_source_types,
         ask_request_id=ask_request_id,
     )
+    answering_ms = round((time.perf_counter() - answering_started) * 1000.0, 3)
+    total_ms = round((time.perf_counter() - request_started) * 1000.0, 3)
 
     limitations = list(answer_result.limitations)
     if answer_result.status == "answer" and len(retrieval_result.source_kinds) <= 1:
@@ -275,11 +297,26 @@ def _run_ask(
         },
     }
     if request.debug_mode:
+        trace_payload = _normalized_answering_trace(answer_result.scoring)
+        timing_breakdown = {
+            "request_total": total_ms,
+            "retrieval": retrieval_ms,
+            "answering": answering_ms,
+            "answering_stages": trace_payload.get("timing_ms") if isinstance(trace_payload.get("timing_ms"), dict) else {},
+        }
         response_payload["debug"] = {
             "enabled": True,
             "thresholds": _ask_thresholds_payload(request=request, llm_client=resolved_llm_client),
+            "answering_trace": trace_payload,
+            "timing_ms": timing_breakdown,
             "pipeline": {
-                "stage_order": ["retrieve", "answer", "verify", "refuse_if_needed"],
+                "stage_order": [
+                    "retrieve",
+                    "answer",
+                    "deterministic_similarity",
+                    "verify_fallback_if_low",
+                    "refuse_if_needed",
+                ],
                 "effective_required_source_types": request.required_source_types
                 or retrieval_result.requested_source_kinds,
             },
@@ -654,6 +691,7 @@ def ask_playground_page() -> HTMLResponse:
         <div class="field">
           <label for="ask-top-k">top_k</label>
           <input id="ask-top-k" name="top_k" type="number" min="1" max="50" value="8" />
+          <span class="muted">How many chunks retrieval returns before answering (higher can be slower and costlier).</span>
         </div>
       </section>
       <fieldset class="group">
@@ -716,6 +754,11 @@ def ask_playground_page() -> HTMLResponse:
       <pre id="ask-playground-thresholds-json"></pre>
     </section>
 
+    <section id="ask-playground-trace" class="output hidden">
+      <h3>Similarity / Fallback Trace</h3>
+      <ul id="ask-playground-trace-list"></ul>
+    </section>
+
     <section class="output">
       <h3>Debug</h3>
       <ul id="ask-playground-meta"></ul>
@@ -752,6 +795,8 @@ def ask_playground_page() -> HTMLResponse:
       const citationsList = document.getElementById("ask-playground-citations-list");
       const thresholdsPanel = document.getElementById("ask-playground-thresholds");
       const thresholdsJson = document.getElementById("ask-playground-thresholds-json");
+      const tracePanel = document.getElementById("ask-playground-trace");
+      const traceList = document.getElementById("ask-playground-trace-list");
       const metaList = document.getElementById("ask-playground-meta");
       const rawJson = document.getElementById("ask-playground-json");
 
@@ -838,8 +883,10 @@ def ask_playground_page() -> HTMLResponse:
         hide(refusalPanel);
         hide(citationsPanel);
         hide(thresholdsPanel);
+        hide(tracePanel);
         resetList(limitationsList);
         resetList(citationsList);
+        resetList(traceList);
         resetList(metaList);
         rawJson.textContent = "";
         thresholdsJson.textContent = "";
@@ -866,10 +913,45 @@ def ask_playground_page() -> HTMLResponse:
           appendItem(metaList, `retrieved_source_types: ${(retrieval.source_types || []).join(", ") || "-"}`);
           appendItem(metaList, `model: ${model.provider || "-"} / ${model.name || "-"}`);
 
+          const debugPayload = data.debug && typeof data.debug === "object" ? data.debug : null;
+          const debugTiming = debugPayload && debugPayload.timing_ms && typeof debugPayload.timing_ms === "object"
+            ? debugPayload.timing_ms
+            : null;
+          if (debugTiming) {
+            appendItem(metaList, `timing_ms.request_total: ${debugTiming.request_total ?? "-"}`);
+            appendItem(metaList, `timing_ms.retrieval: ${debugTiming.retrieval ?? "-"}`);
+            appendItem(metaList, `timing_ms.answering: ${debugTiming.answering ?? "-"}`);
+          }
+
           const thresholds = data.debug && data.debug.thresholds ? data.debug.thresholds : null;
           if (thresholds) {
             thresholdsJson.textContent = JSON.stringify(thresholds, null, 2);
             show(thresholdsPanel);
+          }
+
+          const trace = debugPayload && debugPayload.answering_trace && typeof debugPayload.answering_trace === "object"
+            ? debugPayload.answering_trace
+            : null;
+          if (trace) {
+            appendItem(traceList, `semantic_scoring_source: ${trace.semantic_scoring_source || "-"}`);
+            appendItem(traceList, `verify_route: ${trace.verify_route || "-"}`);
+            appendItem(traceList, `deterministic_would_refuse: ${trace.deterministic_would_refuse === true ? "yes" : "no"}`);
+            appendItem(traceList, `fallback_verify_attempted: ${trace.fallback_verify_attempted === true ? "yes" : "no"}`);
+            appendItem(traceList, `fallback_provider: ${trace.fallback_provider || "-"}`);
+            appendItem(traceList, `similarity_external_api_called: ${trace.similarity_external_api_called === true ? "yes" : "no"}`);
+            appendItem(traceList, `answer_external_api_called: ${trace.answer_external_api_called === true ? "yes" : "no"}`);
+            appendItem(traceList, `external_call_count: ${trace.external_call_count ?? "-"}`);
+            appendItem(traceList, `fallback_overrode_deterministic_low: ${trace.fallback_overrode_deterministic_low === true ? "yes" : "no"}`);
+            const stageTiming = trace.timing_ms && typeof trace.timing_ms === "object" ? trace.timing_ms : null;
+            if (stageTiming) {
+              appendItem(
+                traceList,
+                `timing_ms: answer_call=${stageTiming.answer_call ?? "-"}, deterministic_similarity=${stageTiming.deterministic_similarity ?? "-"}, fallback_verify=${stageTiming.fallback_verify ?? "-"}, compose_total=${stageTiming.compose_total ?? "-"}`,
+              );
+            }
+            show(tracePanel);
+          } else {
+            hide(tracePanel);
           }
 
           if (data.status === "answer") {
@@ -934,6 +1016,7 @@ def ask_playground_page() -> HTMLResponse:
           hide(citationsPanel);
           hide(refusalPanel);
           hide(thresholdsPanel);
+          hide(tracePanel);
           statusNode.textContent = "Request failed. Try again in a moment.";
         }
       });

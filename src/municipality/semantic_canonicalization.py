@@ -134,6 +134,7 @@ class CanonicalNodeCandidate:
     depth: int
     specificity_score: float
     confidence: float
+    confidence_source: str
     support_count: int
     status: str
     node_key_hash: str
@@ -436,7 +437,13 @@ class SemanticCanonicalizer:
                     f"node={node.candidate_id}: missing evidence refs [{', '.join(node_evidence_support.missing_ref_ids)}]"
                 )
 
-            adjusted_confidence = min(1.0, node.confidence + node_evidence_support.confidence_boost)
+            base_confidence, confidence_source = self._resolve_node_confidence(
+                node=node,
+                support_count=valid_mentions,
+                specificity=specificity,
+                node_evidence_support=node_evidence_support,
+            )
+            adjusted_confidence = min(1.0, base_confidence + node_evidence_support.confidence_boost)
             if node_evidence_support.has_any_refs:
                 category_gate_ok = node_evidence_support.has_decision_support or node_evidence_support.has_context_support
             else:
@@ -475,6 +482,7 @@ class SemanticCanonicalizer:
                 depth=clamped_depth,
                 specificity_score=specificity,
                 confidence=adjusted_confidence,
+                confidence_source=confidence_source,
                 support_count=valid_mentions,
                 status=status,
                 node_key_hash=key_hash,
@@ -487,6 +495,34 @@ class SemanticCanonicalizer:
                 report.rejected_nodes.append(normalized)
 
         return report
+
+    def _resolve_node_confidence(
+        self,
+        *,
+        node: SemanticNodeCandidate,
+        support_count: int,
+        specificity: float,
+        node_evidence_support: NodeEvidenceSupport,
+    ) -> tuple[float, str]:
+        model_confidence = _normalize_optional_confidence(node.confidence)
+        if model_confidence is not None:
+            return model_confidence, "model"
+
+        evidence_strength = max(
+            node_evidence_support.strongest_decision_score,
+            node_evidence_support.strongest_context_score,
+        )
+        support_factor = min(1.0, support_count / 3.0)
+        derived_confidence = (
+            0.05
+            + (0.45 * evidence_strength)
+            + (0.25 * specificity)
+            + (0.25 * support_factor)
+        )
+
+        # Keep derived confidence conservative when model omitted confidence.
+        derived_confidence = min(0.75, derived_confidence)
+        return round(max(0.0, min(1.0, derived_confidence)), 6), "derived_from_evidence"
 
     def _node_evidence_support(
         self,
@@ -611,6 +647,12 @@ def _jaccard(left: Iterable[str], right: Iterable[str]) -> float:
     if not left_set or not right_set:
         return 0.0
     return len(left_set.intersection(right_set)) / len(left_set.union(right_set))
+
+
+def _normalize_optional_confidence(value: float | int | None) -> float | None:
+    if value is None:
+        return None
+    return round(max(0.0, min(1.0, float(value))), 6)
 
 
 def _char_trigrams(value: str) -> set[str]:

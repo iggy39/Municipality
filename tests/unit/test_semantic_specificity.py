@@ -152,6 +152,51 @@ def test_node_without_evidence_refs_requires_stronger_support_for_active_status(
     assert report.accepted_nodes[0].status == "candidate"
 
 
+def test_missing_model_confidence_uses_derived_evidence_confidence() -> None:
+    canonicalizer = SemanticCanonicalizer()
+    extracted_text = "הוחלט לאשר תקציב תחבורה עירונית לשנת 2026"
+    citation_map = [{"start": 0, "end": len(extracted_text), "page": 1}]
+
+    node = SemanticNodeCandidate(
+        candidate_id="n-derived",
+        label_he="תחבורה עירונית",
+        node_kind=SemanticNodeKind.TOPIC,
+        semantic_type="transport_program",
+        confidence=None,
+        mentions=[
+            SemanticMentionCandidate(
+                mention_text="תחבורה עירונית",
+                start_offset=17,
+                end_offset=31,
+                confidence=None,
+            )
+        ],
+        evidence_span_ids=["s-decision-1"],
+    )
+    span = SemanticEvidenceSpanCandidate(
+        span_id="s-decision-1",
+        category=SemanticEvidenceCategory.DECISION,
+        start_offset=0,
+        end_offset=31,
+        text="הוחלט לאשר תקציב תחבורה עירונית",
+        confidence=0.84,
+        regex_boost=0.08,
+    )
+
+    report = canonicalizer.canonicalize_candidates(
+        source_site_id=1,
+        nodes=[node],
+        extracted_text=extracted_text,
+        citation_map=citation_map,
+        evidence_spans=[span],
+    )
+
+    assert len(report.accepted_nodes) == 1
+    accepted = report.accepted_nodes[0]
+    assert accepted.confidence_source == "derived_from_evidence"
+    assert accepted.confidence > 0.0
+
+
 def _mention_for(text_value: str, target: str) -> SemanticMentionCandidate:
     start = text_value.index(target)
     end = start + len(target)

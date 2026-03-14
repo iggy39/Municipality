@@ -24,7 +24,7 @@ class BytezFallbackClient:
         max_retries: int = 2,
         transport: httpx.BaseTransport | None = None,
     ):
-        self.api_key = api_key or os.getenv("BYTEZ_API_KEY")
+        self.api_key = api_key if api_key is not None else os.getenv("BYTEZ_API_KEY")
         self.endpoint = endpoint or os.getenv("BYTEZ_API_URL", DEFAULT_BYTEZ_API_URL)
         self.timeout_seconds = timeout_seconds
         self.max_retries = max(0, max_retries)

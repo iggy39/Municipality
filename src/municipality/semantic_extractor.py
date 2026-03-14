@@ -54,7 +54,7 @@ class BytezSemanticClient:
         timeout_seconds: float = 60.0,
         model_name: str = BYTEZ_MODEL,
     ):
-        self.api_key = api_key or os.getenv("BYTEZ_API_KEY")
+        self.api_key = api_key if api_key is not None else os.getenv("BYTEZ_API_KEY")
         self.endpoint = endpoint or os.getenv("BYTEZ_API_URL", DEFAULT_BYTEZ_API_URL)
         self.timeout_seconds = timeout_seconds
         self._model_name = model_name

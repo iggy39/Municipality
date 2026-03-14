@@ -208,6 +208,7 @@ def build_semantic_model_request(
             "All evidence_spans must include span_id, category, start_offset, end_offset, text",
             "Every accepted node must have at least one mention",
             "Every accepted node should include evidence_span_ids from evidence_spans",
+            "Populate confidence fields for nodes, mentions, and chunk_links when possible using values between 0 and 1",
             "Do not rely only on explicit decision wording; infer category from context",
             "When uncertain, emit reject records or refusal text instead of speculative nodes",
         ],

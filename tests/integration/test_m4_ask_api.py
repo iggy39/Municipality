@@ -129,6 +129,11 @@ def test_m4_ask_api_returns_answer_with_citation_contract(tmp_path: Path) -> Non
         assert isinstance(payload["limitations"], list)
         assert payload["debug"]["enabled"] is True
         thresholds = payload["debug"]["thresholds"]
+        assert isinstance(payload["debug"].get("answering_trace"), dict)
+        assert payload["debug"]["answering_trace"].items() >= payload["scoring"].items()
+        assert "similarity_external_api_called" in payload["debug"]["answering_trace"]
+        assert "timing_ms" in payload["debug"]["answering_trace"]
+        assert isinstance(payload["debug"].get("timing_ms"), dict)
         assert thresholds["request_validation"]["top_k_min"] == 1
         assert thresholds["request_validation"]["top_k_max"] == 50
         assert "retrieval" in thresholds

@@ -74,14 +74,14 @@ class SemanticMentionCandidate:
     end_offset: int
     start_page: int | None = None
     end_page: int | None = None
-    confidence: float = 0.0
+    confidence: float | None = None
 
 
 @dataclass(slots=True)
 class SemanticAliasCandidate:
     alias_label_he: str
     alias_kind: str = "surface"
-    confidence: float = 0.0
+    confidence: float | None = None
 
 
 @dataclass(slots=True)
@@ -91,7 +91,7 @@ class SemanticNodeCandidate:
     node_kind: SemanticNodeKind
     semantic_type: str
     parent_candidate_id: str | None = None
-    confidence: float = 0.0
+    confidence: float | None = None
     mentions: list[SemanticMentionCandidate] = field(default_factory=list)
     aliases: list[SemanticAliasCandidate] = field(default_factory=list)
     evidence_span_ids: list[str] = field(default_factory=list)
@@ -103,7 +103,7 @@ class SemanticEdgeCandidate:
     source_candidate_id: str
     target_candidate_id: str
     relation_type: SemanticEdgeRelation
-    confidence: float = 0.0
+    confidence: float | None = None
     provenance: str = "model"
 
 
@@ -112,7 +112,7 @@ class DecisionSemanticLinkCandidate:
     decision_id: int
     node_candidate_id: str
     relation_role: SemanticRelationRole
-    confidence: float = 0.0
+    confidence: float | None = None
     mention_index: int | None = None
 
 
@@ -120,7 +120,7 @@ class DecisionSemanticLinkCandidate:
 class ChunkSemanticLinkCandidate:
     chunk_id: str
     node_candidate_id: str
-    confidence: float = 0.0
+    confidence: float | None = None
     mention_index: int | None = None
 
 
@@ -358,7 +358,7 @@ def parse_semantic_model_output(payload: dict[str, Any]) -> tuple[SemanticExtrac
                 node_kind=node_kind,
                 semantic_type=semantic_type,
                 parent_candidate_id=_as_str(raw_node.get("parent_candidate_id")),
-                confidence=_as_float(raw_node.get("confidence"), default=0.0) or 0.0,
+                confidence=_as_float(raw_node.get("confidence"), default=None),
                 mentions=mentions,
                 aliases=aliases,
                 evidence_span_ids=_as_str_list(raw_node.get("evidence_span_ids")),
@@ -506,7 +506,7 @@ def _parse_mentions(raw_value: Any, *, node_idx: int, issues: list[SemanticValid
                 end_offset=end_offset,
                 start_page=_as_int(raw_mention.get("start_page")),
                 end_page=_as_int(raw_mention.get("end_page")),
-                confidence=_as_float(raw_mention.get("confidence"), default=0.0) or 0.0,
+                confidence=_as_float(raw_mention.get("confidence"), default=None),
             )
         )
     return mentions
@@ -550,7 +550,7 @@ def _parse_aliases(raw_value: Any, *, node_idx: int, issues: list[SemanticValida
             SemanticAliasCandidate(
                 alias_label_he=alias_label_he,
                 alias_kind=_as_str(raw_alias.get("alias_kind")) or "surface",
-                confidence=_as_float(raw_alias.get("confidence"), default=0.0) or 0.0,
+                confidence=_as_float(raw_alias.get("confidence"), default=None),
             )
         )
     return aliases
@@ -597,7 +597,7 @@ def _parse_edges(raw_value: Any, *, issues: list[SemanticValidationIssue]) -> li
                 source_candidate_id=source_candidate_id,
                 target_candidate_id=target_candidate_id,
                 relation_type=parsed_relation,
-                confidence=_as_float(raw_edge.get("confidence"), default=0.0) or 0.0,
+                confidence=_as_float(raw_edge.get("confidence"), default=None),
                 provenance=_as_str(raw_edge.get("provenance")) or "model",
             )
         )
@@ -652,7 +652,7 @@ def _parse_decision_links(raw_value: Any, *, issues: list[SemanticValidationIssu
                 decision_id=decision_id,
                 node_candidate_id=node_candidate_id,
                 relation_role=parsed_role,
-                confidence=_as_float(raw_link.get("confidence"), default=0.0) or 0.0,
+                confidence=_as_float(raw_link.get("confidence"), default=None),
                 mention_index=_as_int(raw_link.get("mention_index")),
             )
         )
@@ -692,7 +692,7 @@ def _parse_chunk_links(raw_value: Any, *, issues: list[SemanticValidationIssue])
             ChunkSemanticLinkCandidate(
                 chunk_id=chunk_id,
                 node_candidate_id=node_candidate_id,
-                confidence=_as_float(raw_link.get("confidence"), default=0.0) or 0.0,
+                confidence=_as_float(raw_link.get("confidence"), default=None),
                 mention_index=_as_int(raw_link.get("mention_index")),
             )
         )

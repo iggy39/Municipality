@@ -307,6 +307,7 @@ class SemanticService:
             metadata = {
                 "candidate_id": accepted.candidate_id,
                 "support_count": accepted.support_count,
+                "confidence_source": accepted.confidence_source,
             }
             if source_node is not None and source_node.evidence_span_ids:
                 metadata["evidence_span_ids"] = list(source_node.evidence_span_ids)
@@ -452,6 +453,13 @@ class SemanticService:
                 if not mention_text_norm:
                     continue
 
+                mention_confidence, mention_confidence_source = _resolve_mention_confidence(
+                    mention_confidence=mention.confidence,
+                    node_confidence=node_row.confidence,
+                    normalized_match=validation.normalized_match,
+                    page_resolved=validation.page_resolved,
+                )
+
                 key = (node_row.id, mention.start_offset, mention.end_offset)
                 row = existing_by_key.get(key)
                 if row is None:
@@ -466,7 +474,7 @@ class SemanticService:
                         end_page=validation.end_page,
                         mention_text=mention.mention_text,
                         mention_text_norm=mention_text_norm,
-                        mention_confidence=_clamp_score(mention.confidence if mention.confidence else node_row.confidence),
+                        mention_confidence=mention_confidence,
                         evidence_hash=self.canonicalizer.mention_evidence_hash(
                             document_version_id=document_version_id,
                             semantic_node_id=node_row.id,
@@ -488,7 +496,7 @@ class SemanticService:
                 row.end_page = mention.end_page if mention.end_page is not None else validation.end_page
                 row.mention_text = mention.mention_text
                 row.mention_text_norm = mention_text_norm
-                row.mention_confidence = _clamp_score(mention.confidence if mention.confidence else node_row.confidence)
+                row.mention_confidence = mention_confidence
                 row.evidence_hash = self.canonicalizer.mention_evidence_hash(
                     document_version_id=document_version_id,
                     semantic_node_id=node_row.id,
@@ -502,6 +510,7 @@ class SemanticService:
                         "run_id": run_id,
                         "normalized_match": validation.normalized_match,
                         "page_resolved": validation.page_resolved,
+                        "confidence_source": mention_confidence_source,
                         "evidence_span_ids": list(source_node.evidence_span_ids),
                     },
                     ensure_ascii=False,
@@ -582,7 +591,8 @@ class SemanticService:
 
             mention_id = None
             if link.mention_index is not None:
-                mention_id = mention_index_map.get((link.node_candidate_id, link.mention_index))
+                mention_index = int(link.mention_index)
+                mention_id = mention_index_map.get((link.node_candidate_id, mention_index))
 
             row = self.session.execute(
                 select(DecisionSemanticLink).where(
@@ -669,18 +679,19 @@ class SemanticService:
                         continue
                     key = (chunk["chunk_id"], node.id)
                     row = existing_by_key.get(key)
+                    mention_link_confidence = _clamp_score(mention.mention_confidence)
                     if row is None:
                         row = ChunkSemanticLink(
                             chunk_id=chunk["chunk_id"],
                             semantic_node_id=node.id,
-                            confidence=_clamp_score(mention.mention_confidence),
+                            confidence=mention_link_confidence,
                             source_mention_id=mention.id,
                             metadata_json=None,
                         )
                         self.session.add(row)
                         existing_by_key[key] = row
 
-                    row.confidence = max(row.confidence, _clamp_score(mention.mention_confidence))
+                    row.confidence = max(row.confidence, mention_link_confidence)
                     if mention.id is not None:
                         row.source_mention_id = mention.id
                     row.metadata_json = json.dumps(
@@ -688,10 +699,18 @@ class SemanticService:
                             "candidate_id": candidate_id,
                             "provenance": "mention_overlap",
                             "run_id": run_id,
+                            "confidence_source": "mention_overlap",
                         },
                         ensure_ascii=False,
                     )
                     touched.add(key)
+
+        mention_confidence_by_id = {
+            mention.id: mention.mention_confidence
+            for mention_rows in mention_rows_by_candidate.values()
+            for mention in mention_rows
+            if mention.id is not None
+        }
 
         chunk_id_set = set(chunk_ids)
         for link in output.chunk_links:
@@ -703,20 +722,32 @@ class SemanticService:
             if link.mention_index is not None:
                 mention_id = mention_index_map.get((link.node_candidate_id, link.mention_index))
 
+            mention_confidence = (
+                mention_confidence_by_id.get(mention_id)
+                if mention_id is not None
+                else None
+            )
+
+            link_confidence, link_confidence_source = _resolve_chunk_link_confidence(
+                model_confidence=link.confidence,
+                mention_confidence=mention_confidence,
+                node_confidence=node.confidence,
+            )
+
             key = (link.chunk_id, node.id)
             row = existing_by_key.get(key)
             if row is None:
                 row = ChunkSemanticLink(
                     chunk_id=link.chunk_id,
                     semantic_node_id=node.id,
-                    confidence=_clamp_score(link.confidence),
+                    confidence=link_confidence,
                     source_mention_id=mention_id,
                     metadata_json=None,
                 )
                 self.session.add(row)
                 existing_by_key[key] = row
 
-            row.confidence = max(row.confidence, _clamp_score(link.confidence))
+            row.confidence = max(row.confidence, link_confidence)
             if mention_id is not None:
                 row.source_mention_id = mention_id
             row.metadata_json = json.dumps(
@@ -724,6 +755,7 @@ class SemanticService:
                     "candidate_id": link.node_candidate_id,
                     "provenance": "model_chunk_link",
                     "run_id": run_id,
+                    "confidence_source": link_confidence_source,
                 },
                 ensure_ascii=False,
             )
@@ -843,6 +875,7 @@ def _canonicalization_report_to_dict(report: CanonicalizationReport) -> dict:
                 "depth": row.depth,
                 "specificity_score": row.specificity_score,
                 "confidence": row.confidence,
+                "confidence_source": row.confidence_source,
                 "support_count": row.support_count,
                 "status": row.status,
                 "node_key_hash": row.node_key_hash,
@@ -861,6 +894,7 @@ def _canonicalization_report_to_dict(report: CanonicalizationReport) -> dict:
                 "depth": row.depth,
                 "specificity_score": row.specificity_score,
                 "confidence": row.confidence,
+                "confidence_source": row.confidence_source,
                 "support_count": row.support_count,
                 "status": row.status,
                 "node_key_hash": row.node_key_hash,
@@ -872,6 +906,43 @@ def _canonicalization_report_to_dict(report: CanonicalizationReport) -> dict:
     }
 
 
+def _resolve_mention_confidence(
+    *,
+    mention_confidence: float | None,
+    node_confidence: float,
+    normalized_match: bool,
+    page_resolved: bool,
+) -> tuple[float, str]:
+    explicit = _normalize_optional_confidence(mention_confidence)
+    if explicit is not None:
+        return explicit, "model_mention"
+
+    base = _clamp_score(node_confidence * 0.85)
+    if normalized_match:
+        base = max(base, 0.45)
+    if page_resolved:
+        base = min(1.0, base + 0.05)
+    return _clamp_score(base), "derived_from_node"
+
+
+def _resolve_chunk_link_confidence(
+    *,
+    model_confidence: float | None,
+    mention_confidence: float | None,
+    node_confidence: float,
+) -> tuple[float, str]:
+    explicit = _normalize_optional_confidence(model_confidence)
+    if explicit is not None:
+        return explicit, "model_chunk_link"
+
+    mention_based = _normalize_optional_confidence(mention_confidence)
+    if mention_based is not None:
+        return _clamp_score(mention_based * 0.95), "derived_from_mention"
+
+    fallback = _clamp_score(max(0.25, min(0.75, node_confidence * 0.8)))
+    return fallback, "derived_from_node"
+
+
 def _spans_overlap(start_a: int, end_a: int, start_b: int, end_b: int) -> bool:
     return max(start_a, start_b) < min(end_a, end_b)
 
@@ -880,3 +951,9 @@ def _clamp_score(value: float | int | None) -> float:
     if value is None:
         return 0.0
     return max(0.0, min(1.0, float(value)))
+
+
+def _normalize_optional_confidence(value: float | int | None) -> float | None:
+    if value is None:
+        return None
+    return _clamp_score(value)
