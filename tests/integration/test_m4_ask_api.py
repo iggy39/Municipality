@@ -40,6 +40,16 @@ def test_m4_ask_ui_playground_exposes_debug_threshold_panels() -> None:
     assert 'id="ask-debug-mode"' in body
     assert 'id="ask-playground-thresholds"' in body
     assert 'id="ask-playground-thresholds-json"' in body
+    assert 'id="ask-show-extended"' in body
+    assert 'id="ask-playground-extended-panel"' in body
+    assert 'id="ask-playground-answer-sections"' in body
+    assert "isAlmostEqualText" in body
+    assert "hasMeaningfulExtraInfo" in body
+    assert "topic-root" in body
+    assert "topic-child" in body
+    assert 'id="ask-playground-topic-tree-panel"' in body
+    assert 'id="ask-playground-topic-tree-body"' in body
+    assert '"/topic/tree/cache"' in body
     assert "debug mode (show thresholds)" in body
     assert 'fetch("/ask"' in body
     assert "debug_mode" in body
@@ -113,6 +123,12 @@ def test_m4_ask_api_returns_answer_with_citation_contract(tmp_path: Path) -> Non
         assert payload["ask_request_id"]
         assert payload["status"] == "answer"
         assert payload["answer"]
+        assert payload["extended_answer"]
+        assert isinstance(payload["answer_sections"], list)
+        assert payload["answer_sections"]
+        assert isinstance(payload["extended_answer_sections"], list)
+        assert payload["extended_answer_sections"]
+        assert len(payload["extended_answer_sections"]) == len(payload["answer_sections"])
         assert payload["refusal"] is None
         assert payload["citations"]
         assert isinstance(payload["retrieval"]["retrieval_set_id"], str)
@@ -169,6 +185,9 @@ def test_m4_ask_api_returns_refusal_with_reason_code_when_source_missing(tmp_pat
         assert payload["ask_request_id"]
         assert payload["status"] == "refusal"
         assert payload["answer"] is None
+        assert payload["extended_answer"] is None
+        assert payload["answer_sections"] == []
+        assert payload["extended_answer_sections"] == []
         assert payload["citations"] == []
         assert isinstance(payload["retrieval"]["retrieval_set_id"], str)
         assert payload["retrieval"]["retrieval_set_id"]

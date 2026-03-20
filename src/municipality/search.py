@@ -209,8 +209,8 @@ class SearchService:
         semantic_mode_normalized = (semantic_mode or "boost").strip().casefold()
         if semantic_mode_normalized not in {"boost", "filter", "off"}:
             semantic_mode_normalized = "boost"
-        semantic_enabled = semantic_mode_normalized != "off"
-        explicit_semantic_filter = semantic_enabled and (
+        semantic_scoring_enabled = semantic_mode_normalized != "off"
+        explicit_semantic_filter = semantic_scoring_enabled and (
             semantic_node_id is not None or bool(normalized_semantic_label)
         )
 
@@ -220,14 +220,13 @@ class SearchService:
 
         chunk_ids = list(candidate_scores.keys())
         semantic_by_chunk: dict[str, list[_SemanticMatchScore]] = {}
-        if semantic_enabled:
-            semantic_by_chunk = self._collect_semantic_scores(
-                chunk_ids=chunk_ids,
-                normalized_query=normalized_query,
-                semantic_node_id=semantic_node_id,
-                normalized_semantic_label=normalized_semantic_label,
-                explicit_semantic_filter=explicit_semantic_filter,
-            )
+        semantic_by_chunk = self._collect_semantic_scores(
+            chunk_ids=chunk_ids,
+            normalized_query=normalized_query,
+            semantic_node_id=semantic_node_id,
+            normalized_semantic_label=normalized_semantic_label,
+            explicit_semantic_filter=explicit_semantic_filter,
+        )
         stmt = (
             select(TextChunk, Document, SourceSite, AssetManifest)
             .join(Document, TextChunk.document_id == Document.id)
@@ -272,14 +271,14 @@ class SearchService:
             trigram_score = min(1.0, trigram_overlap / max(query_trigram_count, chunk.trigram_count, 1))
             lexical_score = (LEXICAL_FTS_WEIGHT * fts_score) + (LEXICAL_TRIGRAM_WEIGHT * trigram_score)
 
-            semantic_rows = semantic_by_chunk.get(chunk.chunk_id, []) if semantic_enabled else []
+            semantic_rows = semantic_by_chunk.get(chunk.chunk_id, [])
             semantic_match_count = len(semantic_rows)
             if semantic_mode_normalized == "filter" and explicit_semantic_filter and semantic_match_count == 0:
                 continue
 
             semantic_boost = 0.0
             score = lexical_score
-            if semantic_enabled:
+            if semantic_scoring_enabled:
                 semantic_overlap_score = max(
                     (row.link_confidence * row.match_score for row in semantic_rows),
                     default=0.0,

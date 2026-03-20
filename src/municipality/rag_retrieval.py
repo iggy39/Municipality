@@ -1,10 +1,46 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import re
 from typing import Any
 
 from municipality.chunking import normalize_for_search
 from municipality.rag_observability import build_retrieval_set_id, hash_text, log_rag_event
+
+
+DECISION_PROBE_QUERY = "החלטות הוחלט אושר אושרה אושרו מאשרים"
+HEBREW_TOKEN_RE = re.compile(r"[\u0590-\u05FF]{2,}")
+DECISION_QUERY_MARKERS = {
+    "הוחלט",
+    "החלטה",
+    "החלטות",
+    "אושר",
+    "אושרה",
+    "אושרו",
+    "מאשר",
+    "מאשרים",
+}
+BROAD_SCOPE_TOKENS = {
+    "עיר",
+    "בעיר",
+    "העיר",
+    "עירייה",
+    "העירייה",
+    "בישיבה",
+    "בוועדה",
+}
+DECISION_TEXT_MARKERS = {
+    "הוחלט",
+    "החלטה",
+    "החלטות",
+    "אושר",
+    "אושרה",
+    "אושרו",
+    "אישר",
+    "אישרה",
+    "מאשר",
+    "מאשרים",
+}
 
 
 @dataclass(slots=True)
@@ -22,6 +58,7 @@ class RagContextChunk:
     start_page: int | None
     end_page: int | None
     chunk_text: str = ""
+    semantic_topic_labels: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -136,7 +173,24 @@ class RagRetrievalService:
             selected_hits.extend(source_hits)
             selected_hits = _dedupe_hits(selected_hits)
 
+        broad_decision_query = _is_broad_decision_query(normalized_query)
+        if broad_decision_query:
+            selected_hits = _augment_protocol_decision_hits(
+                selected_hits=selected_hits,
+                search_service=self.search_service,
+                municipality_slug=municipality_slug,
+                requested_source_kinds=requested_source_kinds,
+                year=year,
+                topic=topic,
+                semantic_node_id=semantic_node_id,
+                semantic_label=semantic_label,
+                semantic_mode=semantic_mode,
+                top_k=effective_top_k,
+            )
+
         selected_hits.sort(key=lambda row: row.score, reverse=True)
+        if broad_decision_query:
+            selected_hits = _prioritize_protocol_document_coverage(selected_hits, limit=effective_top_k)
         contexts = [_to_context(row) for row in selected_hits[:effective_top_k]]
         retrieval_set_id = build_retrieval_set_id(
             normalized_query=normalized_query,
@@ -198,6 +252,21 @@ def _dedupe_hits(hits: list[Any]) -> list[Any]:
 
 
 def _to_context(hit) -> RagContextChunk:
+    semantic_topic_labels: list[str] = []
+    seen_topic_labels: set[str] = set()
+    for node in getattr(hit, "semantic_nodes", []) or []:
+        node_kind = str(getattr(node, "kind", "") or "").strip().casefold()
+        if node_kind != "topic":
+            continue
+        label = str(getattr(node, "label", "") or "").strip()
+        if not label:
+            continue
+        key = normalize_for_search(label)
+        if not key or key in seen_topic_labels:
+            continue
+        seen_topic_labels.add(key)
+        semantic_topic_labels.append(label)
+
     return RagContextChunk(
         chunk_id=hit.chunk_id,
         score=hit.score,
@@ -212,4 +281,144 @@ def _to_context(hit) -> RagContextChunk:
         start_page=hit.start_page,
         end_page=hit.end_page,
         chunk_text=getattr(hit, "chunk_text", "") or hit.snippet,
+        semantic_topic_labels=semantic_topic_labels,
     )
+
+
+def _hebrew_tokens(value: str) -> list[str]:
+    return [token for token in HEBREW_TOKEN_RE.findall(value) if len(token) >= 2]
+
+
+def _is_broad_decision_query(normalized_query: str) -> bool:
+    tokens = set(_hebrew_tokens(normalized_query))
+    if not tokens:
+        return False
+    has_decision_marker = bool(tokens.intersection(DECISION_QUERY_MARKERS))
+    if not has_decision_marker:
+        return False
+    if bool(tokens.intersection(BROAD_SCOPE_TOKENS)):
+        return True
+    return len(tokens) <= 3
+
+
+def _hit_contains_decision_marker(hit) -> bool:
+    text_blob = normalize_for_search(f"{getattr(hit, 'chunk_text', '')} {getattr(hit, 'snippet', '')}")
+    if not text_blob:
+        return False
+    tokens = set(_hebrew_tokens(text_blob))
+    return bool(tokens.intersection(DECISION_TEXT_MARKERS))
+
+
+def _augment_protocol_decision_hits(
+    *,
+    selected_hits: list[Any],
+    search_service,
+    municipality_slug: str | None,
+    requested_source_kinds: list[str],
+    year: int | None,
+    topic: str | None,
+    semantic_node_id: int | None,
+    semantic_label: str | None,
+    semantic_mode: str,
+    top_k: int,
+) -> list[Any]:
+    if requested_source_kinds and "protocol" not in requested_source_kinds:
+        return selected_hits
+
+    protocol_hits = [hit for hit in selected_hits if hit.source_type == "protocol"]
+    if len(protocol_hits) <= 1:
+        return selected_hits
+
+    target_doc_ids: list[int] = []
+    seen_doc_ids: set[int] = set()
+    for hit in protocol_hits:
+        if hit.document_id in seen_doc_ids:
+            continue
+        target_doc_ids.append(hit.document_id)
+        seen_doc_ids.add(hit.document_id)
+        if len(target_doc_ids) >= top_k:
+            break
+
+    if len(target_doc_ids) <= 1:
+        return selected_hits
+
+    decision_probe_hits = search_service.search(
+        query=DECISION_PROBE_QUERY,
+        municipality_slug=municipality_slug,
+        source_type="protocol",
+        year=year,
+        topic=topic,
+        semantic_node_id=semantic_node_id,
+        semantic_label=semantic_label,
+        semantic_mode=semantic_mode,
+        limit=max(top_k * 6, top_k),
+    )
+    decision_probe_hits = _dedupe_hits(decision_probe_hits)
+
+    best_by_doc_id: dict[int, Any] = {}
+    target_doc_set = set(target_doc_ids)
+    for hit in decision_probe_hits:
+        if hit.document_id not in target_doc_set:
+            continue
+        if not _hit_contains_decision_marker(hit):
+            continue
+        existing = best_by_doc_id.get(hit.document_id)
+        if existing is None or hit.score > existing.score:
+            best_by_doc_id[hit.document_id] = hit
+
+    augmented = list(selected_hits)
+    seen_chunk_ids = {hit.chunk_id for hit in augmented}
+    for doc_id in target_doc_ids:
+        already_has_decision_hit = any(
+            hit.source_type == "protocol" and hit.document_id == doc_id and _hit_contains_decision_marker(hit)
+            for hit in augmented
+        )
+        if already_has_decision_hit:
+            continue
+
+        candidate = best_by_doc_id.get(doc_id)
+        if candidate is None or candidate.chunk_id in seen_chunk_ids:
+            continue
+        augmented.append(candidate)
+        seen_chunk_ids.add(candidate.chunk_id)
+
+    return _dedupe_hits(augmented)
+
+
+def _prioritize_protocol_document_coverage(hits: list[Any], *, limit: int) -> list[Any]:
+    if limit <= 1:
+        return hits
+
+    ordered: list[Any] = []
+    seen_chunk_ids: set[str] = set()
+    protocol_doc_order: list[int] = []
+    seen_protocol_doc_ids: set[int] = set()
+    for hit in hits:
+        if hit.source_type != "protocol":
+            continue
+        if hit.document_id in seen_protocol_doc_ids:
+            continue
+        protocol_doc_order.append(hit.document_id)
+        seen_protocol_doc_ids.add(hit.document_id)
+
+    for document_id in protocol_doc_order:
+        document_hits = [hit for hit in hits if hit.source_type == "protocol" and hit.document_id == document_id]
+        if not document_hits:
+            continue
+        preferred = next((hit for hit in document_hits if _hit_contains_decision_marker(hit)), document_hits[0])
+        if preferred.chunk_id in seen_chunk_ids:
+            continue
+        ordered.append(preferred)
+        seen_chunk_ids.add(preferred.chunk_id)
+        if len(ordered) >= limit:
+            return ordered
+
+    for hit in hits:
+        if hit.chunk_id in seen_chunk_ids:
+            continue
+        ordered.append(hit)
+        seen_chunk_ids.add(hit.chunk_id)
+        if len(ordered) >= limit:
+            break
+
+    return ordered

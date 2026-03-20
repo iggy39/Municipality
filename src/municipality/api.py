@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import Generator
+from typing import Any, Generator
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 import httpx
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
+from municipality.chunking import normalize_for_search
 from municipality.db import build_engine, build_session_factory
 from municipality.fetcher import AssetFetcher
 from municipality.migrations import apply_all
@@ -31,6 +34,7 @@ from municipality.models import (
     SemanticNode,
     ChunkSemanticLink,
     DecisionSemanticLink,
+    RagDecisionSummaryCache,
     SourceSite,
     TextChunk,
     Vote,
@@ -190,6 +194,328 @@ def _normalized_answering_trace(scoring: dict | None) -> dict:
     return trace
 
 
+def _persist_decision_summary_cache(
+    *,
+    db,
+    question_hash: str,
+    answer_sections: list[dict],
+    provider: str | None,
+    model: str | None,
+) -> None:
+    if not answer_sections:
+        return
+
+    if not inspect(db.get_bind()).has_table("rag_decision_summary_cache"):
+        log_rag_event(
+            "rag.ask.summary_cache.skip",
+            reason="missing_table",
+            question_hash=question_hash,
+        )
+        return
+
+    now = datetime.utcnow()
+    for section in answer_sections:
+        protocol_title = str(section.get("protocol_title") or "").strip()
+        topic_name = _cache_topic_name(str(section.get("topic_name") or "").strip() or "נושא כללי")
+        summaries = section.get("summaries")
+        if isinstance(summaries, list):
+            summary_list = [str(row).strip() for row in summaries if isinstance(row, str) and row.strip()]
+        else:
+            text_value = str(section.get("text") or "").strip()
+            summary_list = [text_value] if text_value else []
+
+        chunk_ids = section.get("chunk_ids")
+        if not isinstance(chunk_ids, list):
+            continue
+        normalized_chunk_ids = [str(chunk_id).strip() for chunk_id in chunk_ids if str(chunk_id).strip()]
+        if not normalized_chunk_ids or not summary_list:
+            continue
+
+        for chunk_id in normalized_chunk_ids:
+            for summary in summary_list:
+                existing = db.execute(
+                    select(RagDecisionSummaryCache).where(
+                        RagDecisionSummaryCache.question_hash == question_hash,
+                        RagDecisionSummaryCache.chunk_id == chunk_id,
+                        RagDecisionSummaryCache.summary_he == summary,
+                    )
+                ).scalar_one_or_none()
+                if existing is None:
+                    db.add(
+                        RagDecisionSummaryCache(
+                            question_hash=question_hash,
+                            chunk_id=chunk_id,
+                            protocol_title=protocol_title or "פרוטוקול",
+                            topic_name=topic_name,
+                            summary_he=summary,
+                            model_provider=provider,
+                            model_name=model,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+                    continue
+
+                existing.protocol_title = protocol_title or existing.protocol_title
+                existing.topic_name = topic_name or existing.topic_name
+                existing.model_provider = provider or existing.model_provider
+                existing.model_name = model or existing.model_name
+                existing.updated_at = now
+
+
+def _cache_topic_name(topic_name: str) -> str:
+    root_topic, child_topic = _split_topic_path(topic_name)
+    if not child_topic or child_topic == "החלטה כללית":
+        return root_topic
+
+    normalized_child = child_topic.strip()
+    if normalized_child in {"הזמנה תקציבית", "הצעת מחיר", "אישור תקציבי", "אישור הצעה"}:
+        return root_topic
+
+    child_tokens = [token for token in normalized_child.split() if token]
+    if len(child_tokens) < 2:
+        return root_topic
+    if len(child_tokens) > 4:
+        child_tokens = child_tokens[:4]
+    return f"{root_topic} > {' '.join(child_tokens)}"
+
+
+def _split_topic_path(topic_name: str | None) -> tuple[str, str]:
+    parts = [part.strip() for part in str(topic_name or "").split(">") if part and part.strip()]
+    if len(parts) >= 2:
+        return parts[0], " > ".join(parts[1:])
+    if parts:
+        return parts[0], "החלטה כללית"
+    return "נושא כללי", "החלטה כללית"
+
+
+PROTOCOL_HEADLINE_RE = re.compile(r"(?:^|\n)\s*([^:\n]{6,120})\s*:")
+IGNORED_PROTOCOL_HEADLINES = {
+    "מהלך הדיון",
+    "החלטות",
+    "נוכחים",
+    "נעדרו",
+    "סיכום והחלטות",
+    "השתתפו",
+    "נושא הוועדה",
+}
+HEADLINE_VALUE_FROM_RIGHT_LABELS = {
+    "נושא הוועדה",
+    "נושא",
+    "נושא הדיון",
+}
+IGNORED_HEADLINE_PREFIXES = (
+    "להלן",
+    "זומנו",
+    "נוכחים",
+    "נעדרו",
+    "השתתפו",
+    "החלטות",
+    "סיכום",
+    "מהלך",
+)
+TOPIC_CUE_TOKENS = {
+    "פינויים",
+    "פינוי",
+    "מתחם",
+    "רובע",
+    "בטיחות",
+    "תמרורים",
+    "תמרור",
+    "חציה",
+    "התמכרות",
+    "סמים",
+    "סם",
+    "תרופות",
+    "קופות",
+    "בריאות",
+    "הכשרה",
+    "הכשרות",
+    "חינוך",
+    "תחבורה",
+    "תנועה",
+    "עמותת",
+    "עמותות",
+}
+
+
+def _normalize_headline_text(value: str) -> str:
+    cleaned = " ".join(str(value or "").split())
+    cleaned = cleaned.replace('"', "").replace("׳", "'").replace("״", "")
+    cleaned = cleaned.strip("-–:;,.()[]{} ")
+    return cleaned
+
+
+def _is_ignored_headline(value: str) -> bool:
+    normalized = _normalize_headline_text(value)
+    if not normalized:
+        return True
+    if normalized in IGNORED_PROTOCOL_HEADLINES:
+        return True
+    lowered = normalized.casefold()
+    if lowered.startswith("לגבי"):
+        return True
+    if lowered.startswith(IGNORED_HEADLINE_PREFIXES):
+        return True
+    return False
+
+
+def _headline_has_topic_cue(value: str) -> bool:
+    normalized = normalize_for_search(value)
+    if not normalized:
+        return False
+
+    tokens = [token for token in normalized.split(" ") if token]
+    if len(tokens) < 2:
+        return False
+    return any(token in TOPIC_CUE_TOKENS for token in tokens)
+
+
+def _headline_candidates_from_chunk_text(text: str) -> list[str]:
+    if not text:
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw_line in str(text).splitlines():
+        line = " ".join(raw_line.split())
+        if not line or ":" not in line:
+            continue
+
+        left, right = line.split(":", 1)
+        left_norm = _normalize_headline_text(left)
+        right_norm = _normalize_headline_text(right)
+
+        candidate = left_norm
+        if _normalize_headline_text(left_norm) in HEADLINE_VALUE_FROM_RIGHT_LABELS and right_norm:
+            candidate = right_norm
+
+        candidate = _normalize_headline_text(candidate)
+        if not candidate:
+            continue
+        if _is_ignored_headline(candidate):
+            continue
+        if len(candidate) > 80:
+            continue
+        if not _headline_has_topic_cue(candidate):
+            continue
+
+        key = candidate.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(candidate)
+
+    if not out:
+        for match in PROTOCOL_HEADLINE_RE.finditer(text):
+            candidate = _normalize_headline_text(match.group(1))
+            if not candidate or _is_ignored_headline(candidate):
+                continue
+            if not _headline_has_topic_cue(candidate):
+                continue
+            key = candidate.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(candidate)
+    return out
+
+
+def _load_protocol_subject_anchors(
+    *,
+    db,
+    protocol_document_ids: list[int],
+) -> dict[int, list[str]]:
+    normalized_ids: set[int] = set()
+    for doc_id in protocol_document_ids:
+        try:
+            normalized = int(doc_id)
+        except (TypeError, ValueError):
+            continue
+        if normalized > 0:
+            normalized_ids.add(normalized)
+
+    unique_document_ids = sorted(normalized_ids)
+    if not unique_document_ids:
+        return {}
+
+    rows = db.execute(
+        select(TextChunk.document_id, TextChunk.chunk_index, TextChunk.chunk_text)
+        .where(TextChunk.document_id.in_(unique_document_ids))
+        .where(TextChunk.source_kind == "protocol")
+        .order_by(TextChunk.document_id.asc(), TextChunk.chunk_index.asc())
+    ).all()
+
+    scored: dict[int, dict[str, float]] = {}
+    for document_id, chunk_index, chunk_text in rows:
+        candidates = _headline_candidates_from_chunk_text(str(chunk_text or ""))
+        if not candidates:
+            continue
+        index_value = int(chunk_index or 0)
+        position_score = 1.0 / max(1, index_value + 1)
+        bucket = scored.setdefault(int(document_id), {})
+        for candidate in candidates:
+            bucket[candidate] = bucket.get(candidate, 0.0) + position_score
+
+    out: dict[int, list[str]] = {}
+    for document_id, candidate_scores in scored.items():
+        ordered = [
+            candidate
+            for candidate, _ in sorted(candidate_scores.items(), key=lambda row: row[1], reverse=True)
+        ]
+        if ordered:
+            out[document_id] = ordered[:5]
+    return out
+
+
+def _load_cached_topic_tree(
+    *,
+    db,
+    protocol_titles: list[str],
+) -> dict[str, list[str]]:
+    normalized_titles = sorted({str(title).strip() for title in protocol_titles if str(title).strip()})
+    if not normalized_titles:
+        return {}
+
+    if not inspect(db.get_bind()).has_table("rag_decision_summary_cache"):
+        return {}
+
+    rows = db.execute(
+        select(
+            RagDecisionSummaryCache.protocol_title,
+            RagDecisionSummaryCache.topic_name,
+            RagDecisionSummaryCache.updated_at,
+        ).where(RagDecisionSummaryCache.protocol_title.in_(normalized_titles))
+    ).all()
+
+    tree_scores: dict[str, dict[str, float]] = {}
+    for protocol_title, topic_name, updated_at in rows:
+        protocol_key = str(protocol_title or "").strip()
+        if not protocol_key:
+            continue
+        root_topic, child_topic = _split_topic_path(topic_name)
+        if not child_topic or child_topic == "החלטה כללית":
+            continue
+        score = 1.0
+        if isinstance(updated_at, datetime):
+            age_days = max(0.0, (datetime.utcnow() - updated_at).total_seconds() / 86400.0)
+            score = max(0.2, 1.0 - min(age_days / 120.0, 0.8))
+
+        protocol_bucket = tree_scores.setdefault(protocol_key, {})
+        protocol_bucket[child_topic] = protocol_bucket.get(child_topic, 0.0) + score
+
+    out: dict[str, list[str]] = {}
+    for protocol_title, child_scores in tree_scores.items():
+        ordered_children = [
+            child
+            for child, _ in sorted(child_scores.items(), key=lambda row: row[1], reverse=True)
+            if child and child != "החלטה כללית"
+        ]
+        if ordered_children:
+            out[protocol_title] = ordered_children[:50]
+    return out
+
+
 def _run_ask(
     *,
     request: AskRequest,
@@ -230,6 +556,25 @@ def _run_ask(
     )
     retrieval_ms = round((time.perf_counter() - retrieval_started) * 1000.0, 3)
 
+    protocol_titles = [
+        context.document_title
+        for context in retrieval_result.contexts
+        if context.source_kind == "protocol" and context.document_title
+    ]
+    protocol_document_ids = [
+        context.document_id
+        for context in retrieval_result.contexts
+        if context.source_kind == "protocol"
+    ]
+    cached_topic_tree = _load_cached_topic_tree(
+        db=db,
+        protocol_titles=protocol_titles,
+    )
+    protocol_subject_anchors = _load_protocol_subject_anchors(
+        db=db,
+        protocol_document_ids=protocol_document_ids,
+    )
+
     resolved_llm_client = llm_client or build_rag_llm_client()
     answering_service = RagAnsweringService(llm_client=resolved_llm_client)
     answering_started = time.perf_counter()
@@ -237,6 +582,8 @@ def _run_ask(
         question=request.question,
         retrieval=retrieval_result,
         required_source_kinds=request.required_source_types,
+        cached_topic_tree=cached_topic_tree,
+        protocol_subject_anchors=protocol_subject_anchors,
         ask_request_id=ask_request_id,
     )
     answering_ms = round((time.perf_counter() - answering_started) * 1000.0, 3)
@@ -245,6 +592,16 @@ def _run_ask(
     limitations = list(answer_result.limitations)
     if answer_result.status == "answer" and len(retrieval_result.source_kinds) <= 1:
         limitations.append("הראיות חלקיות ומבוססות על סוג מקור אחד בלבד.")
+
+    if answer_result.status == "answer":
+        _persist_decision_summary_cache(
+            db=db,
+            question_hash=question_hash,
+            answer_sections=answer_result.answer_sections,
+            provider=answer_result.provider,
+            model=answer_result.model,
+        )
+        db.commit()
 
     citations_payload = [
         {
@@ -276,6 +633,9 @@ def _run_ask(
         "status": answer_result.status,
         "question": request.question,
         "answer": answer_result.answer,
+        "extended_answer": answer_result.extended_answer,
+        "answer_sections": list(answer_result.answer_sections),
+        "extended_answer_sections": list(answer_result.extended_answer_sections),
         "citations": citations_payload,
         "claim_assessments": list(answer_result.claim_assessments),
         "limitations": limitations,
@@ -644,7 +1004,33 @@ def ask_playground_page() -> HTMLResponse:
       background: #fff;
     }
     .output.refusal { border-color: #ebd6c5; background: #fff8f2; }
-    .answer-text, .refusal-text { direction: rtl; text-align: right; }
+    .answer-text, .refusal-text { direction: rtl; text-align: right; white-space: pre-line; }
+    .answer-sections { margin-top: 10px; display: grid; gap: 10px; }
+    .topic-tree-body { display: grid; gap: 10px; }
+    .protocol-group { border: 1px solid #d7e5ee; border-radius: 11px; padding: 10px; background: #fdfefe; }
+    .protocol-group > h4 { margin: 0 0 8px; font-size: 0.96rem; color: #23424f; }
+    .topic-root, .topic-child { border: 1px solid #e0eaf0; border-radius: 9px; background: #fff; }
+    .topic-root + .topic-root { margin-top: 8px; }
+    .topic-root > summary, .topic-child > summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 8px 10px;
+      font-weight: 600;
+      color: #2f4d58;
+      border-bottom: 1px solid #ecf2f7;
+    }
+    .topic-root > summary::-webkit-details-marker, .topic-child > summary::-webkit-details-marker { display: none; }
+    .topic-root > summary::before, .topic-child > summary::before { content: "▾ "; color: #668390; }
+    .topic-root:not([open]) > summary::before, .topic-child:not([open]) > summary::before { content: "▸ "; }
+    .topic-root-content { padding: 8px; display: grid; gap: 8px; }
+    .topic-child-content { padding: 8px 10px; display: grid; gap: 8px; }
+    .answer-section { border: 1px solid #dde7ee; border-radius: 10px; padding: 10px; background: #fbfdff; }
+    .answer-section h4 { margin: 0 0 4px; font-size: 0.98rem; }
+    .answer-section .topic { margin: 0 0 6px; color: #4c5963; font-size: 0.88rem; }
+    .answer-section .text { margin: 0; direction: rtl; text-align: right; }
+    .answer-section .extended { margin: 8px 0 0; direction: rtl; text-align: right; color: #30404a; border-top: 1px dashed #d6e4ec; padding-top: 8px; }
+    .decision-sources { margin: 0; padding-inline-start: 18px; }
+    .decision-sources li { margin: 4px 0; }
     ul { margin: 8px 0 0; padding-inline-start: 20px; }
     li { margin: 6px 0; line-height: 1.5; }
     a { color: #00696f; text-decoration: none; border-bottom: 1px dotted #8fbac2; }
@@ -728,6 +1114,7 @@ def ask_playground_page() -> HTMLResponse:
       </section>
       <div class="actions">
         <label class="muted"><input id="ask-debug-mode" type="checkbox" checked /> debug mode (show thresholds)</label>
+        <label class="muted"><input id="ask-show-extended" type="checkbox" /> show extended answer</label>
         <button type="submit">Send Ask Request</button>
         <span id="ask-playground-status" class="muted" aria-live="polite"></span>
       </div>
@@ -736,6 +1123,11 @@ def ask_playground_page() -> HTMLResponse:
     <section id="ask-playground-answer" class="output hidden">
       <h3>Answer</h3>
       <p id="ask-playground-answer-text" class="answer-text"></p>
+      <div id="ask-playground-answer-sections" class="answer-sections"></div>
+      <details id="ask-playground-extended-panel" class="hidden">
+        <summary>Extended answer (aggregate fallback)</summary>
+        <p id="ask-playground-extended-text" class="answer-text"></p>
+      </details>
       <ul id="ask-playground-limitations"></ul>
     </section>
 
@@ -767,6 +1159,11 @@ def ask_playground_page() -> HTMLResponse:
         <pre id="ask-playground-json"></pre>
       </details>
     </section>
+
+    <section id="ask-playground-topic-tree-panel" class="output hidden">
+      <h3>Full Topic Tree (DB cache)</h3>
+      <div id="ask-playground-topic-tree-body" class="topic-tree-body"></div>
+    </section>
   </article>
   <script>
     (() => {
@@ -784,10 +1181,14 @@ def ask_playground_page() -> HTMLResponse:
       const semanticNodeIdInput = document.getElementById("ask-semantic-node-id");
       const semanticLabelInput = document.getElementById("ask-semantic-label");
       const debugModeInput = document.getElementById("ask-debug-mode");
+      const showExtendedInput = document.getElementById("ask-show-extended");
 
       const statusNode = document.getElementById("ask-playground-status");
       const answerPanel = document.getElementById("ask-playground-answer");
       const answerText = document.getElementById("ask-playground-answer-text");
+      const answerSectionsNode = document.getElementById("ask-playground-answer-sections");
+      const extendedPanel = document.getElementById("ask-playground-extended-panel");
+      const extendedText = document.getElementById("ask-playground-extended-text");
       const limitationsList = document.getElementById("ask-playground-limitations");
       const refusalPanel = document.getElementById("ask-playground-refusal");
       const refusalText = document.getElementById("ask-playground-refusal-text");
@@ -799,6 +1200,13 @@ def ask_playground_page() -> HTMLResponse:
       const traceList = document.getElementById("ask-playground-trace-list");
       const metaList = document.getElementById("ask-playground-meta");
       const rawJson = document.getElementById("ask-playground-json");
+      const topicTreePanel = document.getElementById("ask-playground-topic-tree-panel");
+      const topicTreeBody = document.getElementById("ask-playground-topic-tree-body");
+      let lastExtendedAnswer = null;
+      let lastAnswerSections = [];
+      let lastExtendedSections = [];
+      let lastAnswerText = "";
+      let lastCitations = [];
 
       const hide = (node) => {
         if (node) {
@@ -823,6 +1231,424 @@ def ask_playground_page() -> HTMLResponse:
         item.textContent = text;
         node.appendChild(item);
       };
+
+      const RELATIONAL_TOKENS = new Set([
+        "לגבי", "בנוגע", "באשר", "בנושא", "עבור", "בעקבות", "בתחום", "בתחומי", "לצורך", "עם", "מול", "בין",
+        "ללא", "תוך", "כדי", "לשם", "של", "על", "אל", "את", "מן", "מ", "בהמשך"
+      ]);
+      const NON_INFORMATIONAL_TOKENS = new Set([
+        "אחראי", "אחראית", "אחריות", "מזכירת", "הועדה", "ועדה", "יו", "ר", "מנכ", "ל", "מח", "מחלקת",
+        "תנועה", "תחבורה", "גב", "ד", "ר", "עו", "ד", "שוטף", "בהתאם", "יוכנו", "להלן"
+      ]);
+
+      const sanitizeInformationalText = (value) => {
+        let cleaned = normalizeText(value);
+        if (!cleaned) {
+          return "";
+        }
+
+        cleaned = cleaned.replace(/_{3,}.*/g, "").trim();
+        cleaned = cleaned.replace(/\\s[-–]\\s(?:מח|מטה|משרד|ועדה|יו|מנכ|מנהל|מנהלת).*/g, "").trim();
+        cleaned = cleaned.replace(/\\b(?:מזכירת|יו"ר|מנכ"ל|מנהלת|מח'|מחלקת)\\b.*$/g, "").trim();
+        return cleaned;
+      };
+
+      const normalizeText = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
+      const tokenizeText = (value) => {
+        const normalized = normalizeText(value);
+        if (!normalized) {
+          return [];
+        }
+        return normalized.match(/[\u0590-\u05FF]{2,}|[a-z0-9]{2,}/g) || [];
+      };
+      const tokenizeMeaningfulText = (value) => {
+        return tokenizeText(value).filter(
+          (token) => token.length >= 3 && !RELATIONAL_TOKENS.has(token) && !NON_INFORMATIONAL_TOKENS.has(token)
+        );
+      };
+      const isAlmostEqualText = (left, right) => {
+        const leftNorm = normalizeText(left);
+        const rightNorm = normalizeText(right);
+        if (!leftNorm || !rightNorm) {
+          return false;
+        }
+        if (leftNorm === rightNorm) {
+          return true;
+        }
+
+        const leftTokens = new Set(tokenizeText(leftNorm));
+        const rightTokens = new Set(tokenizeText(rightNorm));
+        if (leftTokens.size === 0 || rightTokens.size === 0) {
+          return false;
+        }
+
+        let overlapCount = 0;
+        for (const token of leftTokens) {
+          if (rightTokens.has(token)) {
+            overlapCount += 1;
+          }
+        }
+
+        const overlap = overlapCount / Math.max(leftTokens.size, rightTokens.size, 1);
+        const lenRatio = Math.min(leftNorm.length, rightNorm.length) / Math.max(leftNorm.length, rightNorm.length, 1);
+        return (overlap >= 0.92 && lenRatio >= 0.82) || overlap >= 0.97;
+      };
+      const hasMeaningfulExtraInfo = (baseText, extendedText) => {
+        if (!extendedText || !String(extendedText).trim()) {
+          return false;
+        }
+        const baseSanitized = sanitizeInformationalText(baseText);
+        const extendedSanitized = sanitizeInformationalText(extendedText);
+        if (!extendedSanitized) {
+          return false;
+        }
+        if (isAlmostEqualText(baseSanitized, extendedSanitized)) {
+          return false;
+        }
+
+        const baseMeaningful = new Set(tokenizeMeaningfulText(baseSanitized));
+        const extMeaningful = new Set(tokenizeMeaningfulText(extendedSanitized));
+        const novelTokens = [];
+        for (const token of extMeaningful) {
+          if (!baseMeaningful.has(token)) {
+            novelTokens.push(token);
+          }
+        }
+
+        if (novelTokens.length < 4) {
+          return false;
+        }
+
+        const baseNorm = normalizeText(baseSanitized);
+        const extNorm = normalizeText(extendedSanitized);
+        if ((extNorm.length - baseNorm.length) < 40) {
+          return false;
+        }
+        const growthRatio = extNorm.length / Math.max(baseNorm.length, 1);
+        const noveltyRatio = novelTokens.length / Math.max(extMeaningful.size, 1);
+        if (growthRatio < 1.3 && noveltyRatio < 0.35) {
+          return false;
+        }
+        if (growthRatio < 1.35 && !(noveltyRatio >= 0.45 && novelTokens.length >= 6)) {
+          return false;
+        }
+        return true;
+      };
+      const splitTopicPath = (topicValue, fallbackText) => {
+        const rawTopic = String(topicValue || "").trim();
+        const parts = rawTopic.split(">").map((part) => part.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+          return {
+            root: parts[0],
+            child: parts.slice(1).join(" > "),
+          };
+        }
+
+        const fallbackWords = String(fallbackText || "").trim().split(/\\s+/).filter(Boolean);
+        return {
+          root: parts[0] || "נושא כללי",
+          child: fallbackWords.slice(0, 4).join(" ") || "החלטה",
+        };
+      };
+      const citationByChunkId = () => {
+        const byChunk = new Map();
+        const rows = Array.isArray(lastCitations) ? lastCitations : [];
+        for (const row of rows) {
+          if (!row || typeof row !== "object") {
+            continue;
+          }
+          const chunkId = typeof row.chunk_id === "string" ? row.chunk_id : "";
+          if (!chunkId || byChunk.has(chunkId)) {
+            continue;
+          }
+          byChunk.set(chunkId, row);
+        }
+        return byChunk;
+      };
+
+      const renderAnswerSections = () => {
+        if (!answerSectionsNode) {
+          return;
+        }
+        answerSectionsNode.innerHTML = "";
+
+        const sections = Array.isArray(lastAnswerSections) ? lastAnswerSections : [];
+        const extendedSections = Array.isArray(lastExtendedSections) ? lastExtendedSections : [];
+        const shouldShowExtended = Boolean(showExtendedInput && showExtendedInput.checked);
+        const citationMap = citationByChunkId();
+
+        const protocolOrder = [];
+        const protocolBuckets = new Map();
+
+        for (let idx = 0; idx < sections.length; idx += 1) {
+          const section = sections[idx];
+          if (!section || typeof section !== "object") {
+            continue;
+          }
+
+          const protocolTitle = typeof section.protocol_title === "string" ? section.protocol_title : "פרוטוקול";
+          const conciseText = typeof section.text === "string" ? section.text : "";
+          if (!conciseText.trim()) {
+            continue;
+          }
+
+          const topic = typeof section.topic_name === "string" ? section.topic_name : "נושא כללי";
+          const topicPath = splitTopicPath(topic, conciseText);
+          const extSection = extendedSections[idx];
+          const extText = extSection && typeof extSection === "object" && typeof extSection.text === "string"
+            ? extSection.text
+            : "";
+          const chunkIds = Array.isArray(section.chunk_ids) ? section.chunk_ids : [];
+
+          if (!protocolBuckets.has(protocolTitle)) {
+            protocolBuckets.set(protocolTitle, []);
+            protocolOrder.push(protocolTitle);
+          }
+          protocolBuckets.get(protocolTitle).push({
+            root: topicPath.root,
+            child: topicPath.child,
+            text: conciseText,
+            extText,
+            chunkIds,
+          });
+        }
+
+        for (const protocolTitle of protocolOrder) {
+          const protocolNode = document.createElement("section");
+          protocolNode.className = "protocol-group";
+
+          const protocolHeader = document.createElement("h4");
+          protocolHeader.textContent = protocolTitle;
+          protocolNode.appendChild(protocolHeader);
+
+          const rows = protocolBuckets.get(protocolTitle) || [];
+          const rootOrder = [];
+          const rootBuckets = new Map();
+          for (const row of rows) {
+            if (!rootBuckets.has(row.root)) {
+              rootBuckets.set(row.root, []);
+              rootOrder.push(row.root);
+            }
+            rootBuckets.get(row.root).push(row);
+          }
+
+          for (const rootLabel of rootOrder) {
+            const rootDetails = document.createElement("details");
+            rootDetails.className = "topic-root";
+            rootDetails.open = true;
+
+            const rootSummary = document.createElement("summary");
+            rootSummary.textContent = rootLabel;
+            rootDetails.appendChild(rootSummary);
+
+            const rootContent = document.createElement("div");
+            rootContent.className = "topic-root-content";
+
+            const rowsForRoot = rootBuckets.get(rootLabel) || [];
+            for (const row of rowsForRoot) {
+              const childDetails = document.createElement("details");
+              childDetails.className = "topic-child";
+              childDetails.open = true;
+
+              const childSummary = document.createElement("summary");
+              childSummary.textContent = row.child;
+              childDetails.appendChild(childSummary);
+
+              const childContent = document.createElement("div");
+              childContent.className = "topic-child-content";
+
+              const textNode = document.createElement("p");
+              textNode.className = "text";
+              textNode.textContent = row.text;
+              childContent.appendChild(textNode);
+
+              if (shouldShowExtended && hasMeaningfulExtraInfo(row.text, row.extText)) {
+                const extNode = document.createElement("p");
+                extNode.className = "extended";
+                extNode.textContent = `הרחבה: ${row.extText}`;
+                childContent.appendChild(extNode);
+              }
+
+              const sourceRows = [];
+              for (const chunkId of row.chunkIds) {
+                if (typeof chunkId !== "string") {
+                  continue;
+                }
+                const citation = citationMap.get(chunkId);
+                if (citation) {
+                  sourceRows.push(citation);
+                }
+              }
+              if (sourceRows.length > 0) {
+                const sourceTitle = document.createElement("p");
+                sourceTitle.className = "topic";
+                sourceTitle.textContent = "מקורות:";
+                childContent.appendChild(sourceTitle);
+
+                const sourceList = document.createElement("ul");
+                sourceList.className = "decision-sources";
+                for (const citation of sourceRows) {
+                  const doc = citation.document && typeof citation.document === "object" ? citation.document : {};
+                  const page = Number.isFinite(Number(citation.start_page)) ? Number(citation.start_page) : null;
+                  const hrefBase = doc.url || "#";
+                  const sourceItem = document.createElement("li");
+                  const sourceLink = document.createElement("a");
+                  sourceLink.href = page ? `${hrefBase}#page=${page}` : hrefBase;
+                  sourceLink.target = "_blank";
+                  sourceLink.rel = "noopener";
+                  sourceLink.textContent = citation.citation || citation.chunk_id || "source";
+                  sourceItem.appendChild(sourceLink);
+
+                  const sourceMeta = document.createElement("span");
+                  sourceMeta.className = "muted";
+                  sourceMeta.textContent = ` [${citation.source_type || "source"}] ${doc.title || "document"}`;
+                  sourceItem.appendChild(sourceMeta);
+
+                  sourceList.appendChild(sourceItem);
+                }
+                childContent.appendChild(sourceList);
+              }
+
+              childDetails.appendChild(childContent);
+              rootContent.appendChild(childDetails);
+            }
+
+            rootDetails.appendChild(rootContent);
+            protocolNode.appendChild(rootDetails);
+          }
+
+          answerSectionsNode.appendChild(protocolNode);
+        }
+      };
+
+      const renderExtendedAnswer = () => {
+        const shouldShow = Boolean(showExtendedInput && showExtendedInput.checked);
+        const hasExtended = typeof lastExtendedAnswer === "string" && lastExtendedAnswer.trim().length > 0;
+        const hasSections = Array.isArray(lastAnswerSections) && lastAnswerSections.length > 0;
+        if (!extendedPanel || !extendedText) {
+          return;
+        }
+
+        if (hasSections) {
+          extendedText.textContent = "";
+          hide(extendedPanel);
+          return;
+        }
+
+        if (shouldShow && hasExtended && hasMeaningfulExtraInfo(lastAnswerText, lastExtendedAnswer)) {
+          extendedText.textContent = lastExtendedAnswer;
+          show(extendedPanel);
+          return;
+        }
+        extendedText.textContent = "";
+        hide(extendedPanel);
+      };
+
+      const renderTopicTree = (payload) => {
+        if (!topicTreePanel || !topicTreeBody) {
+          return;
+        }
+        topicTreeBody.innerHTML = "";
+
+        const protocols = Array.isArray(payload && payload.protocols) ? payload.protocols : [];
+        if (protocols.length === 0) {
+          hide(topicTreePanel);
+          return;
+        }
+
+        for (const protocol of protocols) {
+          if (!protocol || typeof protocol !== "object") {
+            continue;
+          }
+          const protocolTitle = typeof protocol.protocol_title === "string" ? protocol.protocol_title : "פרוטוקול";
+          const roots = Array.isArray(protocol.roots) ? protocol.roots : [];
+
+          const protocolBlock = document.createElement("section");
+          protocolBlock.className = "protocol-group";
+
+          const protocolHeader = document.createElement("h4");
+          protocolHeader.textContent = protocolTitle;
+          protocolBlock.appendChild(protocolHeader);
+
+          for (const root of roots) {
+            if (!root || typeof root !== "object") {
+              continue;
+            }
+            const rootTopic = typeof root.topic === "string" ? root.topic : "נושא כללי";
+            const children = Array.isArray(root.children) ? root.children : [];
+
+            const rootDetails = document.createElement("details");
+            rootDetails.className = "topic-root";
+            rootDetails.open = false;
+
+            const rootSummary = document.createElement("summary");
+            rootSummary.textContent = `${rootTopic} (${children.length})`;
+            rootDetails.appendChild(rootSummary);
+
+            const rootContent = document.createElement("div");
+            rootContent.className = "topic-root-content";
+
+            for (const child of children) {
+              if (!child || typeof child !== "object") {
+                continue;
+              }
+              const childTopic = typeof child.topic === "string" ? child.topic : "החלטה כללית";
+              const childCount = Number.isFinite(Number(child.count)) ? Number(child.count) : 0;
+
+              const childDetails = document.createElement("details");
+              childDetails.className = "topic-child";
+              childDetails.open = false;
+
+              const childSummary = document.createElement("summary");
+              childSummary.textContent = `${childTopic} (${childCount})`;
+              childDetails.appendChild(childSummary);
+
+              const childContent = document.createElement("div");
+              childContent.className = "topic-child-content";
+              const note = document.createElement("p");
+              note.className = "muted";
+              note.textContent = `support count: ${childCount}`;
+              childContent.appendChild(note);
+              childDetails.appendChild(childContent);
+
+              rootContent.appendChild(childDetails);
+            }
+
+            rootDetails.appendChild(rootContent);
+            protocolBlock.appendChild(rootDetails);
+          }
+
+          topicTreeBody.appendChild(protocolBlock);
+        }
+
+        show(topicTreePanel);
+      };
+
+      const refreshTopicTree = async () => {
+        if (!topicTreePanel || !topicTreeBody) {
+          return;
+        }
+        try {
+          const response = await fetch("/topic/tree/cache", {
+            method: "GET",
+            headers: { "Accept": "application/json" },
+          });
+          if (!response.ok) {
+            throw new Error("topic_tree_request_failed");
+          }
+          const payload = await response.json();
+          renderTopicTree(payload);
+        } catch (_err) {
+          hide(topicTreePanel);
+        }
+      };
+
+      if (showExtendedInput) {
+        showExtendedInput.addEventListener("change", () => {
+          renderAnswerSections();
+          renderExtendedAnswer();
+        });
+      }
       const getCheckedValues = (name) => {
         return Array.from(document.querySelectorAll(`input[name=\"${name}\"]:checked`)).map((box) => box.value);
       };
@@ -884,12 +1710,24 @@ def ask_playground_page() -> HTMLResponse:
         hide(citationsPanel);
         hide(thresholdsPanel);
         hide(tracePanel);
+        hide(extendedPanel);
         resetList(limitationsList);
         resetList(citationsList);
         resetList(traceList);
         resetList(metaList);
+        if (answerSectionsNode) {
+          answerSectionsNode.innerHTML = "";
+        }
         rawJson.textContent = "";
         thresholdsJson.textContent = "";
+        if (extendedText) {
+          extendedText.textContent = "";
+        }
+        lastExtendedAnswer = null;
+        lastAnswerSections = [];
+        lastExtendedSections = [];
+        lastAnswerText = "";
+        lastCitations = [];
 
         try {
           const response = await fetch("/ask", {
@@ -955,7 +1793,24 @@ def ask_playground_page() -> HTMLResponse:
           }
 
           if (data.status === "answer") {
-            answerText.textContent = data.answer || "";
+            const sections = Array.isArray(data.answer_sections) ? data.answer_sections : [];
+            const extendedSections = Array.isArray(data.extended_answer_sections) ? data.extended_answer_sections : [];
+            const citations = Array.isArray(data.citations) ? data.citations : [];
+            lastAnswerSections = sections;
+            lastExtendedSections = extendedSections;
+            lastCitations = citations;
+
+            if (sections.length > 0) {
+              answerText.textContent = "";
+              hide(answerText);
+            } else {
+              answerText.textContent = data.answer || "";
+              show(answerText);
+            }
+            lastAnswerText = typeof data.answer === "string" ? data.answer : "";
+            lastExtendedAnswer = typeof data.extended_answer === "string" ? data.extended_answer : null;
+            renderAnswerSections();
+            renderExtendedAnswer();
             const limitations = Array.isArray(data.limitations) ? data.limitations : [];
             if (limitations.length === 0) {
               appendItem(limitationsList, "No limitations were returned.");
@@ -965,7 +1820,6 @@ def ask_playground_page() -> HTMLResponse:
               }
             }
 
-            const citations = Array.isArray(data.citations) ? data.citations : [];
             if (citations.length === 0) {
               appendItem(citationsList, "No citations were returned.");
             } else {
@@ -994,6 +1848,7 @@ def ask_playground_page() -> HTMLResponse:
             show(citationsPanel);
             hide(refusalPanel);
             statusNode.textContent = "Received grounded answer with citations.";
+            await refreshTopicTree();
             return;
           }
 
@@ -1011,15 +1866,18 @@ def ask_playground_page() -> HTMLResponse:
           hide(citationsPanel);
           show(refusalPanel);
           statusNode.textContent = "Model refused due to evidence policy.";
+          await refreshTopicTree();
         } catch (_err) {
           hide(answerPanel);
           hide(citationsPanel);
           hide(refusalPanel);
           hide(thresholdsPanel);
           hide(tracePanel);
+          hide(extendedPanel);
           statusNode.textContent = "Request failed. Try again in a moment.";
         }
       });
+      refreshTopicTree();
     })();
   </script>
 </body>
@@ -1215,6 +2073,90 @@ def semantic_node_detail(node_id: int, db=Depends(get_db)) -> dict:
             }
             for mention, document in mention_rows
         ],
+    }
+
+
+@app.get("/topic/tree/cache")
+def topic_tree_cache(*, limit: int = 5000, db=Depends(get_db)) -> dict:
+    if not inspect(db.get_bind()).has_table("rag_decision_summary_cache"):
+        return {"count": 0, "protocols": []}
+
+    effective_limit = max(100, min(10000, int(limit)))
+    rows = db.execute(
+        select(
+            RagDecisionSummaryCache.protocol_title,
+            RagDecisionSummaryCache.topic_name,
+            RagDecisionSummaryCache.updated_at,
+        )
+        .order_by(RagDecisionSummaryCache.updated_at.desc(), RagDecisionSummaryCache.id.desc())
+        .limit(effective_limit)
+    ).all()
+
+    protocol_tree: dict[str, dict[str, dict[str, Any]]] = {}
+    for protocol_title, topic_name, updated_at in rows:
+        protocol_key = str(protocol_title or "").strip() or "פרוטוקול"
+        root_topic, child_topic = _split_topic_path(topic_name)
+
+        root_bucket = protocol_tree.setdefault(protocol_key, {}).setdefault(
+            root_topic,
+            {"children": {}, "count": 0, "last_seen_at": None},
+        )
+        root_bucket["count"] += 1
+        if isinstance(updated_at, datetime):
+            iso = updated_at.isoformat()
+            if root_bucket["last_seen_at"] is None or iso > root_bucket["last_seen_at"]:
+                root_bucket["last_seen_at"] = iso
+
+        child_bucket = root_bucket["children"].setdefault(
+            child_topic,
+            {"count": 0, "last_seen_at": None},
+        )
+        child_bucket["count"] += 1
+        if isinstance(updated_at, datetime):
+            iso = updated_at.isoformat()
+            if child_bucket["last_seen_at"] is None or iso > child_bucket["last_seen_at"]:
+                child_bucket["last_seen_at"] = iso
+
+    protocol_items: list[dict[str, Any]] = []
+    for protocol_title, roots in sorted(protocol_tree.items(), key=lambda row: row[0]):
+        root_items: list[dict[str, Any]] = []
+        for root_topic, root_payload in sorted(
+            roots.items(),
+            key=lambda row: row[1]["count"],
+            reverse=True,
+        ):
+            child_items = [
+                {
+                    "topic": child_topic,
+                    "count": int(child_payload["count"]),
+                    "last_seen_at": child_payload["last_seen_at"],
+                }
+                for child_topic, child_payload in sorted(
+                    root_payload["children"].items(),
+                    key=lambda row: row[1]["count"],
+                    reverse=True,
+                )
+            ]
+            root_items.append(
+                {
+                    "topic": root_topic,
+                    "count": int(root_payload["count"]),
+                    "last_seen_at": root_payload["last_seen_at"],
+                    "children": child_items,
+                }
+            )
+
+        protocol_items.append(
+            {
+                "protocol_title": protocol_title,
+                "root_count": len(root_items),
+                "roots": root_items,
+            }
+        )
+
+    return {
+        "count": len(protocol_items),
+        "protocols": protocol_items,
     }
 
 
@@ -1528,6 +2470,31 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
     .ask-output {{ margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }}
     .ask-output.refusal {{ border-color: #e6d1be; background: #fff8f2; }}
     .ask-output h3 {{ margin: 0 0 8px; font-size: 0.98rem; }}
+    #ask-answer-text {{ direction: rtl; text-align: right; white-space: pre-line; }}
+    .answer-sections {{ margin-top: 10px; display: grid; gap: 10px; }}
+    .protocol-group {{ border: 1px solid #d7e5ee; border-radius: 11px; padding: 10px; background: #fdfefe; }}
+    .protocol-group > h4 {{ margin: 0 0 8px; font-size: 0.96rem; color: #23424f; }}
+    .topic-root, .topic-child {{ border: 1px solid #e0eaf0; border-radius: 9px; background: #fff; }}
+    .topic-root + .topic-root {{ margin-top: 8px; }}
+    .topic-root > summary, .topic-child > summary {{
+      cursor: pointer;
+      list-style: none;
+      padding: 8px 10px;
+      font-weight: 600;
+      color: #2f4d58;
+      border-bottom: 1px solid #ecf2f7;
+    }}
+    .topic-root > summary::-webkit-details-marker, .topic-child > summary::-webkit-details-marker {{ display: none; }}
+    .topic-root > summary::before, .topic-child > summary::before {{ content: "▾ "; color: #668390; }}
+    .topic-root:not([open]) > summary::before, .topic-child:not([open]) > summary::before {{ content: "▸ "; }}
+    .topic-root-content {{ padding: 8px; display: grid; gap: 8px; }}
+    .topic-child-content {{ padding: 8px 10px; display: grid; gap: 8px; }}
+    .answer-section {{ border: 1px solid #dde7ee; border-radius: 10px; padding: 10px; background: #fbfdff; }}
+    .answer-section h4 {{ margin: 0 0 4px; font-size: 0.98rem; }}
+    .answer-section .topic {{ margin: 0 0 6px; color: #4c5963; font-size: 0.88rem; }}
+    .answer-section .text {{ margin: 0; direction: rtl; text-align: right; }}
+    .decision-sources {{ margin: 0; padding-inline-start: 18px; }}
+    .decision-sources li {{ margin: 4px 0; }}
     pre {{
       margin: 0;
       border: 1px solid #d5e4ea;
@@ -1590,6 +2557,7 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
       <section id="ask-answer-panel" class="ask-output hidden">
         <h3>תשובה</h3>
         <p id="ask-answer-text"></p>
+        <div id="ask-answer-sections" class="answer-sections"></div>
         <ul id="ask-limitations"></ul>
       </section>
       <section id="ask-refusal-panel" class="ask-output refusal hidden">
@@ -1620,6 +2588,7 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
       const statusNode = document.getElementById("ask-status");
       const answerPanel = document.getElementById("ask-answer-panel");
       const answerText = document.getElementById("ask-answer-text");
+      const answerSectionsNode = document.getElementById("ask-answer-sections");
       const limitationsList = document.getElementById("ask-limitations");
       const refusalPanel = document.getElementById("ask-refusal-panel");
       const refusalText = document.getElementById("ask-refusal-text");
@@ -1658,6 +2627,19 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
         listNode.appendChild(item);
       }};
 
+      const splitTopicPath = (topicValue, fallbackText) => {{
+        const rawTopic = String(topicValue || "").trim();
+        const parts = rawTopic.split(">").map((part) => part.trim()).filter(Boolean);
+        if (parts.length >= 2) {{
+          return {{ root: parts[0], child: parts.slice(1).join(" > ") }};
+        }}
+        const fallbackWords = String(fallbackText || "").trim().split(/\\s+/).filter(Boolean);
+        return {{
+          root: parts[0] || "נושא כללי",
+          child: fallbackWords.slice(0, 4).join(" ") || "החלטה",
+        }};
+      }};
+
       form.addEventListener("submit", async (event) => {{
         event.preventDefault();
         const question = (questionInput.value || "").trim();
@@ -1690,6 +2672,9 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
         hide(thresholdsPanel);
         clearList(limitationsList);
         clearList(citationsList);
+        if (answerSectionsNode) {{
+          answerSectionsNode.innerHTML = "";
+        }}
         if (thresholdsJson) {{
           thresholdsJson.textContent = "";
         }}
@@ -1713,7 +2698,155 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
             hide(thresholdsPanel);
           }}
           if (data.status === "answer") {{
-            answerText.textContent = data.answer || "";
+            const sections = Array.isArray(data.answer_sections) ? data.answer_sections : [];
+            const citationRows = Array.isArray(data.citations) ? data.citations : [];
+            if (sections.length > 0) {{
+              answerText.textContent = "";
+              hide(answerText);
+            }} else {{
+              answerText.textContent = data.answer || "";
+              show(answerText);
+            }}
+
+            if (answerSectionsNode) {{
+              answerSectionsNode.innerHTML = "";
+              const citationByChunk = new Map();
+              for (const citation of citationRows) {{
+                if (!citation || typeof citation !== "object") {{
+                  continue;
+                }}
+                const chunkId = typeof citation.chunk_id === "string" ? citation.chunk_id : "";
+                if (!chunkId || citationByChunk.has(chunkId)) {{
+                  continue;
+                }}
+                citationByChunk.set(chunkId, citation);
+              }}
+
+              const protocolOrder = [];
+              const protocolBuckets = new Map();
+              for (const section of sections) {{
+                if (!section || typeof section !== "object") {{
+                  continue;
+                }}
+                const protocolTitle = typeof section.protocol_title === "string" ? section.protocol_title : "פרוטוקול";
+                const topic = typeof section.topic_name === "string" ? section.topic_name : "נושא כללי";
+                const text = typeof section.text === "string" ? section.text : "";
+                if (!text.trim()) {{
+                  continue;
+                }}
+                const path = splitTopicPath(topic, text);
+                const chunkIds = Array.isArray(section.chunk_ids) ? section.chunk_ids : [];
+
+                if (!protocolBuckets.has(protocolTitle)) {{
+                  protocolBuckets.set(protocolTitle, []);
+                  protocolOrder.push(protocolTitle);
+                }}
+                protocolBuckets.get(protocolTitle).push({{
+                  root: path.root,
+                  child: path.child,
+                  text,
+                  chunkIds,
+                }});
+              }}
+
+              for (const protocolTitle of protocolOrder) {{
+                const protocolNode = document.createElement("section");
+                protocolNode.className = "protocol-group";
+
+                const protocolHeader = document.createElement("h4");
+                protocolHeader.textContent = protocolTitle;
+                protocolNode.appendChild(protocolHeader);
+
+                const rows = protocolBuckets.get(protocolTitle) || [];
+                const rootOrder = [];
+                const rootBuckets = new Map();
+                for (const row of rows) {{
+                  if (!rootBuckets.has(row.root)) {{
+                    rootBuckets.set(row.root, []);
+                    rootOrder.push(row.root);
+                  }}
+                  rootBuckets.get(row.root).push(row);
+                }}
+
+                for (const rootLabel of rootOrder) {{
+                  const rootDetails = document.createElement("details");
+                  rootDetails.className = "topic-root";
+                  rootDetails.open = true;
+
+                  const rootSummary = document.createElement("summary");
+                  rootSummary.textContent = rootLabel;
+                  rootDetails.appendChild(rootSummary);
+
+                  const rootContent = document.createElement("div");
+                  rootContent.className = "topic-root-content";
+                  for (const row of rootBuckets.get(rootLabel) || []) {{
+                    const childDetails = document.createElement("details");
+                    childDetails.className = "topic-child";
+                    childDetails.open = true;
+
+                    const childSummary = document.createElement("summary");
+                    childSummary.textContent = row.child;
+                    childDetails.appendChild(childSummary);
+
+                    const childContent = document.createElement("div");
+                    childContent.className = "topic-child-content";
+
+                    const textNode = document.createElement("p");
+                    textNode.className = "text";
+                    textNode.textContent = row.text;
+                    childContent.appendChild(textNode);
+
+                    const sourceRows = [];
+                    for (const chunkId of row.chunkIds) {{
+                      if (typeof chunkId !== "string") {{
+                        continue;
+                      }}
+                      const citation = citationByChunk.get(chunkId);
+                      if (citation) {{
+                        sourceRows.push(citation);
+                      }}
+                    }}
+                    if (sourceRows.length > 0) {{
+                      const sourceTitle = document.createElement("p");
+                      sourceTitle.className = "topic";
+                      sourceTitle.textContent = "מקורות:";
+                      childContent.appendChild(sourceTitle);
+
+                      const sourceList = document.createElement("ul");
+                      sourceList.className = "decision-sources";
+                      for (const citation of sourceRows) {{
+                        const documentPayload = citation.document && typeof citation.document === "object" ? citation.document : {{}};
+                        const page = Number.isFinite(Number(citation.start_page)) ? Number(citation.start_page) : null;
+                        const hrefBase = documentPayload.url || "#";
+                        const sourceItem = document.createElement("li");
+                        const sourceLink = document.createElement("a");
+                        sourceLink.href = page ? `${{hrefBase}}#page=${{page}}` : hrefBase;
+                        sourceLink.target = "_blank";
+                        sourceLink.rel = "noopener";
+                        sourceLink.textContent = citation.citation || (page ? `עמוד ${{page}}` : "מקור");
+                        sourceItem.appendChild(sourceLink);
+
+                        const sourceMeta = document.createElement("span");
+                        sourceMeta.className = "muted";
+                        const sourceType = citation.source_type || "source";
+                        const title = documentPayload.title || "מסמך";
+                        sourceMeta.textContent = ` [${{sourceType}}] ${{title}}`;
+                        sourceItem.appendChild(sourceMeta);
+                        sourceList.appendChild(sourceItem);
+                      }}
+                      childContent.appendChild(sourceList);
+                    }}
+
+                    childDetails.appendChild(childContent);
+                    rootContent.appendChild(childDetails);
+                  }}
+                  rootDetails.appendChild(rootContent);
+                  protocolNode.appendChild(rootDetails);
+                }}
+
+                answerSectionsNode.appendChild(protocolNode);
+              }}
+            }}
             const limitations = Array.isArray(data.limitations) ? data.limitations : [];
             if (limitations.length === 0) {{
               appendListItem(limitationsList, "לא צוינו מגבלות נוספות.");
@@ -1723,7 +2856,6 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
               }}
             }}
 
-            const citationRows = Array.isArray(data.citations) ? data.citations : [];
             if (citationRows.length === 0) {{
               appendListItem(citationsList, "לא הוחזרו ציטוטים.");
             }} else {{

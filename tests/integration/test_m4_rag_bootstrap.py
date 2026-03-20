@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from municipality.api import AskRequest, _run_ask
 from municipality.eval_rag import evaluate_rag_eval_set, load_rag_eval_set, required_source_kinds, retrieval_source_kinds
+from municipality.migrations import apply_all
 from municipality.rag_answering import REASON_MISSING_PROTOCOL_EVIDENCE, RagAnsweringService
 from municipality.rag_llm import MockRagProvider, RagLlmConfig, build_rag_llm_client
 from municipality.rag_retrieval import RagRetrievalService
@@ -168,6 +169,7 @@ def test_m4_rag_eval_harness_scores_new_ask_outputs() -> None:
 
     db_path = PROJECT_ROOT / "municipality.db"
     engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    apply_all(engine, Path("migrations"))
     with Session(engine) as session:
 
         def ask_fn(**kwargs) -> dict:

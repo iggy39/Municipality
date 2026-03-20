@@ -78,6 +78,9 @@ def test_rag_answering_returns_structured_answer_with_citations_and_limitations(
 
     assert result.status == "answer"
     assert result.answer is not None
+    assert result.extended_answer is not None
+    assert isinstance(result.answer_sections, list)
+    assert result.answer_sections
     assert len(result.citations) == 2
     assert {row.source_kind for row in result.citations} == {"protocol", "attachment"}
     assert result.limitations
@@ -173,6 +176,8 @@ def test_rag_answering_skips_second_external_call_when_answer_includes_inline_ve
 
     assert result.status == "answer"
     assert result.answer is not None
+    assert result.extended_answer is not None
+    assert result.answer_sections
     assert [request["call_type"] for request in provider.requests] == ["answer"]
     assert result.scoring.get("verify_route") == "deterministic_only"
     assert result.scoring.get("fallback_verify_attempted") is False
@@ -654,6 +659,10 @@ def test_rag_answering_drops_non_decision_suffix_claim_from_final_answer() -> No
 
     assert result.status == "answer"
     assert result.answer is not None
+    assert result.extended_answer is not None
+    assert "אושרה הזמנה תקציבית" in result.extended_answer
+    assert len(result.answer_sections) == 2
+    assert len(result.extended_answer_sections) == len(result.answer_sections)
     assert "קראוון" not in result.answer
     assert "אושרה הוצאת הזמנה תקציבית" in result.answer
     assert (result.scoring.get("dropped_claim_count") or 0) >= 1
@@ -694,6 +703,7 @@ def test_rag_answering_refuses_when_attachment_side_is_missing() -> None:
 
     assert result.status == "refusal"
     assert result.answer is None
+    assert result.extended_answer is None
     assert result.citations == []
     assert result.refusal_reason_code == REASON_MISSING_ATTACHMENT_EVIDENCE
     assert "אין מספיק ראיות" in (result.refusal_message_he or "")
@@ -780,11 +790,118 @@ def test_rag_answering_reconstructs_decision_answer_when_model_outputs_only_cont
 
     assert result.status == "answer"
     assert result.answer is not None
+    assert result.extended_answer is not None
+    assert len(result.answer_sections) >= 2
+    assert len(result.extended_answer_sections) == len(result.answer_sections)
     assert "אושרה" in result.answer or "מאשרים" in result.answer
     assert result.scoring.get("decision_claim_count") == 0
     assert result.scoring.get("decision_claim_count_discussion", 0) >= 1
     assert result.scoring.get("decision_reconstruction_used") is True
     assert result.scoring.get("decision_reconstruction_count", 0) >= 2
+
+
+def test_topic_resolution_prefers_protocol_child_when_model_hint_is_generic() -> None:
+    summary_items = [
+        {
+            "summary_he": "הוחלט לקדם הכשרות ייעודיות בנושא עבור גורמי מקצוע.",
+            "extended_summary_he": "הוחלט לקדם הכשרות ייעודיות בנושא עבור גורמי מקצוע.",
+            "topic_name_he": "מאבק בנגע הסמים המסוכנים",
+            "topic_hint_he": "מאבק בנגע הסמים המסוכנים",
+            "citation_chunk_ids": ["chunk-a"],
+        }
+    ]
+    context_by_chunk = {
+        "chunk-a": RagContextChunk(
+            chunk_id="chunk-a",
+            score=0.88,
+            snippet="הוחלט לקדם הכשרות ייעודיות בנושא עבור גורמי מקצוע.",
+            citation="p.1",
+            source_kind="protocol",
+            document_id=30,
+            document_title="פרוטוקול הועדה למאבק בנגע הסמים המסוכנים 1-25 14.05.25",
+            document_url="https://example.local/p.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:30",
+            start_page=1,
+            end_page=1,
+            chunk_text="הוחלט לקדם הכשרות ייעודיות בנושא עבור גורמי מקצוע.",
+            semantic_topic_labels=["הכשרות ייעודיות", "שיתוף פעולה עם קופות החולים"],
+        )
+    }
+
+    answer_sections, extended_sections = rag_answering._build_answer_sections(
+        summary_items=summary_items,
+        context_by_chunk=context_by_chunk,
+        fallback_topic="מה הוחלט בעיר",
+    )
+
+    assert len(answer_sections) == 1
+    assert len(extended_sections) == 1
+    topic_name = answer_sections[0]["topic_name"]
+    assert ">" in topic_name
+    assert "הכשרות" in topic_name
+    assert answer_sections[0]["topic_route"] in {
+        "protocol_tree_child",
+        "protocol_tree_sibling_fallback",
+        "protocol_tree_sibling_default",
+    }
+
+
+def test_topic_resolution_uses_sibling_fallback_before_general_topic() -> None:
+    summary_items = [
+        {
+            "summary_he": "הוחלט לקדם הכשרות ייעודיות בנושא התמכרות לתרופות מרשם עבור גורמי מקצוע.",
+            "extended_summary_he": "הוחלט לקדם הכשרות ייעודיות בנושא התמכרות לתרופות מרשם עבור גורמי מקצוע.",
+            "topic_name_he": "מאבק בנגע הסמים המסוכנים",
+            "topic_hint_he": "מאבק בנגע הסמים המסוכנים",
+            "citation_chunk_ids": ["chunk-a"],
+        }
+    ]
+    protocol_title = "פרוטוקול הועדה למאבק בנגע הסמים המסוכנים 1-25 14.05.25"
+    context_by_chunk = {
+        "chunk-a": RagContextChunk(
+            chunk_id="chunk-a",
+            score=0.81,
+            snippet="הוחלט לקדם הכשרות ייעודיות בנושא התמכרות לתרופות מרשם.",
+            citation="p.2",
+            source_kind="protocol",
+            document_id=30,
+            document_title=protocol_title,
+            document_url="https://example.local/p.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:30",
+            start_page=2,
+            end_page=2,
+            chunk_text="הוחלט לקדם הכשרות ייעודיות בנושא התמכרות לתרופות מרשם.",
+            semantic_topic_labels=[],
+        )
+    }
+
+    answer_sections, _ = rag_answering._build_answer_sections(
+        summary_items=summary_items,
+        context_by_chunk=context_by_chunk,
+        fallback_topic="מה הוחלט בעיר",
+        cached_topic_tree={
+            protocol_title: ["הכשרת עמיתים", "שיתוף פעולה קופות החולים"],
+        },
+    )
+
+    assert len(answer_sections) == 1
+    topic_name = answer_sections[0]["topic_name"]
+    assert topic_name != "מאבק נגע הסמים המסוכנים > החלטה כללית"
+    assert answer_sections[0]["topic_route"] in {
+        "protocol_tree_child",
+        "protocol_tree_sibling_fallback",
+        "protocol_tree_sibling_default",
+    }
+
+
+def test_topic_cleaning_reduces_over_specific_subtopic_phrase() -> None:
+    cleaned = rag_answering._clean_topic_candidate("הוספת תמרורים מוארים לאיסור פניה שמאלה", min_tokens=2)
+
+    assert cleaned is not None
+    assert "לאיסור" not in cleaned
+    assert cleaned in {"תמרורים מוארים", "תמרורים מוארים פניה", "הוספת תמרורים"}
 
 
 def test_rag_answering_refuses_when_no_decision_content_exists() -> None:
