@@ -24,6 +24,8 @@ This directory breaks `docs/AGENT_IMPLEMENTATION_PLAN.md` into concrete, executa
 - `M4_rag_citations.md`
 - `M5_geo_step5.md`
 - `M6_timeline_trackA.md`
+- `GEO_phase1.md`
+- `GEO_phase2.md`
 
 ## Global guardrails for all milestones
 
