@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -53,11 +54,15 @@ class BytezSemanticClient:
         endpoint: str | None = None,
         timeout_seconds: float = 60.0,
         model_name: str = BYTEZ_MODEL,
+        max_attempts: int = 3,
+        retry_backoff_seconds: float = 0.75,
     ):
         self.api_key = api_key if api_key is not None else os.getenv("BYTEZ_API_KEY")
         self.endpoint = endpoint or os.getenv("BYTEZ_API_URL", DEFAULT_BYTEZ_API_URL)
         self.timeout_seconds = timeout_seconds
         self._model_name = model_name
+        self.max_attempts = max(1, int(max_attempts))
+        self.retry_backoff_seconds = max(0.0, float(retry_backoff_seconds))
 
     @property
     def provider_name(self) -> str:
@@ -93,22 +98,41 @@ class BytezSemanticClient:
             ],
         }
 
-        try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
-                response = client.post(
-                    self.endpoint,
-                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                    json=body,
-                )
-                response.raise_for_status()
-                payload = response.json()
-        except Exception as exc:
+        payload: dict[str, Any] | None = None
+        last_exception: Exception | None = None
+        for attempt_index in range(1, self.max_attempts + 1):
+            try:
+                with httpx.Client(timeout=self.timeout_seconds) as client:
+                    response = client.post(
+                        self.endpoint,
+                        headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                        json=body,
+                    )
+                    response.raise_for_status()
+                    parsed_payload = response.json()
+                if isinstance(parsed_payload, dict):
+                    payload = parsed_payload
+                    last_exception = None
+                    break
+                last_exception = ValueError("response JSON root is not an object")
+            except Exception as exc:  # noqa: BLE001
+                last_exception = exc
+
+            if attempt_index < self.max_attempts and self.retry_backoff_seconds > 0.0:
+                time.sleep(self.retry_backoff_seconds * attempt_index)
+
+        if payload is None:
+            error_suffix = f"; attempts={self.max_attempts}" if self.max_attempts > 1 else ""
+            if last_exception is None:
+                error_text = f"model response payload missing{error_suffix}"
+            else:
+                error_text = f"{last_exception.__class__.__name__}:{last_exception}{error_suffix}"
             return SemanticModelResponse(
                 payload=None,
                 request_tokens=None,
                 response_tokens=None,
                 error_code="MODEL_REQUEST_FAILED",
-                error_text=f"{exc.__class__.__name__}:{exc}",
+                error_text=error_text,
             )
 
         usage = payload.get("usage") if isinstance(payload, dict) else {}
@@ -132,7 +156,7 @@ class BytezSemanticClient:
                 request_tokens=request_tokens,
                 response_tokens=response_tokens,
                 error_code="MODEL_INVALID_JSON",
-                error_text="response JSON is not an object",
+                error_text=_invalid_json_error_text(content),
             )
 
         return SemanticModelResponse(
@@ -247,18 +271,213 @@ def _extract_response_content(payload: dict[str, Any]) -> Any | None:
     message = choices[0].get("message")
     if not isinstance(message, dict):
         return None
-    return message.get("content")
+    content = message.get("content")
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            text_value = item.get("text")
+            if isinstance(text_value, str) and text_value.strip():
+                text_parts.append(text_value.strip())
+        if text_parts:
+            return "\n".join(text_parts)
+        return None
+    return content
 
 
 def _parse_json_content(content: Any) -> Any | None:
     if isinstance(content, dict):
-        return content
+        coerced = _coerce_semantic_payload(content)
+        return coerced if coerced is not None else content
+    if isinstance(content, list):
+        if len(content) == 1 and isinstance(content[0], dict):
+            return content[0]
+        return None
     if isinstance(content, str):
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
+        compact = content.strip()
+        if not compact:
             return None
+
+        parsed = _try_json_loads(compact)
+        if parsed is not None:
+            coerced = _coerce_semantic_payload(parsed)
+            if coerced is not None:
+                return coerced
+            return parsed
+
+        stripped_fence = _strip_markdown_fence(compact)
+        if stripped_fence != compact:
+            parsed = _try_json_loads(stripped_fence)
+            if parsed is not None:
+                coerced = _coerce_semantic_payload(parsed)
+                if coerced is not None:
+                    return coerced
+                return parsed
+
+        extracted_payload = _extract_best_semantic_payload(compact)
+        if extracted_payload is not None:
+            return extracted_payload
     return None
+
+
+def _try_json_loads(value: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+    if isinstance(parsed, dict):
+        return parsed
+    if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
+        return parsed[0]
+    return None
+
+
+def _strip_markdown_fence(value: str) -> str:
+    compact = value.strip()
+    if not compact.startswith("```"):
+        return compact
+
+    lines = compact.splitlines()
+    if len(lines) < 3:
+        return compact
+    if lines[-1].strip() != "```":
+        return compact
+
+    return "\n".join(lines[1:-1]).strip()
+
+
+def _extract_first_json_object(value: str) -> str | None:
+    start = value.find("{")
+    while start >= 0:
+        depth = 0
+        in_string = False
+        escaped = False
+        for idx in range(start, len(value)):
+            char = value[idx]
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return value[start : idx + 1]
+        start = value.find("{", start + 1)
+    return None
+
+
+def _extract_best_semantic_payload(value: str) -> dict[str, Any] | None:
+    start = value.find("{")
+    fallback: dict[str, Any] | None = None
+    while start >= 0:
+        candidate_text = _extract_balanced_object(value=value, start_index=start)
+        if candidate_text is None:
+            start = value.find("{", start + 1)
+            continue
+
+        parsed = _try_json_loads(candidate_text)
+        if parsed is None:
+            start = value.find("{", start + 1)
+            continue
+
+        coerced = _coerce_semantic_payload(parsed)
+        if coerced is not None and _looks_like_semantic_root(coerced):
+            return coerced
+        if fallback is None:
+            fallback = parsed
+        start = value.find("{", start + 1)
+
+    if fallback is None:
+        return None
+    coerced_fallback = _coerce_semantic_payload(fallback)
+    return coerced_fallback if coerced_fallback is not None else fallback
+
+
+def _extract_balanced_object(*, value: str, start_index: int) -> str | None:
+    if start_index < 0 or start_index >= len(value) or value[start_index] != "{":
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for idx in range(start_index, len(value)):
+        char = value[idx]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return value[start_index : idx + 1]
+    return None
+
+
+def _coerce_semantic_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    if _looks_like_semantic_root(payload):
+        normalized = dict(payload)
+        if not isinstance(normalized.get("evidence_spans"), list):
+            normalized["evidence_spans"] = []
+        if not isinstance(normalized.get("nodes"), list):
+            normalized["nodes"] = []
+        return normalized
+
+    for key in ("output", "data", "result", "semantic", "response"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            coerced_nested = _coerce_semantic_payload(nested)
+            if coerced_nested is not None:
+                return coerced_nested
+
+    if _looks_like_evidence_span(payload):
+        return {"evidence_spans": [payload], "nodes": []}
+    if _looks_like_node(payload):
+        return {"evidence_spans": [], "nodes": [payload]}
+    return None
+
+
+def _looks_like_semantic_root(payload: dict[str, Any]) -> bool:
+    return "evidence_spans" in payload or "nodes" in payload
+
+
+def _looks_like_evidence_span(payload: dict[str, Any]) -> bool:
+    required_keys = {"span_id", "category", "start_offset", "end_offset", "text"}
+    return required_keys.issubset(payload.keys())
+
+
+def _looks_like_node(payload: dict[str, Any]) -> bool:
+    required_keys = {"candidate_id", "label_he", "node_kind", "semantic_type"}
+    return required_keys.issubset(payload.keys())
+
+
+def _invalid_json_error_text(content: Any) -> str:
+    if content is None:
+        return "response JSON is not an object; content is empty"
+    content_type = type(content).__name__
+    if isinstance(content, str):
+        snippet = content.strip().replace("\n", " ")[:240]
+        return f"response JSON is not an object; content_type={content_type}; snippet={snippet}"
+    return f"response JSON is not an object; content_type={content_type}"
 
 
 def _loads_json(value: str | None) -> Any | None:
@@ -285,7 +504,8 @@ def _validation_report_to_dict(report: SemanticValidationReport) -> dict[str, An
 
 
 def _validation_report_from_dict(value: dict[str, Any]) -> SemanticValidationReport:
-    raw_issues = value.get("issues") if isinstance(value.get("issues"), list) else []
+    issues_value = value.get("issues")
+    raw_issues: list[Any] = issues_value if isinstance(issues_value, list) else []
     issues: list[SemanticValidationIssue] = []
     for raw in raw_issues:
         if not isinstance(raw, dict):
