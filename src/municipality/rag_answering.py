@@ -243,8 +243,6 @@ GENERIC_QUERY_TOKENS = {
     "בעיר",
     "עירייה",
     "העירייה",
-    "הסכם",
-    "בהסכם",
     "בפרוטוקול",
     "פרוטוקול",
 }
@@ -312,9 +310,12 @@ TOPIC_RELATIONAL_EDGE_TOKENS = {
 }
 
 TOPIC_TOKEN_NORMALIZATION = {
+    "בבקשות": "בקשות",
     "למאבק": "מאבק",
     "במאבק": "מאבק",
     "בנגע": "נגע",
+    "להקצאת": "להקצאה",
+    "בהקצאת": "הקצאה",
     "לועדת": "ועדה",
     "בועדת": "ועדה",
     "בוועדה": "ועדה",
@@ -364,6 +365,73 @@ TOPIC_INSTRUMENT_ONLY_TOKENS = {
     "אומדן",
     "אומדנים",
 }
+SEMANTIC_TOPIC_STOP_TOKENS = {
+    "פרוטוקול",
+    "ועדה",
+    "ועדת",
+    "הועדה",
+    "הוועדה",
+    "מס",
+    "מספר",
+    "ישיבה",
+    "דיון",
+    "דיונים",
+    "החלטה",
+    "החלטות",
+    "אישור",
+    "מאשר",
+    "מאשרים",
+    "עיר",
+    "בעיר",
+    "עירייה",
+    "העירייה",
+}
+SEMANTIC_TOPIC_GENERIC_TOKENS = {
+    "בקשה",
+    "בקשות",
+    "הקצאה",
+    "להקצאה",
+    "להקצאת",
+    "דיון",
+    "בבקשות",
+    "בבקשה",
+    "כללי",
+}
+SUBJECTLESS_PUBLICATION_PATTERNS = [
+    re.compile(r"פרסום\s+(?:זמני|ראשון|שני)(?:\s+ו(?:זמני|ראשון|שני))?\s+בעיתונות"),
+    re.compile(r"פרסום\s+בעיתונות"),
+    re.compile(r"פרסום\s+[^\n\.]{1,50}\s+בעיתונות"),
+]
+OBJECT_ROOT_KEYWORDS: dict[str, set[str]] = {
+    "הסכמים": {"הסכם", "הסכמים", "חוזה", "חוזים", "רשות"},
+    "הקצאות": {"הקצאה", "הקצאות", "להקצאה", "להקצאת", "בקשה", "בקשות", "עמותה", "עמותה"},
+    "תמרורים": {"תמרור", "תמרורים"},
+    "בטיחות בדרכים": {"בטיחות", "דרכים"},
+    "ניקיון": {"ניקיון"},
+    "אבטחה": {"אבטחה", "אבטחת"},
+}
+
+SUMMARY_BOILERPLATE_PATTERNS = [
+    re.compile(r"פרסום\s+(?:זמני|ראשון|שני)(?:\s+ו(?:זמני|ראשון|שני))?\s+בעיתונות"),
+    re.compile(r"בית\s+העירייה"),
+    re.compile(r"רח\s*['\"]"),
+    re.compile(r"ת\s*\.?\s*ד\s*\.?"),
+]
+LOW_QUALITY_SUMMARY_PATTERNS = [
+    re.compile(r"^\d+\s*/\s*\d+"),
+    re.compile(r"בפרוטוקול\s+מס"),
+    re.compile(r"מס\s*['\"׳״]?\s*[:\-]?\s*\d+"),
+]
+PROCEDURAL_ALLOCATION_SUMMARY_PATTERNS = [
+    re.compile(r"מאשרים\s+החלטת\s+הועדה\s+המקצועית\s+להקצאות\s+קרקע"),
+    re.compile(r"פרסום\s+שני\s+בעיתונות"),
+    re.compile(r"פרסום\s+החלטות\s+הוועדה\s+בעיתונות"),
+]
+PARCEL_GUSH_RE = re.compile(r"גוש\s*[:\-]?\s*(\d{2,6})")
+PARCEL_GUSH_COMPACT_RE = re.compile(r"גוש(\d{2,6})")
+PARCEL_HELKA_RE = re.compile(r"חלקה\s*[:\-]?\s*(\d{1,6})")
+PARCEL_MIGRASH_RE = re.compile(r"מגרש\s*[:\-]?\s*(\d{1,6})")
+REQUEST_SUBJECT_RE = re.compile(r"מהות\s+הבקשה\s*:\s*(.+)")
 TOPIC_GENERIC_ROOT_TOKENS = {
     "פינויים",
     "בטיחות",
@@ -510,6 +578,7 @@ class RagAnsweringService:
         required_source_kinds: list[str] | None = None,
         cached_topic_tree: dict[str, list[str]] | None = None,
         protocol_subject_anchors: dict[int, list[str]] | None = None,
+        protocol_semantic_topic_labels: dict[int, list[str]] | None = None,
         ask_request_id: str | None = None,
     ) -> RagAnswerResult:
         compose_started = time.perf_counter()
@@ -545,11 +614,15 @@ class RagAnsweringService:
                 "all_supported (boolean), claims (array of objects with text, supported, "
                 "citation_chunk_ids, best_decision_line_id, semantic_similarity_score, semantic_rationale), "
                 "decision_items (array of objects with summary_he, topic_name_he, topic_root_he, topic_subtopic_he, "
-                "topic_confidence, citation_chunk_ids). decision_items should contain concise decision summaries "
+                "topic_confidence, topic_granularity_level, citation_chunk_ids). decision_items should contain concise decision summaries "
                 "(up to two sentences each) and must align one-to-one with claims by order and citation_chunk_ids. "
                 "topic_root_he is protocol-level theme. topic_subtopic_he must be a self-contained noun phrase "
                 "(2-4 words) describing a reusable category-level decision topic (not a mini decision sentence). "
+                "Use object-first taxonomy: prefer the decided object/domain (for example 'הסכמים') over committee context. "
+                "When decision is about agreement preparation/signing, set topic_root_he='הסכמים' and topic_subtopic_he like 'הסכם רשות לעמותה'. "
+                "topic_granularity_level must be an integer 1..10 where 1=very general and 10=very specific. "
                 "Do not output vague, dangling, or over-specific fragments with concrete entities, places, dates, or street names. "
+                "Never output placeholder labels such as 'ללא תיוג סמנטי'. "
                 "Never start or end topic_subtopic_he with relation/preposition words (e.g. לגבי, של, על, עם, בין, עבור). "
                 "Bad examples: 'בשנית קמפיין', 'שיתוף הפעולה', 'תמרורים מוארים לגבי', 'הזמנה תקציבית'. "
                 "Good examples: 'קמפיין בטיחות בדרכים', 'שיתוף פעולה עם קופות חולים', 'תמרורים מוארים', 'בדיקות בטיחות בבתי ספר', 'פינוי מבני עמותות'. "
@@ -945,6 +1018,33 @@ class RagAnsweringService:
             cached_topic_tree=cached_topic_tree,
             protocol_subject_anchors=protocol_subject_anchors,
         )
+        (
+            answer_sections,
+            extended_answer_sections,
+            broad_protocol_split_applied,
+        ) = _expand_sections_by_protocol_for_broad_query(
+            question=question,
+            answer_sections=answer_sections,
+            extended_answer_sections=extended_answer_sections,
+            context_by_chunk=context_by_chunk,
+        )
+        (
+            answer_sections,
+            extended_answer_sections,
+            semantic_topic_enforced,
+            broad_duplicate_text_fixed,
+        ) = _enforce_semantic_topics_and_section_uniqueness(
+            question=question,
+            answer_sections=answer_sections,
+            extended_answer_sections=extended_answer_sections,
+            context_by_chunk=context_by_chunk,
+            protocol_semantic_topic_labels=protocol_semantic_topic_labels,
+        )
+        selected_used_chunk_ids = _merge_chunk_ids(
+            selected_used_chunk_ids,
+            _section_chunk_ids(answer_sections, extended_answer_sections),
+        )
+        citations = _build_citations(retrieval.contexts, selected_used_chunk_ids)
         scoring_payload["topic_assignment_routes"] = [
             _as_optional_str(section.get("topic_route")) or "unknown"
             for section in answer_sections
@@ -956,6 +1056,9 @@ class RagAnsweringService:
         scoring_payload["topic_tree_cached_protocol_count"] = len(cached_topic_tree or {})
         scoring_payload["topic_tree_cached_child_count"] = sum(len(children) for children in (cached_topic_tree or {}).values())
         scoring_payload["topic_subject_anchor_document_count"] = len(protocol_subject_anchors or {})
+        scoring_payload["broad_query_protocol_split_applied"] = broad_protocol_split_applied
+        scoring_payload["semantic_topic_enforced"] = semantic_topic_enforced
+        scoring_payload["broad_duplicate_text_fixed"] = broad_duplicate_text_fixed
         final_answer = _compose_answer_from_sections(answer_sections)
         extended_answer = _compose_answer_from_sections(extended_answer_sections)
         if not extended_answer:
@@ -1103,13 +1206,17 @@ def _answer_payload(*, question: str, retrieval: RagRetrievalResult) -> dict[str
             "For every claim, map best_decision_line_id from decision_lines when available",
             "Set semantic_similarity_score between 0 and 1 for question-to-decision topical relevance",
             "Return decision_items with concise decision summaries (up to 2 sentences), each with citation_chunk_ids",
-            "For each decision_item also return topic_root_he, topic_subtopic_he, and topic_confidence (0..1)",
+            "For each decision_item also return topic_root_he, topic_subtopic_he, topic_confidence (0..1), and topic_granularity_level (1..10)",
+            "topic_root_he must be object/domain-first (for example הסכמים, הקצאות, תמרורים) and not committee-label-first",
+            "If decision concerns preparing/signing an agreement, use topic_root_he='הסכמים' and topic_subtopic_he similar to 'הסכם רשות לעמותה'",
             "decision_items must align one-to-one with claims by order and citation_chunk_ids",
             "topic_subtopic_he must be a standalone noun phrase (2-4 words), category-level and not concrete-entity heavy",
             "topic_subtopic_he must never be a mini decision sentence or include location/date/entity specifics",
             "topic_subtopic_he must never be an administrative shell label without subject (for example 'הזמנה תקציבית')",
             "topic_subtopic_he must never start/end with relational words",
             "If topic_subtopic_he is uncertain set it to null and topic_confidence below 0.5",
+            "topic_granularity_level uses: 1=very general category, 10=very specific case detail",
+            "Never emit placeholder topic labels like 'ללא תיוג סמנטי'",
         ],
     }
 
@@ -1454,6 +1561,7 @@ def _parse_decision_items(value: Any) -> list[dict[str, Any]]:
         topic_root = _as_optional_str(item.get("topic_root_he"))
         topic_subtopic = _as_optional_str(item.get("topic_subtopic_he"))
         topic_confidence = _as_float_0_1(item.get("topic_confidence"))
+        topic_granularity_level = _as_int_in_range(item.get("topic_granularity_level"), min_value=1, max_value=10)
         citation_chunk_ids = item.get("citation_chunk_ids")
         if not isinstance(citation_chunk_ids, list):
             continue
@@ -1471,6 +1579,7 @@ def _parse_decision_items(value: Any) -> list[dict[str, Any]]:
                 "topic_root_he": topic_root,
                 "topic_subtopic_he": topic_subtopic,
                 "topic_confidence": topic_confidence,
+                "topic_granularity_level": topic_granularity_level,
                 "citation_chunk_ids": normalized_ids,
             }
         )
@@ -2212,6 +2321,25 @@ def _merge_chunk_ids(primary: list[str], extra: list[str]) -> list[str]:
     return ordered
 
 
+def _section_chunk_ids(*sections_groups: list[dict[str, Any]]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for sections in sections_groups:
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            chunk_ids = section.get("chunk_ids")
+            if not isinstance(chunk_ids, list):
+                continue
+            for chunk_id in chunk_ids:
+                key = str(chunk_id)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                ordered.append(key)
+    return ordered
+
+
 def _protocol_document_ids_from_contexts(contexts: list[RagContextChunk]) -> list[int]:
     ordered: list[int] = []
     seen: set[int] = set()
@@ -2391,6 +2519,11 @@ def _decision_summary_items_for_answer(
                 "topic_root_hint_he": _as_optional_str(topic_hint_payload.get("topic_root_he")),
                 "topic_subtopic_hint_he": _as_optional_str(topic_hint_payload.get("topic_subtopic_he")),
                 "topic_confidence_hint": _as_float_0_1(topic_hint_payload.get("topic_confidence")),
+                "topic_granularity_hint": _as_int_in_range(
+                    topic_hint_payload.get("topic_granularity_level"),
+                    min_value=1,
+                    max_value=10,
+                ),
                 "citation_chunk_ids": normalized_chunk_ids,
             }
         )
@@ -2438,6 +2571,11 @@ def _decision_summary_items_for_answer(
                 "topic_root_hint_he": _as_optional_str(item.get("topic_root_he")),
                 "topic_subtopic_hint_he": _as_optional_str(item.get("topic_subtopic_he")),
                 "topic_confidence_hint": _as_float_0_1(item.get("topic_confidence")),
+                "topic_granularity_hint": _as_int_in_range(
+                    item.get("topic_granularity_level"),
+                    min_value=1,
+                    max_value=10,
+                ),
                 "citation_chunk_ids": list(chunk_ids),
             }
         )
@@ -2467,6 +2605,11 @@ def _decision_item_topic_hints_by_chunk(
                     "topic_root_he": topic_root,
                     "topic_subtopic_he": topic_subtopic,
                     "topic_confidence": topic_confidence,
+                    "topic_granularity_level": _as_int_in_range(
+                        item.get("topic_granularity_level"),
+                        min_value=1,
+                        max_value=10,
+                    ),
                 }
     return hints
 
@@ -2495,6 +2638,11 @@ def _decision_item_topics(
                 "topic_root_he": _as_optional_str(item.get("topic_root_he")),
                 "topic_subtopic_he": _as_optional_str(item.get("topic_subtopic_he")),
                 "topic_confidence": _as_float_0_1(item.get("topic_confidence")),
+                "topic_granularity_level": _as_int_in_range(
+                    item.get("topic_granularity_level"),
+                    min_value=1,
+                    max_value=10,
+                ),
                 "citation_chunk_ids": normalized_chunk_ids,
             }
         )
@@ -2544,6 +2692,11 @@ def _match_topic_hint_for_summary(
                 "topic_root_he": _as_optional_str(item.get("topic_root_he")),
                 "topic_subtopic_he": _as_optional_str(item.get("topic_subtopic_he")),
                 "topic_confidence": _as_float_0_1(item.get("topic_confidence")),
+                "topic_granularity_level": _as_int_in_range(
+                    item.get("topic_granularity_level"),
+                    min_value=1,
+                    max_value=10,
+                ),
             }
 
     return best_payload
@@ -2660,6 +2813,7 @@ def _build_answer_sections(
                 "chunk_ids": list(normalized_chunk_ids),
                 "topic_route": topic_route,
                 "topic_score": topic_score,
+                "topic_granularity_level": _as_int_in_range(item.get("topic_granularity_hint"), min_value=1, max_value=10),
             }
         )
         extended_sections.append(
@@ -2670,10 +2824,882 @@ def _build_answer_sections(
                 "chunk_ids": list(normalized_chunk_ids),
                 "topic_route": topic_route,
                 "topic_score": topic_score,
+                "topic_granularity_level": _as_int_in_range(item.get("topic_granularity_hint"), min_value=1, max_value=10),
             }
         )
 
     return concise_sections, extended_sections
+
+
+def _expand_sections_by_protocol_for_broad_query(
+    *,
+    question: str,
+    answer_sections: list[dict[str, Any]],
+    extended_answer_sections: list[dict[str, Any]],
+    context_by_chunk: dict[str, RagContextChunk],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool]:
+    if not answer_sections:
+        return answer_sections, extended_answer_sections, False
+    if _primary_topic_tokens(question):
+        return answer_sections, extended_answer_sections, False
+
+    expanded_concise: list[dict[str, Any]] = []
+    expanded_extended: list[dict[str, Any]] = []
+    seen_protocol_titles: set[str] = set()
+    changed = False
+
+    for index, section in enumerate(answer_sections):
+        if not isinstance(section, dict):
+            continue
+
+        paired_extended = (
+            extended_answer_sections[index]
+            if index < len(extended_answer_sections) and isinstance(extended_answer_sections[index], dict)
+            else None
+        )
+
+        section_title = str(section.get("protocol_title") or "").strip() or "פרוטוקול"
+        chunk_ids_raw = section.get("chunk_ids")
+        chunk_ids: list[str] = []
+        if isinstance(chunk_ids_raw, list):
+            for chunk_id in chunk_ids_raw:
+                normalized = str(chunk_id).strip()
+                if normalized and normalized not in chunk_ids:
+                    chunk_ids.append(normalized)
+
+        grouped_chunk_ids: dict[str, list[str]] = {}
+        protocol_order: list[str] = []
+        for chunk_id in chunk_ids:
+            context = context_by_chunk.get(chunk_id)
+            protocol_title = (
+                str(context.document_title).strip()
+                if context is not None and str(context.document_title).strip()
+                else section_title
+            )
+            if protocol_title not in grouped_chunk_ids:
+                grouped_chunk_ids[protocol_title] = []
+                protocol_order.append(protocol_title)
+            grouped_chunk_ids[protocol_title].append(chunk_id)
+
+        if not grouped_chunk_ids:
+            grouped_chunk_ids = {section_title: chunk_ids}
+            protocol_order = [section_title]
+
+        if len(protocol_order) > 1:
+            changed = True
+
+        for protocol_title in protocol_order:
+            if protocol_title in seen_protocol_titles:
+                changed = True
+                continue
+            seen_protocol_titles.add(protocol_title)
+
+            section_copy = dict(section)
+            section_copy["protocol_title"] = protocol_title
+            section_copy["chunk_ids"] = list(grouped_chunk_ids.get(protocol_title, []))
+            expanded_concise.append(section_copy)
+
+            if paired_extended is None:
+                paired_copy = dict(section_copy)
+            else:
+                paired_copy = dict(paired_extended)
+                paired_copy["protocol_title"] = protocol_title
+                paired_copy["chunk_ids"] = list(grouped_chunk_ids.get(protocol_title, []))
+            expanded_extended.append(paired_copy)
+
+    if len(expanded_extended) != len(expanded_concise):
+        expanded_extended = [
+            dict(section)
+            for section in expanded_concise
+        ]
+        changed = True
+
+    if not expanded_concise:
+        return answer_sections, extended_answer_sections, changed
+    if len(expanded_concise) != len(answer_sections):
+        changed = True
+    return expanded_concise, expanded_extended, changed
+
+
+def _enforce_semantic_topics_and_section_uniqueness(
+    *,
+    question: str,
+    answer_sections: list[dict[str, Any]],
+    extended_answer_sections: list[dict[str, Any]],
+    context_by_chunk: dict[str, RagContextChunk],
+    protocol_semantic_topic_labels: dict[int, list[str]] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool, bool]:
+    if not answer_sections:
+        return answer_sections, extended_answer_sections, False, False
+    if protocol_semantic_topic_labels is None:
+        return answer_sections, extended_answer_sections, False, False
+
+    broad_query = not _primary_topic_tokens(question)
+    semantic_changed = False
+    duplicate_fixed = False
+
+    concise_sections: list[dict[str, Any]] = []
+    extended_sections: list[dict[str, Any]] = []
+
+    for index, section in enumerate(answer_sections):
+        if not isinstance(section, dict):
+            continue
+        section_copy = dict(section)
+        extended_copy = (
+            dict(extended_answer_sections[index])
+            if index < len(extended_answer_sections) and isinstance(extended_answer_sections[index], dict)
+            else dict(section_copy)
+        )
+
+        semantic_topic = _section_semantic_topic_label(
+            section=section_copy,
+            context_by_chunk=context_by_chunk,
+            protocol_semantic_topic_labels=protocol_semantic_topic_labels,
+        )
+        resolved_topic = _resolve_section_topic_name(
+            section=section_copy,
+            semantic_topic=semantic_topic,
+            context_by_chunk=context_by_chunk,
+        )
+        if str(section_copy.get("topic_name") or "").strip() != resolved_topic:
+            semantic_changed = True
+
+        section_copy["topic_name"] = resolved_topic
+        section_copy["topic_route"] = "semantic_label" if semantic_topic else "object_topic_inferred"
+        section_copy["topic_score"] = 1.0 if semantic_topic else 0.65
+
+        compact_text = _sanitize_summary_for_output(_as_optional_str(section_copy.get("text")) or "")
+        if _is_subjectless_publication_summary(compact_text):
+            compact_text = _enrich_subjectless_summary(compact_text, resolved_topic)
+
+        allocation_enriched_text, detail_chunk_ids = _enrich_allocation_summary_with_context(
+            section={
+                **section_copy,
+                "text": compact_text,
+                "topic_name": resolved_topic,
+            },
+            context_by_chunk=context_by_chunk,
+        )
+        if allocation_enriched_text:
+            compact_text = allocation_enriched_text
+            merged_chunk_ids = _merge_section_chunk_ids(section_copy.get("chunk_ids"), detail_chunk_ids)
+            if merged_chunk_ids:
+                section_copy["chunk_ids"] = merged_chunk_ids
+                extended_copy["chunk_ids"] = merged_chunk_ids
+
+        if compact_text:
+            section_copy["text"] = compact_text
+
+        extended_copy["topic_name"] = resolved_topic
+        extended_copy["topic_route"] = section_copy["topic_route"]
+        extended_copy["topic_score"] = section_copy["topic_score"]
+        extended_text = _sanitize_summary_for_output(_as_optional_str(extended_copy.get("text")) or "")
+        if _is_subjectless_publication_summary(extended_text):
+            extended_text = _enrich_subjectless_summary(extended_text, resolved_topic)
+        if allocation_enriched_text:
+            extended_text = allocation_enriched_text
+        if extended_text:
+            extended_copy["text"] = extended_text
+
+        concise_sections.append(section_copy)
+        extended_sections.append(extended_copy)
+
+    if broad_query:
+        seen_texts: set[str] = set()
+        for index, section in enumerate(concise_sections):
+            text_value = _compact_summary_text(_as_optional_str(section.get("text")) or "")
+            normalized_text = normalize_for_search(text_value)
+            if not normalized_text:
+                continue
+
+            if _is_boilerplate_summary_text(normalized_text) or _is_low_quality_summary_text(normalized_text):
+                replacement = _best_alternative_section_text(
+                    section=section,
+                    context_by_chunk=context_by_chunk,
+                    blocked_texts=seen_texts,
+                )
+                if replacement:
+                    if _is_subjectless_publication_summary(replacement):
+                        replacement = _enrich_subjectless_summary(
+                            replacement,
+                            _as_optional_str(section.get("topic_name")) or "",
+                        )
+                    concise_sections[index]["text"] = replacement
+                    extended_sections[index]["text"] = replacement
+                    normalized_text = normalize_for_search(replacement)
+                    duplicate_fixed = True
+
+            if normalized_text not in seen_texts:
+                seen_texts.add(normalized_text)
+                continue
+
+            replacement = _best_alternative_section_text(
+                section=section,
+                context_by_chunk=context_by_chunk,
+                blocked_texts=seen_texts,
+            )
+            if not replacement:
+                qualifier = _protocol_title_subject_hint(_as_optional_str(section.get("protocol_title")) or "")
+                if qualifier:
+                    replacement = f"{text_value.rstrip('.')} בהקשר {qualifier}."
+                else:
+                    continue
+            if _is_subjectless_publication_summary(replacement):
+                replacement = _enrich_subjectless_summary(
+                    replacement,
+                    _as_optional_str(section.get("topic_name")) or "",
+                )
+
+            concise_sections[index]["text"] = replacement
+            extended_text_value = _as_optional_str(extended_sections[index].get("text")) or ""
+            if not extended_text_value or normalize_for_search(extended_text_value) == normalized_text:
+                extended_sections[index]["text"] = replacement
+
+            seen_texts.add(normalize_for_search(replacement))
+            duplicate_fixed = True
+
+    return concise_sections, extended_sections, semantic_changed, duplicate_fixed
+
+
+def _section_semantic_topic_label(
+    *,
+    section: dict[str, Any],
+    context_by_chunk: dict[str, RagContextChunk],
+    protocol_semantic_topic_labels: dict[int, list[str]],
+) -> str | None:
+    chunk_ids_raw = section.get("chunk_ids")
+    if not isinstance(chunk_ids_raw, list):
+        return None
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    document_ids: list[int] = []
+    section_text = _as_optional_str(section.get("text")) or ""
+    protocol_title = _as_optional_str(section.get("protocol_title")) or ""
+
+    for chunk_id in chunk_ids_raw:
+        context = context_by_chunk.get(str(chunk_id))
+        if context is None:
+            continue
+        if context.document_id not in document_ids:
+            document_ids.append(context.document_id)
+        for label in context.semantic_topic_labels:
+            candidate = _sanitize_semantic_topic_label(label)
+            if not candidate:
+                continue
+            key = normalize_for_search(candidate)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            candidates.append(candidate)
+
+    for document_id in document_ids:
+        for label in protocol_semantic_topic_labels.get(int(document_id), []):
+            candidate = _sanitize_semantic_topic_label(label)
+            if not candidate:
+                continue
+            key = normalize_for_search(candidate)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            candidates.append(candidate)
+
+    if not candidates:
+        return None
+
+    ranked = sorted(
+        candidates,
+        key=lambda candidate: _semantic_topic_candidate_score(
+            candidate=candidate,
+            section_text=section_text,
+            protocol_title=protocol_title,
+        ),
+        reverse=True,
+    )
+    if not ranked:
+        return None
+    best = ranked[0]
+    best_score = _semantic_topic_candidate_score(candidate=best, section_text=section_text, protocol_title=protocol_title)
+    second_score = (
+        _semantic_topic_candidate_score(candidate=ranked[1], section_text=section_text, protocol_title=protocol_title)
+        if len(ranked) > 1
+        else 0.0
+    )
+    if best_score < 0.17:
+        return None
+    if second_score > 0 and (best_score - second_score) < 0.035:
+        return None
+    return best
+
+
+def _topic_path_parts(topic_name: str | None) -> tuple[str, str | None]:
+    raw = " ".join(str(topic_name or "").split())
+    if not raw:
+        return "", None
+    parts = [part.strip() for part in raw.split(">") if part and part.strip()]
+    if len(parts) >= 2:
+        return parts[0], " > ".join(parts[1:])
+    return raw, None
+
+
+def _topic_display_label(topic_name: str | None) -> str:
+    root, child = _topic_path_parts(topic_name)
+    return child or root
+
+
+def _object_root_from_texts(*texts: str) -> str | None:
+    token_set: set[str] = set()
+    for text in texts:
+        token_set.update(_normalized_topic_tokens(text))
+    if not token_set:
+        return None
+
+    best_root: str | None = None
+    best_score = 0
+    for root_name, keywords in OBJECT_ROOT_KEYWORDS.items():
+        score = 0
+        for token in token_set:
+            if any(_topic_tokens_match(token, keyword) for keyword in keywords):
+                score += 1
+        if score > best_score:
+            best_score = score
+            best_root = root_name
+    if best_root is None or best_score <= 0:
+        return None
+    return best_root
+
+
+def _agreement_child_from_texts(*texts: str, prefer_association: bool = False) -> str | None:
+    combined = normalize_for_search(" ".join(texts))
+    if "הסכם" not in combined:
+        return None
+
+    entity_suffix = ""
+    if any(token in combined for token in {"לעמותה", "עמותה", "עמותת", "עמותות"}):
+        entity_suffix = " לעמותה"
+    elif prefer_association:
+        entity_suffix = " לעמותה"
+    elif any(token in combined for token in {"לעירייה", "העירייה", "עירייה"}):
+        entity_suffix = " לעירייה"
+
+    if "רשות" in combined:
+        return f"הסכם רשות{entity_suffix}".strip()
+    return f"הסכם{entity_suffix}".strip()
+
+
+def _allocation_child_from_texts(*texts: str) -> str | None:
+    combined = normalize_for_search(" ".join(texts))
+    if "הקצא" not in combined and "עמות" not in combined:
+        return None
+
+    if "ביטול" in combined and "הקצא" in combined:
+        return "ביטול הקצאה"
+    if "כיתת" in combined and ("ילדים" in combined or "גן" in combined):
+        return "הקצאת כיתת ילדים"
+    if "רווחה" in combined and "מבנ" in combined:
+        return "הקצאה למבני רווחה"
+    if "קרקע" in combined and "מבנ" in combined:
+        return "הקצאת קרקעות ומבנים"
+    if "עמות" in combined:
+        return "הקצאה לעמותה"
+    if "פרסום" in combined and "בעיתונות" in combined:
+        return "אישור הקצאה"
+    if "החלטת" in combined and "הקצא" in combined:
+        return "אישור הקצאה"
+    return "אישור הקצאה"
+
+
+def _is_generic_allocation_child(value: str | None) -> bool:
+    normalized = normalize_for_search(value or "")
+    if not normalized:
+        return True
+    return normalized in {
+        normalize_for_search("בקשה להקצאה"),
+        normalize_for_search("החלטת הקצאות"),
+        normalize_for_search("פרסום בעיתונות"),
+        normalize_for_search("החלטה ענפית"),
+        normalize_for_search("החלטה כללית"),
+    }
+
+
+def _resolve_section_topic_name(
+    *,
+    section: dict[str, Any],
+    semantic_topic: str | None,
+    context_by_chunk: dict[str, RagContextChunk],
+) -> str:
+    existing_topic_raw = _as_optional_str(section.get("topic_name")) or ""
+    protocol_title = _as_optional_str(section.get("protocol_title")) or ""
+    existing_root, existing_child = _topic_path_parts(existing_topic_raw)
+    section_text = _as_optional_str(section.get("text")) or ""
+
+    chunk_texts: list[str] = []
+    chunk_ids = section.get("chunk_ids")
+    if isinstance(chunk_ids, list):
+        for chunk_id in chunk_ids:
+            context = context_by_chunk.get(str(chunk_id))
+            if context is None:
+                continue
+            text_blob = (context.chunk_text or context.snippet or "").strip()
+            if text_blob:
+                chunk_texts.append(text_blob)
+
+    object_root = _object_root_from_texts(
+        semantic_topic or "",
+        existing_topic_raw,
+        section_text,
+        " ".join(chunk_texts),
+    )
+    if not object_root:
+        object_root = _object_root_from_texts(existing_root)
+    if not object_root:
+        object_root = "החלטות עירוניות"
+
+    semantic_child = _clean_topic_candidate(semantic_topic or "", max_tokens=5, min_tokens=2, drop_noise_tokens=True)
+    if semantic_child and _is_subjectless_publication_summary(section_text):
+        forced_root = _object_root_from_texts(semantic_child, section_text) or object_root
+        return f"{forced_root} > {semantic_child}"
+
+    prefer_association = "הקצא" in normalize_for_search(protocol_title)
+    if object_root == "הסכמים" and semantic_child is None:
+        forced_child = _agreement_child_from_texts(
+            section_text,
+            " ".join(chunk_texts),
+            semantic_topic or "",
+            prefer_association=prefer_association,
+        )
+        if forced_child:
+            return f"{object_root} > {forced_child}"
+    if object_root == "הקצאות" and (semantic_child is None or _is_generic_allocation_child(semantic_child)):
+        forced_child = _allocation_child_from_texts(
+            section_text,
+            " ".join(chunk_texts),
+            semantic_topic or "",
+            existing_topic_raw,
+            protocol_title,
+        )
+        if forced_child:
+            return f"{object_root} > {forced_child}"
+
+    child_candidates: list[str] = []
+    if semantic_topic:
+        child_candidates.append(semantic_topic)
+    if existing_child:
+        child_candidates.append(existing_child)
+    elif existing_topic_raw:
+        child_candidates.append(existing_topic_raw)
+
+    for candidate in _topic_phrase_candidates_from_text(section_text):
+        child_candidates.append(candidate)
+    for text_blob in chunk_texts:
+        for candidate in _topic_phrase_candidates_from_text(text_blob):
+            child_candidates.append(candidate)
+
+    if object_root == "הסכמים":
+        agreement_child = _agreement_child_from_texts(
+            section_text,
+            " ".join(chunk_texts),
+            semantic_topic or "",
+            prefer_association=prefer_association,
+        )
+        if agreement_child:
+            child_candidates.insert(0, agreement_child)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in child_candidates:
+        key = normalize_for_search(candidate)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+
+    best_child: str | None = None
+    best_score = -1.0
+    decision_text = " ".join([section_text, *chunk_texts]).strip()
+    for candidate in deduped:
+        normalized_candidate = _clean_topic_candidate(candidate, max_tokens=5, min_tokens=2, drop_noise_tokens=True)
+        if not normalized_candidate:
+            continue
+        if normalize_for_search(normalized_candidate) in {
+            normalize_for_search("ללא תיוג סמנטי"),
+            normalize_for_search("נושא כללי"),
+            normalize_for_search("החלטה כללית"),
+        }:
+            continue
+
+        score = _topic_candidate_score(candidate=normalized_candidate, decision_text=decision_text, root_topic=object_root)
+        if object_root == "הסכמים" and "הסכם" in normalize_for_search(normalized_candidate):
+            score += 0.18
+        if semantic_topic and _topic_overlap_ratio(
+            set(_normalized_topic_tokens(normalized_candidate)),
+            set(_normalized_topic_tokens(semantic_topic)),
+        ) >= 0.5:
+            score += 0.07
+        if score > best_score:
+            best_score = score
+            best_child = normalized_candidate
+
+    if not best_child:
+        if object_root == "הסכמים":
+            best_child = _agreement_child_from_texts(
+                section_text,
+                " ".join(chunk_texts),
+                prefer_association=("הקצא" in normalize_for_search(protocol_title)),
+            ) or "הסכם רשות"
+        elif object_root == "הקצאות":
+            best_child = "הקצאה לעמותה"
+        else:
+            best_child = _clean_topic_candidate(section_text, max_tokens=4, min_tokens=2, drop_noise_tokens=True) or "החלטה ענפית"
+
+    if object_root == "הסכמים" and best_child.startswith("הכנת הסכם"):
+        best_child = best_child.replace("הכנת ", "", 1)
+        best_child = _clean_topic_candidate(best_child, max_tokens=5, min_tokens=2, drop_noise_tokens=True) or "הסכם רשות"
+    if object_root == "הקצאות" and _is_generic_allocation_child(best_child):
+        best_child = _allocation_child_from_texts(section_text, " ".join(chunk_texts), existing_topic_raw) or best_child
+
+    return f"{object_root} > {best_child}"
+
+
+def _semantic_topic_candidate_score(*, candidate: str, section_text: str, protocol_title: str) -> float:
+    candidate_tokens = _normalized_topic_tokens(candidate)
+    if not candidate_tokens:
+        return 0.0
+
+    section_tokens = set(_normalized_topic_tokens(section_text))
+    protocol_tokens = {
+        token
+        for token in _normalized_topic_tokens(protocol_title)
+        if token not in PROTOCOL_TITLE_STOP_TOKENS and token not in GENERIC_QUERY_TOKENS
+    }
+    informative_tokens = [token for token in candidate_tokens if token not in SEMANTIC_TOPIC_GENERIC_TOKENS]
+    informative_ratio = len(informative_tokens) / max(len(candidate_tokens), 1)
+    section_overlap = _topic_overlap_ratio(set(candidate_tokens), section_tokens)
+    protocol_overlap = _topic_overlap_ratio(set(candidate_tokens), protocol_tokens)
+
+    score = (0.45 * informative_ratio) + (0.35 * section_overlap) + (0.2 * protocol_overlap)
+    if len(candidate_tokens) <= 2:
+        score -= 0.06
+    if candidate_tokens and candidate_tokens[0] in {"בקשה", "בקשות", "דיון"}:
+        score -= 0.08
+    return _round_score(_clamp_score(score))
+
+
+def _sanitize_semantic_topic_label(value: str) -> str | None:
+    candidate = _clean_topic_candidate(value, max_tokens=5, min_tokens=2, drop_noise_tokens=True)
+    if not candidate:
+        return None
+    tokens = [token for token in _normalized_topic_tokens(candidate) if token not in SEMANTIC_TOPIC_STOP_TOKENS]
+    tokens = _trim_topic_edge_tokens(tokens)
+    if len(tokens) < 2:
+        return None
+    sanitized = _clean_topic_candidate(" ".join(tokens), max_tokens=4, min_tokens=2, drop_noise_tokens=True)
+    return sanitized
+
+
+def _is_subjectless_publication_summary(value: str) -> bool:
+    normalized = normalize_for_search(value)
+    if not normalized:
+        return False
+    for pattern in SUBJECTLESS_PUBLICATION_PATTERNS:
+        if pattern.search(normalized):
+            return True
+    return False
+
+
+def _enrich_subjectless_summary(summary_text: str, topic_name: str) -> str:
+    compact = " ".join(str(summary_text or "").split()).strip()
+    if not compact:
+        return ""
+    topic_display = _topic_display_label(topic_name)
+    if normalize_for_search(topic_display) in {"", normalize_for_search("ללא תיוג סמנטי")}:
+        return compact
+
+    subject = _clean_topic_candidate(topic_display, max_tokens=4, min_tokens=2, drop_noise_tokens=True)
+    if not subject:
+        return compact
+    subject_norm = normalize_for_search(subject)
+    if not subject_norm or subject_norm in {"ללא תיוג סמנטי", "נושא כללי"}:
+        return compact
+
+    compact_norm = normalize_for_search(compact)
+    if subject_norm in compact_norm:
+        return compact
+
+    suffix = f" בנושא {subject}"
+    if compact.endswith("."):
+        return f"{compact[:-1]}{suffix}."
+    return f"{compact}{suffix}."
+
+
+def _best_alternative_section_text(
+    *,
+    section: dict[str, Any],
+    context_by_chunk: dict[str, RagContextChunk],
+    blocked_texts: set[str],
+) -> str | None:
+    chunk_ids_raw = section.get("chunk_ids")
+    if not isinstance(chunk_ids_raw, list):
+        return None
+
+    candidates: list[tuple[float, str]] = []
+    seen: set[str] = set()
+    for chunk_id in chunk_ids_raw:
+        context = context_by_chunk.get(str(chunk_id))
+        if context is None:
+            continue
+        source_text = (context.chunk_text or context.snippet or "").strip()
+        if not source_text:
+            continue
+
+        for sentence in _extract_decision_sentences(source_text):
+            compact = _sanitize_summary_for_output(_compact_summary_text(sentence, max_sentences=1, max_chars=220))
+            normalized = normalize_for_search(compact)
+            if not normalized or normalized in blocked_texts or normalized in seen:
+                continue
+            seen.add(normalized)
+
+            score = 0.2 if _has_decision_marker(normalized) else 0.0
+            if not _is_boilerplate_summary_text(normalized):
+                score += 0.25
+            if len(_normalized_topic_tokens(compact)) >= 3:
+                score += 0.1
+            score += min(0.15, len(normalized) / 900.0)
+            candidates.append((score, compact))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: row[0], reverse=True)
+    best_score, best_text = candidates[0]
+    if best_score < 0.2:
+        return None
+    return best_text
+
+
+def _is_boilerplate_summary_text(value: str) -> bool:
+    normalized = normalize_for_search(value)
+    if not normalized:
+        return False
+    for pattern in SUMMARY_BOILERPLATE_PATTERNS:
+        if pattern.search(normalized):
+            return True
+    return False
+
+
+def _is_low_quality_summary_text(value: str) -> bool:
+    normalized = normalize_for_search(value)
+    if not normalized:
+        return True
+    for pattern in LOW_QUALITY_SUMMARY_PATTERNS:
+        if pattern.search(normalized):
+            return True
+    return False
+
+
+def _sanitize_summary_for_output(value: str) -> str:
+    compact = " ".join(str(value or "").split())
+    if not compact:
+        return ""
+
+    cleaned = re.sub(r"^\d+\s*/\s*\d+\s*", "", compact)
+    if _is_boilerplate_summary_text(cleaned):
+        return "אושרה החלטה פרוצדורלית בנושא פרסום החלטות הוועדה בעיתונות."
+    cleaned = re.sub(r"\bבפרוטוקול\s+מס\s*['\"׳״]?\s*[:\-]?\s*\d+(?:/\d+)?", "", cleaned)
+    cleaned = re.sub(r"\bבפרוטוקול\s+מס\s*['\"׳״]?", "", cleaned)
+    cleaned = re.sub(r"\bמס\s*['\"׳״]?\s*[:\-]?\s*\d+(?:/\d+)?", "", cleaned)
+    cleaned = " ".join(cleaned.split()).strip(" ,;:-")
+    if not cleaned:
+        return ""
+    if cleaned[-1] not in {".", "?", "!", ";"}:
+        cleaned = f"{cleaned}."
+    return cleaned
+
+
+def _is_procedural_allocation_summary(*, text: str, topic_name: str) -> bool:
+    topic_root, _ = _topic_path_parts(topic_name)
+    root_norm = normalize_for_search(topic_root)
+    if root_norm not in {normalize_for_search("הקצאות"), normalize_for_search("הסכמים")}:
+        return False
+
+    normalized = normalize_for_search(text)
+    if not normalized:
+        return False
+    return any(pattern.search(normalized) for pattern in PROCEDURAL_ALLOCATION_SUMMARY_PATTERNS)
+
+
+def _nearby_protocol_contexts_for_section(
+    *,
+    section: dict[str, Any],
+    context_by_chunk: dict[str, RagContextChunk],
+) -> list[RagContextChunk]:
+    chunk_ids = section.get("chunk_ids")
+    if not isinstance(chunk_ids, list) or not chunk_ids:
+        return []
+
+    base_contexts = [context_by_chunk.get(str(chunk_id)) for chunk_id in chunk_ids]
+    base_contexts = [context for context in base_contexts if context is not None and context.source_kind == "protocol"]
+    if not base_contexts:
+        return []
+
+    by_chunk_id: dict[str, RagContextChunk] = {}
+    for base in base_contexts:
+        by_chunk_id[base.chunk_id] = base
+        for candidate in context_by_chunk.values():
+            if candidate.source_kind != "protocol":
+                continue
+            if int(candidate.document_id) != int(base.document_id):
+                continue
+
+            same_page = (
+                base.start_page is not None
+                and candidate.start_page is not None
+                and abs(int(base.start_page) - int(candidate.start_page)) <= 1
+            )
+            nearby_index = (
+                base.chunk_index is not None
+                and candidate.chunk_index is not None
+                and abs(int(base.chunk_index) - int(candidate.chunk_index)) <= 10
+            )
+            if not same_page and not nearby_index:
+                continue
+            by_chunk_id[candidate.chunk_id] = candidate
+
+    out = list(by_chunk_id.values())
+    out.sort(
+        key=lambda context: (
+            int(context.start_page) if context.start_page is not None else 10**9,
+            int(context.chunk_index) if context.chunk_index is not None else 10**9,
+        )
+    )
+    return out
+
+
+def _extract_request_subject_from_text(value: str) -> str | None:
+    normalized = " ".join(str(value or "").split())
+    if not normalized:
+        return None
+
+    match = REQUEST_SUBJECT_RE.search(normalized)
+    if match is None:
+        return None
+
+    subject = match.group(1)
+    subject = re.split(r"\b(?:מורשי\s+חתימה|הבקשה\s+פורסמה|הוצבה\s+הודעה|לא\s+התקבל|פרסום\s+ראשון|פרסום\s+שני)\b", subject, maxsplit=1)[0]
+    subject = " ".join(subject.split()).strip(" ,;:-")
+    if not subject:
+        return None
+    if len(subject) > 190:
+        subject = f"{subject[:187].rstrip()}..."
+    return subject
+
+
+def _extract_parcel_identifiers(*texts: str) -> dict[str, str]:
+    combined = "\n".join(texts)
+    gush_match = PARCEL_GUSH_RE.search(combined) or PARCEL_GUSH_COMPACT_RE.search(combined)
+    helka_match = PARCEL_HELKA_RE.search(combined)
+    migrash_match = PARCEL_MIGRASH_RE.search(combined)
+
+    out: dict[str, str] = {}
+    if gush_match:
+        out["gush"] = str(gush_match.group(1))
+    if helka_match:
+        out["helka"] = str(helka_match.group(1))
+    if migrash_match:
+        out["migrash"] = str(migrash_match.group(1))
+    return out
+
+
+def _is_detail_metadata_text(value: str) -> bool:
+    normalized = normalize_for_search(value)
+    if not normalized:
+        return False
+    return any(
+        token in normalized
+        for token in {"מהות הבקשה", "גוש", "חלקה", "מגרש", "כתובת", "שטח", "שימושים", "תאור"}
+    )
+
+
+def _enrich_allocation_summary_with_context(
+    *,
+    section: dict[str, Any],
+    context_by_chunk: dict[str, RagContextChunk],
+) -> tuple[str | None, list[str]]:
+    text_value = _as_optional_str(section.get("text")) or ""
+    topic_name = _as_optional_str(section.get("topic_name")) or ""
+    if not _is_procedural_allocation_summary(text=text_value, topic_name=topic_name):
+        return None, []
+
+    nearby_contexts = _nearby_protocol_contexts_for_section(section=section, context_by_chunk=context_by_chunk)
+    if not nearby_contexts:
+        return None, []
+
+    subject: str | None = None
+    used_chunk_ids: list[str] = []
+    detail_texts: list[str] = []
+    for context in nearby_contexts:
+        chunk_text = " ".join((context.chunk_text or context.snippet or "").split())
+        if not chunk_text:
+            continue
+        if _is_detail_metadata_text(chunk_text):
+            detail_texts.append(chunk_text)
+            if context.chunk_id not in used_chunk_ids:
+                used_chunk_ids.append(context.chunk_id)
+        if subject is None:
+            candidate_subject = _extract_request_subject_from_text(chunk_text)
+            if candidate_subject:
+                subject = candidate_subject
+
+    if not detail_texts:
+        return None, []
+
+    parcel = _extract_parcel_identifiers(*detail_texts)
+    if subject:
+        sentence = f"אושרה החלטת הקצאה עבור {subject}."
+    else:
+        sentence = "אושרה החלטת הקצאה."
+
+    parcel_bits: list[str] = []
+    if parcel.get("gush"):
+        parcel_bits.append(f"גוש {parcel['gush']}")
+    if parcel.get("helka"):
+        parcel_bits.append(f"חלקה {parcel['helka']}")
+    if parcel.get("migrash"):
+        parcel_bits.append(f"מגרש {parcel['migrash']}")
+
+    if parcel_bits:
+        sentence = f"{sentence[:-1]} פרטי מקרקעין: {', '.join(parcel_bits)}."
+    else:
+        sentence = f"{sentence[:-1]} מזהי מקרקעין (גוש/חלקה/מגרש) לא אותרו בשורות המצוטטות."
+    return sentence, used_chunk_ids
+
+
+def _merge_section_chunk_ids(base_chunk_ids: Any, extra_chunk_ids: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    if isinstance(base_chunk_ids, list):
+        for chunk_id in base_chunk_ids:
+            key = str(chunk_id)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(key)
+    for chunk_id in extra_chunk_ids:
+        key = str(chunk_id)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
+def _protocol_title_subject_hint(value: str) -> str | None:
+    candidate = _clean_topic_candidate(value, max_tokens=4, min_tokens=2, drop_noise_tokens=True)
+    if not candidate:
+        return None
+    tokens = [token for token in _normalized_topic_tokens(candidate) if token not in SEMANTIC_TOPIC_STOP_TOKENS]
+    if len(tokens) < 2:
+        return None
+    return " ".join(tokens[:3])
 
 
 def _build_protocol_topic_trees(
@@ -3351,7 +4377,7 @@ def _compose_answer_from_sections(answer_sections: list[dict[str, Any]]) -> str:
     parts: list[str] = []
     for section in answer_sections:
         title = _as_optional_str(section.get("protocol_title")) or "פרוטוקול"
-        topic = _as_optional_str(section.get("topic_name")) or "נושא כללי"
+        topic = _topic_display_label(_as_optional_str(section.get("topic_name")) or "נושא כללי") or "נושא כללי"
         text = _as_optional_str(section.get("text"))
         if not text:
             continue
@@ -3614,6 +4640,16 @@ def _as_float_0_1(value: Any) -> float | None:
     if parsed < 0.0 or parsed > 1.0:
         return None
     return _round_score(parsed)
+
+
+def _as_int_in_range(value: Any, *, min_value: int, max_value: int) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < min_value or parsed > max_value:
+        return None
+    return parsed
 
 
 def _as_optional_str(value: Any) -> str | None:

@@ -896,12 +896,431 @@ def test_topic_resolution_uses_sibling_fallback_before_general_topic() -> None:
     }
 
 
+def test_broad_query_sections_split_per_protocol() -> None:
+    answer_sections = [
+        {
+            "protocol_title": "פרוטוקול א",
+            "topic_name": "הקצאות מקצועיות > פרסום בעיתונות",
+            "text": "הוועדה אישרה ביצוע פרסום שני בעיתונות.",
+            "chunk_ids": ["chunk-a", "chunk-b", "chunk-c"],
+            "topic_route": "model_subtopic",
+            "topic_score": 1.0,
+        }
+    ]
+    extended_sections = [
+        {
+            "protocol_title": "פרוטוקול א",
+            "topic_name": "הקצאות מקצועיות > פרסום בעיתונות",
+            "text": "הוועדה אישרה ביצוע פרסום שני בעיתונות לאחר השלמת בדיקות.",
+            "chunk_ids": ["chunk-a", "chunk-b", "chunk-c"],
+            "topic_route": "model_subtopic",
+            "topic_score": 1.0,
+        }
+    ]
+    context_by_chunk = {
+        "chunk-a": RagContextChunk(
+            chunk_id="chunk-a",
+            score=0.8,
+            snippet="הוחלט לאשר פרסום שני.",
+            citation="p.1",
+            source_kind="protocol",
+            document_id=101,
+            document_title="פרוטוקול א",
+            document_url="https://example.local/a.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:101",
+            start_page=1,
+            end_page=1,
+            chunk_text="הוחלט לאשר פרסום שני.",
+        ),
+        "chunk-b": RagContextChunk(
+            chunk_id="chunk-b",
+            score=0.8,
+            snippet="הוחלט לאשר פרסום שני.",
+            citation="p.1",
+            source_kind="protocol",
+            document_id=102,
+            document_title="פרוטוקול ב",
+            document_url="https://example.local/b.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:102",
+            start_page=1,
+            end_page=1,
+            chunk_text="הוחלט לאשר פרסום שני.",
+        ),
+        "chunk-c": RagContextChunk(
+            chunk_id="chunk-c",
+            score=0.8,
+            snippet="הוחלט לאשר פרסום שני.",
+            citation="p.1",
+            source_kind="protocol",
+            document_id=103,
+            document_title="פרוטוקול ג",
+            document_url="https://example.local/c.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:103",
+            start_page=1,
+            end_page=1,
+            chunk_text="הוחלט לאשר פרסום שני.",
+        ),
+    }
+
+    concise, extended, changed = rag_answering._expand_sections_by_protocol_for_broad_query(
+        question="מה הוחלט בעיר?",
+        answer_sections=answer_sections,
+        extended_answer_sections=extended_sections,
+        context_by_chunk=context_by_chunk,
+    )
+
+    assert changed is True
+    assert len(concise) == 3
+    assert len(extended) == 3
+    assert [row["protocol_title"] for row in concise] == ["פרוטוקול א", "פרוטוקול ב", "פרוטוקול ג"]
+    assert [row["chunk_ids"] for row in concise] == [["chunk-a"], ["chunk-b"], ["chunk-c"]]
+
+
+def test_specific_query_sections_keep_original_grouping() -> None:
+    answer_sections = [
+        {
+            "protocol_title": "פרוטוקול א",
+            "topic_name": "פינויים > פינוי מבנים",
+            "text": "אושרה הזזת מבנים לעמותות.",
+            "chunk_ids": ["chunk-a", "chunk-b"],
+        }
+    ]
+    context_by_chunk = {
+        "chunk-a": RagContextChunk(
+            chunk_id="chunk-a",
+            score=0.8,
+            snippet="אושרה הזזת מבנים.",
+            citation="p.2",
+            source_kind="protocol",
+            document_id=101,
+            document_title="פרוטוקול א",
+            document_url="https://example.local/a.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:101",
+            start_page=2,
+            end_page=2,
+            chunk_text="אושרה הזזת מבנים.",
+        ),
+        "chunk-b": RagContextChunk(
+            chunk_id="chunk-b",
+            score=0.8,
+            snippet="אושרה הזזת מבנים נוספת.",
+            citation="p.3",
+            source_kind="protocol",
+            document_id=102,
+            document_title="פרוטוקול ב",
+            document_url="https://example.local/b.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:102",
+            start_page=3,
+            end_page=3,
+            chunk_text="אושרה הזזת מבנים נוספת.",
+        ),
+    }
+
+    concise, extended, changed = rag_answering._expand_sections_by_protocol_for_broad_query(
+        question="פינויים במתחם החרגול",
+        answer_sections=answer_sections,
+        extended_answer_sections=answer_sections,
+        context_by_chunk=context_by_chunk,
+    )
+
+    assert changed is False
+    assert concise == answer_sections
+    assert extended == answer_sections
+
+
 def test_topic_cleaning_reduces_over_specific_subtopic_phrase() -> None:
     cleaned = rag_answering._clean_topic_candidate("הוספת תמרורים מוארים לאיסור פניה שמאלה", min_tokens=2)
 
     assert cleaned is not None
     assert "לאיסור" not in cleaned
     assert cleaned in {"תמרורים מוארים", "תמרורים מוארים פניה", "הוספת תמרורים"}
+
+
+def test_section_semantic_topic_prefers_more_specific_candidate() -> None:
+    context_by_chunk = {
+        "chunk-a": RagContextChunk(
+            chunk_id="chunk-a",
+            score=0.8,
+            snippet="הוחלט לאשר פרסום זמני וראשון בעיתונות.",
+            citation="p.2",
+            source_kind="protocol",
+            document_id=312,
+            document_title="פרוטוקול ועדת הקצאות מקצועית מס' 1-25",
+            document_url="https://example.local/a.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:312",
+            start_page=2,
+            end_page=2,
+            chunk_text="הוחלט לאשר פרסום זמני וראשון בעיתונות.",
+            semantic_topic_labels=[],
+        )
+    }
+    section = {
+        "protocol_title": "פרוטוקול ועדת הקצאות מקצועית מס' 1-25",
+        "text": "אושר ביצוע פרסום זמני וראשון בעיתונות.",
+        "chunk_ids": ["chunk-a"],
+    }
+    protocol_semantic_topic_labels = {
+        312: [
+            "בקשה להקצאה",
+            "בבקשות להקצאת קרקע ומבנים",
+            "הקצאת כיתת גן ילדים",
+        ]
+    }
+
+    topic = rag_answering._section_semantic_topic_label(
+        section=section,
+        context_by_chunk=context_by_chunk,
+        protocol_semantic_topic_labels=protocol_semantic_topic_labels,
+    )
+
+    assert topic in {"הקצאת כיתת גן ילדים", "הקצאת כיתת ילדים"}
+
+
+def test_subjectless_publication_summary_is_enriched_with_topic() -> None:
+    context_by_chunk = {
+        "chunk-a": RagContextChunk(
+            chunk_id="chunk-a",
+            score=0.8,
+            snippet="הוחלט לאשר פרסום זמני וראשון בעיתונות.",
+            citation="p.2",
+            source_kind="protocol",
+            document_id=312,
+            document_title="פרוטוקול ועדת הקצאות מקצועית מס' 1-25",
+            document_url="https://example.local/a.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:312",
+            start_page=2,
+            end_page=2,
+            chunk_text="הוחלט לאשר פרסום זמני וראשון בעיתונות.",
+            semantic_topic_labels=[],
+        )
+    }
+    concise = [
+        {
+            "protocol_title": "פרוטוקול ועדת הקצאות מקצועית מס' 1-25",
+            "topic_name": "נושא כללי",
+            "text": "אושר ביצוע פרסום זמני וראשון בעיתונות.",
+            "chunk_ids": ["chunk-a"],
+        }
+    ]
+
+    enriched, _, semantic_changed, _ = rag_answering._enforce_semantic_topics_and_section_uniqueness(
+        question="מה הוחלט בעיר?",
+        answer_sections=concise,
+        extended_answer_sections=concise,
+        context_by_chunk=context_by_chunk,
+        protocol_semantic_topic_labels={312: ["הקצאת כיתת גן ילדים"]},
+    )
+
+    assert semantic_changed is True
+    assert "בנושא הקצאת כיתת" in enriched[0]["text"]
+
+
+def test_resolve_section_topic_name_prefers_object_first_agreements() -> None:
+    context_by_chunk = {
+        "chunk-a": RagContextChunk(
+            chunk_id="chunk-a",
+            score=0.9,
+            snippet="מאשרים הכנת הסכם רשות לתקופה של 5 שנים לעמותה.",
+            citation="p.20",
+            source_kind="protocol",
+            document_id=470,
+            document_title="פרוטוקול ועדת הקצאות מקצועית מס' 8-25",
+            document_url="https://example.local/p.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:470",
+            start_page=20,
+            end_page=20,
+            chunk_text="מאשרים הכנת הסכם רשות לתקופה של 5 שנים לעמותה.",
+            semantic_topic_labels=[],
+        )
+    }
+    section = {
+        "protocol_title": "פרוטוקול ועדת הקצאות מקצועית מס' 8-25",
+        "topic_name": "נושא כללי",
+        "text": "אושרה הכנת הסכם רשות לתקופה של 5 שנים.",
+        "chunk_ids": ["chunk-a"],
+    }
+
+    topic_name = rag_answering._resolve_section_topic_name(
+        section=section,
+        semantic_topic=None,
+        context_by_chunk=context_by_chunk,
+    )
+
+    assert topic_name.startswith("הסכמים >")
+    assert "הסכם רשות" in topic_name
+
+
+def test_enforce_semantic_topics_never_returns_placeholder_topic() -> None:
+    context_by_chunk = {
+        "chunk-a": RagContextChunk(
+            chunk_id="chunk-a",
+            score=0.9,
+            snippet="מאשרים הכנת הסכם רשות לתקופה של 5 שנים לעמותה.",
+            citation="p.20",
+            source_kind="protocol",
+            document_id=470,
+            document_title="פרוטוקול ועדת הקצאות מקצועית מס' 8-25",
+            document_url="https://example.local/p.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:470",
+            start_page=20,
+            end_page=20,
+            chunk_text="מאשרים הכנת הסכם רשות לתקופה של 5 שנים לעמותה.",
+            semantic_topic_labels=[],
+        )
+    }
+    concise = [
+        {
+            "protocol_title": "פרוטוקול ועדת הקצאות מקצועית מס' 8-25",
+            "topic_name": "נושא כללי",
+            "text": "אושרה הכנת הסכם רשות לתקופה של 5 שנים.",
+            "chunk_ids": ["chunk-a"],
+        }
+    ]
+
+    enriched, _, _, _ = rag_answering._enforce_semantic_topics_and_section_uniqueness(
+        question="מה הוחלט בעיר?",
+        answer_sections=concise,
+        extended_answer_sections=concise,
+        context_by_chunk=context_by_chunk,
+        protocol_semantic_topic_labels={470: []},
+    )
+
+    assert "ללא תיוג סמנטי" not in str(enriched[0]["topic_name"])
+    assert ">" in str(enriched[0]["topic_name"])
+
+
+def test_enrich_allocation_procedural_summary_with_parcel_details() -> None:
+    decision_chunk = RagContextChunk(
+        chunk_id="chunk-decision",
+        score=0.8,
+        snippet="החלטות: מאשרים החלטת הועדה המקצועית להקצאות קרקע בפרוטוקול מס' 4/25.",
+        citation="p.2",
+        source_kind="protocol",
+        document_id=376,
+        document_title="פרוטוקול ועדת משנה להקצאות קרקע מס' 4-25",
+        document_url="https://example.local/p.pdf",
+        municipality_slug="ashdod",
+        meeting_external_id="meeting:376",
+        start_page=2,
+        end_page=2,
+        chunk_index=14,
+        chunk_text="החלטות: מאשרים החלטת הועדה המקצועית להקצאות קרקע בפרוטוקול מס' 4/25.",
+    )
+    detail_chunk = RagContextChunk(
+        chunk_id="chunk-detail",
+        score=0.5,
+        snippet="מהות הבקשה: בקשה להקצאת קרקע בשטח של 1,800 מ\"ר למטרת הקמת בית כנסת.",
+        citation="p.2",
+        source_kind="protocol",
+        document_id=376,
+        document_title="פרוטוקול ועדת משנה להקצאות קרקע מס' 4-25",
+        document_url="https://example.local/p.pdf",
+        municipality_slug="ashdod",
+        meeting_external_id="meeting:376",
+        start_page=2,
+        end_page=2,
+        chunk_index=13,
+        chunk_text="מהות הבקשה: בקשה להקצאת קרקע בשטח של 1,800 מ\"ר למטרת הקמת בית כנסת.",
+    )
+    parcel_chunk = RagContextChunk(
+        chunk_id="chunk-parcel",
+        score=0.5,
+        snippet="חלקה 94 :מגרש132 : גושים וחלקות: גוש2023",
+        citation="p.2",
+        source_kind="protocol",
+        document_id=376,
+        document_title="פרוטוקול ועדת משנה להקצאות קרקע מס' 4-25",
+        document_url="https://example.local/p.pdf",
+        municipality_slug="ashdod",
+        meeting_external_id="meeting:376",
+        start_page=2,
+        end_page=2,
+        chunk_index=9,
+        chunk_text="חלקה 94 :מגרש132 : גושים וחלקות: גוש2023",
+    )
+
+    section = {
+        "protocol_title": "פרוטוקול ועדת משנה להקצאות קרקע מס' 4-25",
+        "topic_name": "הקצאות > אישור הקצאה",
+        "text": "אושרה החלטה פרוצדורלית בנושא פרסום החלטות הוועדה בעיתונות.",
+        "chunk_ids": ["chunk-decision"],
+    }
+    context_by_chunk = {
+        "chunk-decision": decision_chunk,
+        "chunk-detail": detail_chunk,
+        "chunk-parcel": parcel_chunk,
+    }
+
+    enriched_text, used_chunk_ids = rag_answering._enrich_allocation_summary_with_context(
+        section=section,
+        context_by_chunk=context_by_chunk,
+    )
+
+    assert enriched_text is not None
+    assert "בקשה להקצאת קרקע" in enriched_text
+    assert "גוש 2023" in enriched_text
+    assert "חלקה 94" in enriched_text
+    assert "מגרש 132" in enriched_text
+    assert "chunk-detail" in used_chunk_ids
+    assert "chunk-parcel" in used_chunk_ids
+
+
+def test_enrich_allocation_procedural_summary_adds_missing_parcel_note() -> None:
+    decision_chunk = RagContextChunk(
+        chunk_id="chunk-decision",
+        score=0.8,
+        snippet="מאשרים החלטת הועדה המקצועית להקצאות קרקע.",
+        citation="p.16",
+        source_kind="protocol",
+        document_id=472,
+        document_title="פרוטוקול ועדת משנה להקצאות קרקע מס' 7-25",
+        document_url="https://example.local/p.pdf",
+        municipality_slug="ashdod",
+        meeting_external_id="meeting:472",
+        start_page=16,
+        end_page=16,
+        chunk_index=158,
+        chunk_text="מאשרים החלטת הועדה המקצועית להקצאות קרקע.",
+    )
+    detail_chunk = RagContextChunk(
+        chunk_id="chunk-detail",
+        score=0.5,
+        snippet="מהות הבקשה: בקשת העמותה להקצאת שתי כיתות גני ילדים בקומת הקרקע.",
+        citation="p.16",
+        source_kind="protocol",
+        document_id=472,
+        document_title="פרוטוקול ועדת משנה להקצאות קרקע מס' 7-25",
+        document_url="https://example.local/p.pdf",
+        municipality_slug="ashdod",
+        meeting_external_id="meeting:472",
+        start_page=16,
+        end_page=16,
+        chunk_index=157,
+        chunk_text="מהות הבקשה: בקשת העמותה להקצאת שתי כיתות גני ילדים בקומת הקרקע.",
+    )
+    section = {
+        "protocol_title": "פרוטוקול ועדת משנה להקצאות קרקע מס' 7-25",
+        "topic_name": "הקצאות > אישור הקצאה",
+        "text": "מאשרים החלטת הועדה המקצועית להקצאות קרקע.",
+        "chunk_ids": ["chunk-decision"],
+    }
+
+    enriched_text, _ = rag_answering._enrich_allocation_summary_with_context(
+        section=section,
+        context_by_chunk={"chunk-decision": decision_chunk, "chunk-detail": detail_chunk},
+    )
+
+    assert enriched_text is not None
+    assert "מזהי מקרקעין" in enriched_text
 
 
 def test_rag_answering_refuses_when_no_decision_content_exists() -> None:

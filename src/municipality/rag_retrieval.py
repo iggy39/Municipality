@@ -41,6 +41,12 @@ DECISION_TEXT_MARKERS = {
     "מאשר",
     "מאשרים",
 }
+BOILERPLATE_DECISION_PATTERNS = [
+    re.compile(r"פרסום\s+(?:זמני|ראשון|שני)(?:\s+ו(?:זמני|ראשון|שני))?\s+בעיתונות"),
+    re.compile(r"בית\s+העירייה"),
+    re.compile(r"רח\s*['\"]"),
+    re.compile(r"ת\s*\.?\s*ד\s*\.?"),
+]
 
 
 @dataclass(slots=True)
@@ -57,6 +63,7 @@ class RagContextChunk:
     meeting_external_id: str | None
     start_page: int | None
     end_page: int | None
+    chunk_index: int | None = None
     chunk_text: str = ""
     semantic_topic_labels: list[str] = field(default_factory=list)
 
@@ -280,6 +287,7 @@ def _to_context(hit) -> RagContextChunk:
         meeting_external_id=hit.meeting_external_id,
         start_page=hit.start_page,
         end_page=hit.end_page,
+        chunk_index=getattr(hit, "chunk_index", None),
         chunk_text=getattr(hit, "chunk_text", "") or hit.snippet,
         semantic_topic_labels=semantic_topic_labels,
     )
@@ -307,6 +315,36 @@ def _hit_contains_decision_marker(hit) -> bool:
         return False
     tokens = set(_hebrew_tokens(text_blob))
     return bool(tokens.intersection(DECISION_TEXT_MARKERS))
+
+
+def _is_boilerplate_decision_text(value: str) -> bool:
+    text = normalize_for_search(value)
+    if not text:
+        return False
+    for pattern in BOILERPLATE_DECISION_PATTERNS:
+        if pattern.search(text):
+            return True
+    return False
+
+
+def _decision_hit_quality_score(hit) -> float:
+    score = float(getattr(hit, "score", 0.0) or 0.0)
+    text = f"{getattr(hit, 'chunk_text', '')} {getattr(hit, 'snippet', '')}".strip()
+    text_norm = normalize_for_search(text)
+    if _is_boilerplate_decision_text(text_norm):
+        score -= 0.4
+
+    semantic_nodes = getattr(hit, "semantic_nodes", None) or []
+    has_topic_semantic = any(
+        str(getattr(node, "kind", "") or "").strip().casefold() == "topic"
+        for node in semantic_nodes
+    )
+    if has_topic_semantic:
+        score += 0.15
+
+    if text_norm and len(text_norm) >= 220:
+        score += 0.04
+    return score
 
 
 def _augment_protocol_decision_hits(
@@ -363,19 +401,46 @@ def _augment_protocol_decision_hits(
         if not _hit_contains_decision_marker(hit):
             continue
         existing = best_by_doc_id.get(hit.document_id)
-        if existing is None or hit.score > existing.score:
+        if existing is None or _decision_hit_quality_score(hit) > _decision_hit_quality_score(existing):
             best_by_doc_id[hit.document_id] = hit
 
-    augmented = list(selected_hits)
-    seen_chunk_ids = {hit.chunk_id for hit in augmented}
-    for doc_id in target_doc_ids:
-        already_has_decision_hit = any(
-            hit.source_type == "protocol" and hit.document_id == doc_id and _hit_contains_decision_marker(hit)
-            for hit in augmented
-        )
-        if already_has_decision_hit:
-            continue
+    augmented: list[Any] = []
+    seen_chunk_ids: set[str] = set()
 
+    non_protocol_hits = [hit for hit in selected_hits if hit.source_type != "protocol"]
+    protocol_hits_by_doc: dict[int, list[Any]] = {}
+    for hit in selected_hits:
+        if hit.source_type != "protocol":
+            continue
+        protocol_hits_by_doc.setdefault(hit.document_id, []).append(hit)
+
+    for doc_id in target_doc_ids:
+        replacement = best_by_doc_id.get(doc_id)
+        existing_doc_hits = protocol_hits_by_doc.get(doc_id, [])
+        if replacement is None and existing_doc_hits:
+            replacement = max(existing_doc_hits, key=_decision_hit_quality_score)
+        if replacement is None:
+            continue
+        if replacement.chunk_id in seen_chunk_ids:
+            continue
+        augmented.append(replacement)
+        seen_chunk_ids.add(replacement.chunk_id)
+
+    for hit in selected_hits:
+        if hit.source_type == "protocol" and hit.document_id in target_doc_set:
+            continue
+        if hit.chunk_id in seen_chunk_ids:
+            continue
+        augmented.append(hit)
+        seen_chunk_ids.add(hit.chunk_id)
+
+    for hit in non_protocol_hits:
+        if hit.chunk_id in seen_chunk_ids:
+            continue
+        augmented.append(hit)
+        seen_chunk_ids.add(hit.chunk_id)
+
+    for doc_id in target_doc_ids:
         candidate = best_by_doc_id.get(doc_id)
         if candidate is None or candidate.chunk_id in seen_chunk_ids:
             continue
@@ -405,7 +470,7 @@ def _prioritize_protocol_document_coverage(hits: list[Any], *, limit: int) -> li
         document_hits = [hit for hit in hits if hit.source_type == "protocol" and hit.document_id == document_id]
         if not document_hits:
             continue
-        preferred = next((hit for hit in document_hits if _hit_contains_decision_marker(hit)), document_hits[0])
+        preferred = max(document_hits, key=_decision_hit_quality_score)
         if preferred.chunk_id in seen_chunk_ids:
             continue
         ordered.append(preferred)
