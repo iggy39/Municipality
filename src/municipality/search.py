@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from municipality.chunking import build_trigrams, normalize_for_search
 from municipality.models import (
     AssetManifest,
+    ChunkEmbedding,
     ChunkSemanticLink,
     Document,
     SemanticAlias,
@@ -127,6 +128,8 @@ class SearchHit:
     document_title: str
     municipality_slug: str
     meeting_external_id: str | None
+    start_offset: int | None
+    end_offset: int | None
     start_page: int | None
     end_page: int | None
     semantic_match_count: int = 0
@@ -156,6 +159,9 @@ class SearchService:
         )
         if existing_chunk_ids:
             self.session.query(TextChunk).filter(TextChunk.document_version_id == document_version_id).delete()
+            self.session.query(ChunkEmbedding).filter(ChunkEmbedding.chunk_id.in_(existing_chunk_ids)).delete(
+                synchronize_session=False
+            )
             self._delete_fts(existing_chunk_ids)
             self._delete_trigrams(existing_chunk_ids)
 
@@ -311,6 +317,8 @@ class SearchService:
                     document_title=document.title_he,
                     municipality_slug=source_site.municipality_slug,
                     meeting_external_id=manifest.source_node_external_id if manifest else None,
+                    start_offset=chunk.start_offset,
+                    end_offset=chunk.end_offset,
                     start_page=chunk.start_page,
                     end_page=chunk.end_page,
                     semantic_match_count=semantic_match_count,

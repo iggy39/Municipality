@@ -17,7 +17,6 @@ from municipality.rag_answering import (
 )
 from municipality.rag_llm import (
     RAG_ANSWER_PREFIX_DEFAULT,
-    RAG_REFUSE_PREFIX_DEFAULT,
     RAG_VERIFY_PREFIX_DEFAULT,
     MockRagProvider,
     RagLlmConfig,
@@ -87,9 +86,8 @@ def test_rag_answering_returns_structured_answer_with_citations_and_limitations(
     assert "מבוסס על שני קטעי מקור בלבד" in result.limitations[0]
     assert result.refusal_reason_code is None
     assert len(result.claim_assessments) == 2
-    assert [request["call_type"] for request in provider.requests] == ["answer", "verify"]
+    assert [request["call_type"] for request in provider.requests] == ["answer"]
     assert provider.requests[0]["messages"][0]["content"].splitlines()[0] == RAG_ANSWER_PREFIX_DEFAULT
-    assert provider.requests[1]["messages"][0]["content"].splitlines()[0] == RAG_VERIFY_PREFIX_DEFAULT
 
 
 def test_rag_answering_skips_second_external_call_when_answer_includes_inline_verification() -> None:
@@ -274,7 +272,7 @@ def test_rag_answering_uses_local_fallback_when_configured(monkeypatch) -> None:
     assert result.claim_assessments[0]["semantic_source"] == "deterministic_similarity"
 
 
-def test_rag_answering_exposes_when_external_fallback_overrides_deterministic_low_score() -> None:
+def test_rag_answering_exposes_when_external_fallback_overrides_deterministic_low_score(monkeypatch) -> None:
     provider = MockRagProvider(
         responses_by_call_type={
             "answer": json.dumps(
@@ -305,6 +303,7 @@ def test_rag_answering_exposes_when_external_fallback_overrides_deterministic_lo
             ),
         }
     )
+    monkeypatch.setenv("RAG_VERIFY_FALLBACK_PROVIDER", "external")
     client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
     service = RagAnsweringService(llm_client=client)
 
@@ -707,7 +706,7 @@ def test_rag_answering_refuses_when_attachment_side_is_missing() -> None:
     assert result.citations == []
     assert result.refusal_reason_code == REASON_MISSING_ATTACHMENT_EVIDENCE
     assert "אין מספיק ראיות" in (result.refusal_message_he or "")
-    assert [request["call_type"] for request in provider.requests] == ["refuse"]
+    assert provider.requests == []
 
 
 def test_rag_answering_reconstructs_decision_answer_when_model_outputs_only_context_claims() -> None:
@@ -1323,6 +1322,166 @@ def test_enrich_allocation_procedural_summary_adds_missing_parcel_note() -> None
     assert "מזהי מקרקעין" in enriched_text
 
 
+def test_resolve_section_topic_name_prefers_persisted_decision_request_topic() -> None:
+    context_by_chunk = {
+        "chunk-a": RagContextChunk(
+            chunk_id="chunk-a",
+            score=0.9,
+            snippet="אושרה החלטה פרוצדורלית בנושא פרסום החלטות הוועדה בעיתונות.",
+            citation="p.2",
+            source_kind="protocol",
+            document_id=331,
+            document_title="פרוטוקול ועדת הקצאות מקצועית מס' 2-25",
+            document_url="https://example.local/p.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:331",
+            start_page=2,
+            end_page=2,
+            chunk_text="אושרה החלטה פרוצדורלית בנושא פרסום החלטות הוועדה בעיתונות.",
+            semantic_topic_labels=[],
+        )
+    }
+    section = {
+        "protocol_title": "פרוטוקול ועדת הקצאות מקצועית מס' 2-25",
+        "topic_name": "הקצאות > ביטול הקצאה",
+        "text": "אושרה החלטה פרוצדורלית בנושא פרסום החלטות הוועדה בעיתונות.",
+        "chunk_ids": ["chunk-a"],
+    }
+
+    topic_name = rag_answering._resolve_section_topic_name(
+        section=section,
+        semantic_topic="ביטול הקצאה",
+        context_by_chunk=context_by_chunk,
+        decision_request_context_by_chunk={
+            "chunk-a": {
+                "request_subject_he": 'עמותת "קול הקריות" קיבלה הקצאה במקלט "החבל" ומבקשת החלפה למקלט "לגונה"',
+                "subject_topic_he": "החלפת הקצאה למקלט",
+                "confidence": 0.92,
+            }
+        },
+    )
+
+    assert topic_name == "הקצאות > החלפת הקצאה למקלט"
+
+
+def test_enrich_allocation_summary_prefers_persisted_decision_request_context() -> None:
+    context_by_chunk = {
+        "chunk-a": RagContextChunk(
+            chunk_id="chunk-a",
+            score=0.8,
+            snippet="הועדה אישרה ביצוע פרסום שני בעיתונות.",
+            citation="p.5",
+            source_kind="protocol",
+            document_id=331,
+            document_title="פרוטוקול ועדת הקצאות מקצועית מס' 2-25",
+            document_url="https://example.local/p.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:331",
+            start_page=5,
+            end_page=5,
+            chunk_index=12,
+            chunk_text="הועדה אישרה ביצוע פרסום שני בעיתונות.",
+            semantic_topic_labels=[],
+        )
+    }
+    section = {
+        "protocol_title": "פרוטוקול ועדת הקצאות מקצועית מס' 2-25",
+        "topic_name": "הקצאות > החלפת הקצאה למקלט",
+        "text": "אושרה החלטה פרוצדורלית בנושא פרסום החלטות הוועדה בעיתונות.",
+        "chunk_ids": ["chunk-a"],
+    }
+
+    enriched_text, used_chunk_ids = rag_answering._enrich_allocation_summary_with_context(
+        section=section,
+        context_by_chunk=context_by_chunk,
+        decision_request_context_by_chunk={
+            "chunk-a": {
+                "request_subject_he": 'עמותת "קול הקריות" קיבלה הקצאה במקלט "החבל" ומבקשת החלפה למקלט "לגונה"',
+                "subject_topic_he": "החלפת הקצאה למקלט",
+                "decision_text": "הועדה מאשרת ביצוע פרסום שני בעיתונות.",
+                "gush": "2066",
+                "helka": "428",
+                "migrash": None,
+                "source_chunk_ids": ["chunk-a", "chunk-subject"],
+                "confidence": 0.95,
+            }
+        },
+    )
+
+    assert enriched_text is not None
+    assert "אושר פרסום בעיתונות עבור" in enriched_text
+    assert "מקלט \"לגונה\"" in enriched_text
+    assert "גוש 2066" in enriched_text
+    assert "חלקה 428" in enriched_text
+    assert used_chunk_ids == ["chunk-a", "chunk-subject"]
+
+
+def test_broad_query_rewrites_agreement_summary_from_decision_context() -> None:
+    context_by_chunk = {
+        "chunk-a": RagContextChunk(
+            chunk_id="chunk-a",
+            score=0.8,
+            snippet="החלטות: מאשרים הכנת הסכם רשות לתקופה של 5 שנים.",
+            citation="p.20",
+            source_kind="protocol",
+            document_id=470,
+            document_title="פרוטוקול ועדת הקצאות מקצועית מס' 8-25",
+            document_url="https://example.local/p.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:470",
+            start_page=20,
+            end_page=20,
+            chunk_index=211,
+            chunk_text="החלטות: מאשרים הכנת הסכם רשות לתקופה של 5 שנים.",
+            semantic_topic_labels=[],
+        )
+    }
+    concise = [
+        {
+            "protocol_title": "פרוטוקול ועדת הקצאות מקצועית מס' 8-25",
+            "topic_name": "הסכמים > הסכם רשות לעמותה",
+            "text": "אושרה הכנת הסכם רשות לתקופה של 5 שנים.",
+            "chunk_ids": ["chunk-a"],
+        }
+    ]
+
+    enriched, _, _, _ = rag_answering._enforce_semantic_topics_and_section_uniqueness(
+        question="מה הוחלט בעיר?",
+        answer_sections=concise,
+        extended_answer_sections=concise,
+        context_by_chunk=context_by_chunk,
+        protocol_semantic_topic_labels={470: ["הקצאת כיתות גן ילדים"]},
+        decision_request_context_by_chunk={
+            "chunk-a": {
+                "request_subject_he": "בקשה למתן רשות שימוש ב-2 כיתות גני ילדים להפעלה",
+                "subject_topic_he": "הקצאת כיתות גן ילדים",
+                "decision_text": "מאשרים הכנת הסכם רשות לתקופה של 5 שנים.",
+                "source_chunk_ids": ["chunk-a", "chunk-subject"],
+                "confidence": 0.98,
+            }
+        },
+    )
+
+    assert "מתן רשות שימוש" in enriched[0]["text"]
+    assert enriched[0]["chunk_ids"] == ["chunk-a", "chunk-subject"]
+
+
+def test_compact_request_subject_for_summary_keeps_core_subject_only() -> None:
+    compact = rag_answering._compact_request_subject_for_summary(
+        "בקשה למתן רשות שימוש ב 2-כיתות גני ילדים להפעלה. מבנים אלו נמסרו לעירייה במסגרת התחייבות יזם י.שפץ."
+    )
+
+    assert compact == "מתן רשות שימוש ב 2-כיתות גני ילדים להפעלה"
+
+
+def test_compact_request_subject_for_summary_skips_agreement_preamble() -> None:
+    compact = rag_answering._compact_request_subject_for_summary(
+        "לעמותה קיים הסכם רשות שימוש מס' 6460. העמותה מבקשת להסדיר רשות שימוש לתקופה נוספת ל 6-גני ילדים המופעלים ע\"י העמותה מזה שנים."
+    )
+
+    assert compact == "הסדרת רשות שימוש לתקופה נוספת ל 6-גני ילדים המופעלים ע\"י העמותה מזה שנים"
+
+
 def test_rag_answering_refuses_when_no_decision_content_exists() -> None:
     provider = MockRagProvider(
         responses_by_call_type={
@@ -1393,7 +1552,7 @@ def test_rag_answering_refuses_when_no_decision_content_exists() -> None:
     assert result.scoring.get("decision_required") is True
     assert result.scoring.get("decision_claim_count") == 0
     assert result.scoring.get("decision_reconstruction_used") is False
-    assert provider.requests[-1]["messages"][0]["content"].splitlines()[0] == RAG_REFUSE_PREFIX_DEFAULT
+    assert [request["call_type"] for request in provider.requests] == ["answer"]
 
 
 def test_rag_answering_refuses_when_claim_has_unknown_citation_chunk() -> None:
@@ -1432,10 +1591,10 @@ def test_rag_answering_refuses_when_claim_has_unknown_citation_chunk() -> None:
 
     assert result.status == "refusal"
     assert result.refusal_reason_code == REASON_UNCITED_CLAIMS
-    assert [request["call_type"] for request in provider.requests] == ["answer", "refuse"]
+    assert [request["call_type"] for request in provider.requests] == ["answer"]
 
 
-def test_rag_answering_refuses_when_verification_marks_unsupported_claims() -> None:
+def test_rag_answering_refuses_when_verification_marks_unsupported_claims(monkeypatch) -> None:
     provider = MockRagProvider(
         responses_by_call_type={
             "answer": json.dumps(
@@ -1467,6 +1626,7 @@ def test_rag_answering_refuses_when_verification_marks_unsupported_claims() -> N
             "refuse": json.dumps({"refusal_message_he": "אין מספיק ראיות"}, ensure_ascii=False),
         }
     )
+    monkeypatch.setenv("RAG_VERIFY_FALLBACK_PROVIDER", "external")
     client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
     service = RagAnsweringService(llm_client=client)
 
@@ -1478,7 +1638,7 @@ def test_rag_answering_refuses_when_verification_marks_unsupported_claims() -> N
 
     assert result.status == "refusal"
     assert result.refusal_reason_code == REASON_UNSUPPORTED_CLAIMS
-    assert [request["call_type"] for request in provider.requests] == ["answer", "verify", "refuse"]
+    assert [request["call_type"] for request in provider.requests] == ["answer", "verify"]
 
 
 def test_rag_answering_accepts_markdown_fenced_json_from_model() -> None:
@@ -1577,7 +1737,7 @@ def test_rag_answering_refuses_when_mixed_answer_cites_only_protocol_side() -> N
     assert result.status == "refusal"
     assert result.refusal_reason_code == REASON_MISSING_ATTACHMENT_EVIDENCE
     assert result.missing_source_kinds == ["attachment"]
-    assert [request["call_type"] for request in provider.requests] == ["answer", "verify", "refuse"]
+    assert [request["call_type"] for request in provider.requests] == ["answer"]
 
 
 def test_rag_answering_refuses_ambiguous_query_without_context() -> None:
@@ -1608,10 +1768,10 @@ def test_rag_answering_refuses_ambiguous_query_without_context() -> None:
     assert result.status == "refusal"
     assert result.refusal_reason_code == REASON_INSUFFICIENT_EVIDENCE
     assert set(result.missing_source_kinds) == {"protocol", "attachment"}
-    assert [request["call_type"] for request in provider.requests] == ["refuse"]
+    assert provider.requests == []
 
 
-def test_rag_answering_refuses_when_verification_cites_unknown_context_chunk() -> None:
+def test_rag_answering_refuses_when_verification_cites_unknown_context_chunk(monkeypatch) -> None:
     provider = MockRagProvider(
         responses_by_call_type={
             "answer": json.dumps(
@@ -1643,6 +1803,7 @@ def test_rag_answering_refuses_when_verification_cites_unknown_context_chunk() -
             "refuse": json.dumps({"refusal_message_he": "אין מספיק ראיות"}, ensure_ascii=False),
         }
     )
+    monkeypatch.setenv("RAG_VERIFY_FALLBACK_PROVIDER", "external")
     client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
     service = RagAnsweringService(llm_client=client)
 
@@ -1654,7 +1815,7 @@ def test_rag_answering_refuses_when_verification_cites_unknown_context_chunk() -
 
     assert result.status == "refusal"
     assert result.refusal_reason_code == REASON_INVALID_VERIFICATION_FORMAT
-    assert [request["call_type"] for request in provider.requests] == ["answer", "verify", "refuse"]
+    assert [request["call_type"] for request in provider.requests] == ["answer", "verify"]
 
 
 def test_rag_answering_refuses_when_mixed_sources_do_not_match_question_topic() -> None:
@@ -1691,7 +1852,7 @@ def test_rag_answering_refuses_when_mixed_sources_do_not_match_question_topic() 
 
     assert result.status == "refusal"
     assert result.refusal_reason_code == REASON_TOPIC_MISMATCH_EVIDENCE
-    assert [request["call_type"] for request in provider.requests] == ["answer", "refuse"]
+    assert [request["call_type"] for request in provider.requests] == ["answer"]
 
 
 def _retrieval_result_with_mixed_sources() -> RagRetrievalResult:

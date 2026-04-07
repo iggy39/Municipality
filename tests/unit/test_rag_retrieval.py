@@ -15,6 +15,21 @@ class StubSearchService:
         return list(self.responses_by_source.get(source, []))
 
 
+class StubReranker:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def initial_candidate_limit(self, *, top_k: int) -> int:
+        return max(9, top_k)
+
+    def rerank_hits(self, *, query: str, hits: list[SearchHit], top_k: int) -> tuple[list[SearchHit], dict]:
+        self.calls.append({"query": query, "top_k": top_k, "chunk_ids": [hit.chunk_id for hit in hits]})
+        if len(hits) >= 2:
+            hits[0].score = 0.2
+            hits[1].score = 0.99
+        return list(reversed(hits)), {"enabled": True, "candidate_count": len(hits)}
+
+
 def test_rag_retrieval_backfills_missing_source_kinds_and_keeps_citations() -> None:
     protocol_hit = _hit(chunk_id="p-1", source_type="protocol", score=0.91, citation="pp.2-3")
     attachment_hit = _hit(chunk_id="a-1", source_type="attachment", score=0.88, citation="p.1")
@@ -175,6 +190,27 @@ def test_rag_retrieval_exposes_topic_semantic_labels_in_context() -> None:
     assert result.contexts[0].semantic_topic_labels == ["בטיחות בדרכים"]
 
 
+def test_rag_retrieval_applies_optional_reranker_before_limiting_results() -> None:
+    search = StubSearchService(
+        {
+            "all": [
+                _hit(chunk_id="p-1", source_type="protocol", score=0.95, citation="p.1"),
+                _hit(chunk_id="p-2", source_type="protocol", score=0.8, citation="p.2"),
+            ]
+        }
+    )
+    reranker = StubReranker()
+    retrieval = RagRetrievalService(search_service=search, reranker=reranker)
+
+    result = retrieval.retrieve(query="תקציב", source_kinds=["protocol"], top_k=1, semantic_mode="off")
+
+    assert result.contexts[0].chunk_id == "p-2"
+    assert result.debug_info["embedding_rerank"]["enabled"] is True
+    assert result.debug_info["embedding_rerank"]["candidate_count"] == 2
+    assert reranker.calls
+    assert search.calls[0]["limit"] == 9
+
+
 def _hit(
     *,
     chunk_id: str,
@@ -196,6 +232,8 @@ def _hit(
         document_title=document_title,
         municipality_slug="ashdod",
         meeting_external_id="meeting:1",
+        start_offset=None,
+        end_offset=None,
         start_page=1,
         end_page=1,
         chunk_text=chunk_text,

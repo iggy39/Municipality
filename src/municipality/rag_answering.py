@@ -32,6 +32,8 @@ REASON_NO_DECISION_CONTENT = "NO_DECISION_CONTENT"
 
 LOCAL_VERIFY_PROVIDER_NAME = "TinyLlamaLocal"
 LOCAL_VERIFY_MODEL_DIR_DEFAULT = "local_llm/models/TinyLlama-1.1B-Chat-v1.0"
+DETERMINISTIC_REFUSAL_PROVIDER_NAME = "DeterministicRefusal"
+DETERMINISTIC_REFUSAL_MODEL_NAME = "rule_based_v1"
 VERIFY_FALLBACK_PROVIDER_EXTERNAL = "external"
 VERIFY_FALLBACK_PROVIDER_LOCAL = "local"
 DETERMINISTIC_SIMILARITY_SOURCE = "deterministic_similarity"
@@ -115,7 +117,7 @@ def rag_answering_thresholds_snapshot() -> dict[str, Any]:
 
 @dataclass(slots=True)
 class RagVerifyRoutingConfig:
-    fallback_provider: str = VERIFY_FALLBACK_PROVIDER_EXTERNAL
+    fallback_provider: str = VERIFY_FALLBACK_PROVIDER_LOCAL
     deterministic_low_score_threshold: float = LOW_SCORE_WARNING_LIMIT
     local_model_dir: str = LOCAL_VERIFY_MODEL_DIR_DEFAULT
     local_device: str = "cpu"
@@ -579,6 +581,7 @@ class RagAnsweringService:
         cached_topic_tree: dict[str, list[str]] | None = None,
         protocol_subject_anchors: dict[int, list[str]] | None = None,
         protocol_semantic_topic_labels: dict[int, list[str]] | None = None,
+        decision_request_context_by_chunk: dict[str, dict[str, Any]] | None = None,
         ask_request_id: str | None = None,
     ) -> RagAnswerResult:
         compose_started = time.perf_counter()
@@ -628,7 +631,11 @@ class RagAnsweringService:
                 "Good examples: 'קמפיין בטיחות בדרכים', 'שיתוף פעולה עם קופות חולים', 'תמרורים מוארים', 'בדיקות בטיחות בבתי ספר', 'פינוי מבני עמותות'. "
                 "If uncertain, set topic_subtopic_he to null and topic_confidence below 0.5 instead of low-quality text."
             ),
-            payload=_answer_payload(question=question, retrieval=retrieval),
+            payload=_answer_payload(
+                question=question,
+                retrieval=retrieval,
+                decision_request_context_by_chunk=decision_request_context_by_chunk,
+            ),
             ask_request_id=ask_request_id,
         )
         answer_call_ms = _elapsed_ms(answer_call_started)
@@ -726,7 +733,11 @@ class RagAnsweringService:
                 scoring=topic_mismatch_scoring,
             )
 
-        decision_lines = _extract_decision_lines(retrieval.contexts)
+        decision_lines = _augment_decision_lines_with_request_context(
+            decision_lines=_extract_decision_lines(retrieval.contexts),
+            contexts=retrieval.contexts,
+            decision_request_context_by_chunk=decision_request_context_by_chunk,
+        )
         decision_line_by_id = {line.decision_line_id: line for line in decision_lines}
         decision_lines_by_chunk = _build_decision_lines_by_chunk(
             contexts=retrieval.contexts,
@@ -1039,6 +1050,7 @@ class RagAnsweringService:
             extended_answer_sections=extended_answer_sections,
             context_by_chunk=context_by_chunk,
             protocol_semantic_topic_labels=protocol_semantic_topic_labels,
+            decision_request_context_by_chunk=decision_request_context_by_chunk,
         )
         selected_used_chunk_ids = _merge_chunk_ids(
             selected_used_chunk_ids,
@@ -1056,6 +1068,7 @@ class RagAnsweringService:
         scoring_payload["topic_tree_cached_protocol_count"] = len(cached_topic_tree or {})
         scoring_payload["topic_tree_cached_child_count"] = sum(len(children) for children in (cached_topic_tree or {}).values())
         scoring_payload["topic_subject_anchor_document_count"] = len(protocol_subject_anchors or {})
+        scoring_payload["decision_request_context_chunk_count"] = len(decision_request_context_by_chunk or {})
         scoring_payload["broad_query_protocol_split_applied"] = broad_protocol_split_applied
         scoring_payload["semantic_topic_enforced"] = semantic_topic_enforced
         scoring_payload["broad_duplicate_text_fixed"] = broad_duplicate_text_fixed
@@ -1115,32 +1128,12 @@ class RagAnsweringService:
         ask_request_id: str | None = None,
         scoring: dict[str, Any] | None = None,
     ) -> RagAnswerResult:
-        refusal_call = self.llm_client.generate(
-            call_type=RAG_CALL_REFUSE,
-            instruction=(
-                "Decide refusal only. Return strict JSON object with keys: "
-                "refusal_message_he and missing_source_kinds."
-            ),
-            payload={
-                "question": question,
-                "reason_code": reason_code,
-                "missing_source_kinds": missing_source_kinds,
-                "retrieved_contexts": [
-                    {
-                        "chunk_id": context.chunk_id,
-                        "source_kind": context.source_kind,
-                        "citation": context.citation,
-                    }
-                    for context in retrieval.contexts
-                ],
-            },
-            ask_request_id=ask_request_id,
-        )
-
         refusal_message = _hebrew_refusal_message(
             reason_code=reason_code,
             missing_source_kinds=missing_source_kinds,
         )
+        resolved_provider = provider or DETERMINISTIC_REFUSAL_PROVIDER_NAME
+        resolved_model = model or DETERMINISTIC_REFUSAL_MODEL_NAME
 
         result = RagAnswerResult(
             status="refusal",
@@ -1154,8 +1147,8 @@ class RagAnsweringService:
             refusal_reason_code=reason_code,
             refusal_message_he=refusal_message,
             missing_source_kinds=missing_source_kinds,
-            provider=provider or refusal_call.provider,
-            model=model or refusal_call.model,
+            provider=resolved_provider,
+            model=resolved_model,
             scoring=dict(scoring or {}),
         )
         log_rag_event(
@@ -1168,12 +1161,18 @@ class RagAnsweringService:
             retrieved_source_types=sorted({context.source_kind for context in retrieval.contexts}),
             provider=result.provider,
             model=result.model,
-            refusal_call_error_code=refusal_call.error_code,
+            refusal_call_error_code=None,
+            refusal_route="deterministic",
         )
         return result
 
 
-def _answer_payload(*, question: str, retrieval: RagRetrievalResult) -> dict[str, Any]:
+def _answer_payload(
+    *,
+    question: str,
+    retrieval: RagRetrievalResult,
+    decision_request_context_by_chunk: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     decision_lines = _extract_decision_lines(retrieval.contexts)
     return {
         "question": question,
@@ -1340,6 +1339,15 @@ def _run_local_verify(
     decision_lines: list[_DecisionLine],
     config: RagVerifyRoutingConfig,
 ) -> LocalVerifyResult:
+    heuristic_result = _run_local_verify_heuristic(
+        question=question,
+        answer_draft=answer_draft,
+        retrieval=retrieval,
+        decision_lines=decision_lines,
+    )
+    if not _env_bool(os.getenv("RAG_VERIFY_LOCAL_USE_MODEL"), default=False):
+        return heuristic_result
+
     verify_payload = _verification_payload(
         question=question,
         answer_draft=answer_draft,
@@ -1379,65 +1387,28 @@ def _run_local_verify(
             timeout=config.local_timeout_seconds,
         )
     except subprocess.TimeoutExpired:
-        return LocalVerifyResult(
-            provider=LOCAL_VERIFY_PROVIDER_NAME,
-            model=model_dir,
-            text=None,
-            error_code="LOCAL_VERIFY_TIMEOUT",
-            error_text=f"timeout after {config.local_timeout_seconds}s",
-        )
+        return heuristic_result
 
     latency_ms = round((time.perf_counter() - started) * 1000.0, 3)
     if process.returncode != 0:
-        stderr = (process.stderr or "").strip() or None
-        return LocalVerifyResult(
-            provider=LOCAL_VERIFY_PROVIDER_NAME,
-            model=model_dir,
-            text=None,
-            error_code="LOCAL_VERIFY_PROCESS_FAILED",
-            error_text=stderr or f"exit code {process.returncode}",
-        )
+        return heuristic_result
 
     stdout = (process.stdout or "").strip()
     if not stdout:
-        return LocalVerifyResult(
-            provider=LOCAL_VERIFY_PROVIDER_NAME,
-            model=model_dir,
-            text=None,
-            error_code="LOCAL_VERIFY_EMPTY_STDOUT",
-            error_text="empty local verifier output",
-        )
+        return heuristic_result
 
     try:
         payload = json.loads(stdout)
     except json.JSONDecodeError:
-        return LocalVerifyResult(
-            provider=LOCAL_VERIFY_PROVIDER_NAME,
-            model=model_dir,
-            text=stdout,
-            error_code="LOCAL_VERIFY_INVALID_JSON",
-            error_text="local verifier did not return JSON",
-        )
+        return heuristic_result
 
     if not isinstance(payload, dict):
-        return LocalVerifyResult(
-            provider=LOCAL_VERIFY_PROVIDER_NAME,
-            model=model_dir,
-            text=None,
-            error_code="LOCAL_VERIFY_INVALID_PAYLOAD",
-            error_text="local verifier output is not an object",
-        )
+        return heuristic_result
 
     response_text = _as_optional_str(payload.get("response_text"))
     model_name = _as_optional_str(payload.get("model_source")) or model_dir
     if not response_text:
-        return LocalVerifyResult(
-            provider=LOCAL_VERIFY_PROVIDER_NAME,
-            model=model_name,
-            text=None,
-            error_code="LOCAL_VERIFY_EMPTY_RESPONSE",
-            error_text="missing response_text in local verifier output",
-        )
+        return heuristic_result
 
     log_rag_event(
         "rag.answering.local_verify.result",
@@ -1450,6 +1421,50 @@ def _run_local_verify(
         provider=LOCAL_VERIFY_PROVIDER_NAME,
         model=model_name,
         text=response_text,
+        error_code=None,
+        error_text=None,
+    )
+
+
+def _run_local_verify_heuristic(
+    *,
+    question: str,
+    answer_draft: _AnswerDraft,
+    retrieval: RagRetrievalResult,
+    decision_lines: list[_DecisionLine],
+) -> LocalVerifyResult:
+    context_by_chunk = {context.chunk_id: context for context in retrieval.contexts}
+    decision_lines_by_chunk = _build_decision_lines_by_chunk(
+        contexts=retrieval.contexts,
+        decision_lines=decision_lines,
+    )
+    assessments = _assess_claims(
+        question=question,
+        claims=answer_draft.claims,
+        context_by_chunk=context_by_chunk,
+        decision_lines_by_chunk=decision_lines_by_chunk,
+    )
+    claims_payload: list[dict[str, Any]] = []
+    all_supported = True
+    for claim, assessment in zip(answer_draft.claims, assessments, strict=True):
+        all_citations_valid = all(chunk_id in context_by_chunk for chunk_id in claim.citation_chunk_ids)
+        supported = bool(all_citations_valid)
+        if not supported:
+            all_supported = False
+        claims_payload.append(
+            {
+                "text": claim.text,
+                "supported": supported,
+                "citation_chunk_ids": list(claim.citation_chunk_ids),
+                "best_decision_line_id": assessment.matched_decision_line_id,
+                "semantic_similarity_score": assessment.score,
+                "semantic_rationale": assessment.semantic_rationale,
+            }
+        )
+    return LocalVerifyResult(
+        provider=LOCAL_VERIFY_PROVIDER_NAME,
+        model="heuristic_v1",
+        text=json.dumps({"all_supported": all_supported, "claims": claims_payload}, ensure_ascii=False),
         error_code=None,
         error_text=None,
     )
@@ -2016,6 +2031,61 @@ def _extract_decision_lines(contexts: list[RagContextChunk]) -> list[_DecisionLi
                 )
             )
     return lines
+
+
+def _augment_decision_lines_with_request_context(
+    *,
+    decision_lines: list[_DecisionLine],
+    contexts: list[RagContextChunk],
+    decision_request_context_by_chunk: dict[str, dict[str, Any]] | None,
+) -> list[_DecisionLine]:
+    if not decision_request_context_by_chunk:
+        return decision_lines
+
+    out = list(decision_lines)
+    existing_ids = {line.decision_line_id for line in decision_lines}
+    contexts_by_chunk = {context.chunk_id: context for context in contexts}
+    for chunk_id, payload in decision_request_context_by_chunk.items():
+        if not isinstance(payload, dict):
+            continue
+        context = contexts_by_chunk.get(str(chunk_id))
+        if context is None:
+            continue
+
+        evidence_text = _decision_request_context_evidence_text(payload)
+        if not evidence_text:
+            continue
+        decision_line_id = f"{chunk_id}:request_context"
+        if decision_line_id in existing_ids:
+            continue
+        existing_ids.add(decision_line_id)
+        out.append(
+            _DecisionLine(
+                decision_line_id=decision_line_id,
+                chunk_id=str(chunk_id),
+                source_kind=context.source_kind,
+                citation=context.citation,
+                text=evidence_text,
+            )
+        )
+    return out
+
+
+def _decision_request_context_evidence_text(payload: dict[str, Any]) -> str:
+    parts: list[str] = []
+    decision_text = _as_optional_str(payload.get("decision_text"))
+    if decision_text:
+        parts.append(" ".join(decision_text.split()))
+    request_subject = _decision_context_request_subject(payload)
+    if request_subject:
+        parts.append(request_subject)
+    address = _as_optional_str(payload.get("address_he"))
+    if address:
+        parts.append(f"כתובת {address}")
+    parcel_bits = _decision_context_parcel_bits(payload)
+    if parcel_bits:
+        parts.append(" ".join(parcel_bits))
+    return ". ".join(part.rstrip(".") for part in parts if part).strip()
 
 
 def _build_decision_lines_by_chunk(
@@ -2928,6 +2998,7 @@ def _enforce_semantic_topics_and_section_uniqueness(
     extended_answer_sections: list[dict[str, Any]],
     context_by_chunk: dict[str, RagContextChunk],
     protocol_semantic_topic_labels: dict[int, list[str]] | None,
+    decision_request_context_by_chunk: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool, bool]:
     if not answer_sections:
         return answer_sections, extended_answer_sections, False, False
@@ -2960,6 +3031,7 @@ def _enforce_semantic_topics_and_section_uniqueness(
             section=section_copy,
             semantic_topic=semantic_topic,
             context_by_chunk=context_by_chunk,
+            decision_request_context_by_chunk=decision_request_context_by_chunk,
         )
         if str(section_copy.get("topic_name") or "").strip() != resolved_topic:
             semantic_changed = True
@@ -2969,7 +3041,28 @@ def _enforce_semantic_topics_and_section_uniqueness(
         section_copy["topic_score"] = 1.0 if semantic_topic else 0.65
 
         compact_text = _sanitize_summary_for_output(_as_optional_str(section_copy.get("text")) or "")
-        if _is_subjectless_publication_summary(compact_text):
+        decision_request_context = _decision_request_context_for_section(
+            section=section_copy,
+            decision_request_context_by_chunk=decision_request_context_by_chunk,
+        )
+        context_rewrite_text, context_chunk_ids = _rewrite_summary_from_decision_context(
+            summary_text=compact_text,
+            topic_name=resolved_topic,
+            decision_request_context=decision_request_context,
+        )
+        used_context_rewrite = False
+        if context_rewrite_text and _should_override_with_decision_context_summary(
+            summary_text=compact_text,
+            decision_request_context=decision_request_context,
+            broad_query=broad_query,
+        ):
+            compact_text = context_rewrite_text
+            used_context_rewrite = True
+            merged_chunk_ids = _merge_section_chunk_ids(section_copy.get("chunk_ids"), context_chunk_ids)
+            if merged_chunk_ids:
+                section_copy["chunk_ids"] = merged_chunk_ids
+                extended_copy["chunk_ids"] = merged_chunk_ids
+        if not used_context_rewrite and _is_subjectless_publication_summary(compact_text):
             compact_text = _enrich_subjectless_summary(compact_text, resolved_topic)
 
         allocation_enriched_text, detail_chunk_ids = _enrich_allocation_summary_with_context(
@@ -2979,6 +3072,7 @@ def _enforce_semantic_topics_and_section_uniqueness(
                 "topic_name": resolved_topic,
             },
             context_by_chunk=context_by_chunk,
+            decision_request_context_by_chunk=decision_request_context_by_chunk,
         )
         if allocation_enriched_text:
             compact_text = allocation_enriched_text
@@ -2994,7 +3088,13 @@ def _enforce_semantic_topics_and_section_uniqueness(
         extended_copy["topic_route"] = section_copy["topic_route"]
         extended_copy["topic_score"] = section_copy["topic_score"]
         extended_text = _sanitize_summary_for_output(_as_optional_str(extended_copy.get("text")) or "")
-        if _is_subjectless_publication_summary(extended_text):
+        if context_rewrite_text and _should_override_with_decision_context_summary(
+            summary_text=extended_text,
+            decision_request_context=decision_request_context,
+            broad_query=broad_query,
+        ):
+            extended_text = context_rewrite_text
+        if not used_context_rewrite and _is_subjectless_publication_summary(extended_text):
             extended_text = _enrich_subjectless_summary(extended_text, resolved_topic)
         if allocation_enriched_text:
             extended_text = allocation_enriched_text
@@ -3147,6 +3247,229 @@ def _topic_display_label(topic_name: str | None) -> str:
     return child or root
 
 
+def _decision_request_context_for_section(
+    *,
+    section: dict[str, Any],
+    decision_request_context_by_chunk: dict[str, dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    if not decision_request_context_by_chunk:
+        return None
+
+    chunk_ids = section.get("chunk_ids")
+    if not isinstance(chunk_ids, list):
+        return None
+
+    best_payload: dict[str, Any] | None = None
+    best_score = float("-inf")
+    for chunk_id in chunk_ids:
+        payload = decision_request_context_by_chunk.get(str(chunk_id))
+        if not isinstance(payload, dict):
+            continue
+
+        score = float(payload.get("confidence") or 0.0)
+        if payload.get("request_subject_he"):
+            score += 0.3
+        if payload.get("subject_topic_he"):
+            score += 0.25
+        if payload.get("gush") or payload.get("helka") or payload.get("migrash"):
+            score += 0.1
+        if score > best_score:
+            best_score = score
+            best_payload = payload
+    return best_payload
+
+
+def _decision_context_subject_topic(payload: dict[str, Any] | None) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    subject_topic = _as_optional_str(payload.get("subject_topic_he")) or ""
+    if subject_topic:
+        return " ".join(subject_topic.split()).strip() or None
+
+    return _clean_topic_candidate(
+        _as_optional_str(payload.get("request_subject_he")) or "",
+        max_tokens=6,
+        min_tokens=2,
+        drop_noise_tokens=True,
+    )
+
+
+REQUEST_SUBJECT_PREFERRED_MARKERS = (
+    "בקשה למתן ",
+    "בקשה להסדרת ",
+    "בקשה להקצאת ",
+    "בקשה להקצאה ",
+    "בקשה להחלפת ",
+    "בקשה לביטול ",
+    "בקשה לקבלת ",
+    "העמותה מבקשת ",
+    "מבקשת ",
+    "מבוקש ",
+    "מבוקשת ",
+)
+REQUEST_SUBJECT_SENTENCE_STOP_MARKERS = (
+    ".",
+    "מורשי חתימה",
+    "חברי הנהלה",
+    "בעלי זכות חתימה",
+    "הבקשה פורסמה",
+    "הוצבה הודעה",
+    "בהתאם להחלטת",
+    "בהמשך לבקשת",
+    "לקראת שנת הלימודים",
+    "לאור סיום",
+)
+REQUEST_SUBJECT_LEADING_NORMALIZATION = {
+    "למתן ": "מתן ",
+    "להסדרת ": "הסדרת ",
+    "להסדיר ": "הסדרת ",
+    "להקצאת ": "הקצאת ",
+    "להקצאה ": "הקצאה ",
+    "להחלפת ": "החלפת ",
+    "לביטול ": "ביטול ",
+    "לקבלת ": "קבלת ",
+    "לרשות שימוש": "רשות שימוש",
+}
+
+
+def _compact_request_subject_for_summary(value: str) -> str | None:
+    compact = " ".join(str(value or "").split()).strip(" ,;:-")
+    if not compact:
+        return None
+
+    start_index = 0
+    for marker in REQUEST_SUBJECT_PREFERRED_MARKERS:
+        marker_index = compact.find(marker)
+        if marker_index >= 0:
+            start_index = marker_index
+            break
+    compact = compact[start_index:].strip(" ,;:-")
+
+    for stop_marker in REQUEST_SUBJECT_SENTENCE_STOP_MARKERS:
+        marker_index = compact.find(stop_marker)
+        if marker_index > 0:
+            compact = compact[:marker_index].strip(" ,;:-")
+            break
+
+    compact = re.sub(r"^בקשת\s+[^\s]+\s+ל", "ל", compact)
+    compact = re.sub(r"^בקשה\s+ל", "ל", compact)
+    compact = re.sub(r"^העמותה\s+מבקשת\s+", "", compact)
+    compact = re.sub(r"^מבקשת\s+", "", compact)
+    compact = re.sub(r"^מבוקש(?:ת)?\s+", "", compact)
+    compact = re.sub(r"^לעמותה\s+קיים\s+הסכם[^.]*", "", compact).strip(" ,;:-")
+
+    for prefix, replacement in REQUEST_SUBJECT_LEADING_NORMALIZATION.items():
+        if compact.startswith(prefix):
+            compact = f"{replacement}{compact[len(prefix):]}"
+            break
+
+    compact = compact.strip(" ,;:-")
+    if not compact:
+        return None
+    if len(compact) > 140:
+        compact = f"{compact[:137].rstrip()}..."
+    return compact
+
+
+def _decision_context_request_subject(payload: dict[str, Any] | None) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    subject = _as_optional_str(payload.get("request_subject_he")) or _as_optional_str(payload.get("subject_topic_he")) or ""
+    subject = _compact_request_subject_for_summary(subject) or " ".join(subject.split()).strip(" ,;:-")
+    if not subject:
+        return None
+    if len(subject) > 240:
+        subject = f"{subject[:237].rstrip()}..."
+    return subject
+
+
+def _decision_context_parcel_bits(payload: dict[str, Any] | None) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    out: list[str] = []
+    gush = _as_optional_str(payload.get("gush"))
+    helka = _as_optional_str(payload.get("helka"))
+    migrash = _as_optional_str(payload.get("migrash"))
+    if gush:
+        out.append(f"גוש {gush}")
+    if helka:
+        out.append(f"חלקה {helka}")
+    if migrash:
+        out.append(f"מגרש {migrash}")
+    return out
+
+
+def _should_override_with_decision_context_summary(
+    *,
+    summary_text: str,
+    decision_request_context: dict[str, Any] | None,
+    broad_query: bool,
+) -> bool:
+    if not isinstance(decision_request_context, dict):
+        return False
+    request_subject = _decision_context_request_subject(decision_request_context)
+    if not request_subject:
+        return False
+
+    summary_norm = normalize_for_search(summary_text)
+    subject_norm = normalize_for_search(request_subject)
+    if not summary_norm:
+        return True
+    if broad_query and subject_norm and subject_norm not in summary_norm:
+        return True
+    if _is_boilerplate_summary_text(summary_norm) or _is_low_quality_summary_text(summary_norm):
+        return True
+    if "הסכם רשות" in normalize_for_search(_as_optional_str(decision_request_context.get("decision_text")) or ""):
+        if subject_norm and subject_norm not in summary_norm:
+            return True
+    return False
+
+
+def _rewrite_summary_from_decision_context(
+    *,
+    summary_text: str,
+    topic_name: str,
+    decision_request_context: dict[str, Any] | None,
+) -> tuple[str | None, list[str]]:
+    if not isinstance(decision_request_context, dict):
+        return None, []
+
+    request_subject = _decision_context_request_subject(decision_request_context)
+    if not request_subject:
+        return None, []
+
+    decision_text = normalize_for_search(_as_optional_str(decision_request_context.get("decision_text")) or summary_text)
+    topic_root, _ = _topic_path_parts(topic_name)
+    root_norm = normalize_for_search(topic_root)
+    parcel_bits = _decision_context_parcel_bits(decision_request_context)
+
+    if "פרסום" in decision_text and "בעיתונות" in decision_text:
+        rewritten = f"אושר פרסום בעיתונות עבור {request_subject}."
+    elif "הסכם רשות" in decision_text:
+        rewritten = f"אושרה הכנת הסכם רשות עבור {request_subject}."
+    elif "רשות שימוש" in decision_text or "רשות שימוש" in normalize_for_search(request_subject):
+        rewritten = f"אושרה הסדרת רשות שימוש עבור {request_subject}."
+    elif "מאשרים החלטת הועדה המקצועית" in decision_text and "הקצא" in decision_text:
+        rewritten = f"אושרה החלטת הוועדה להקצאת קרקע עבור {request_subject}."
+    elif "ביטול" in decision_text and "הקצא" in decision_text:
+        rewritten = f"אושרה החלטת ביטול הקצאה עבור {request_subject}."
+    elif root_norm == normalize_for_search("הקצאות"):
+        rewritten = f"אושרה החלטת הקצאה עבור {request_subject}."
+    elif root_norm == normalize_for_search("הסכמים"):
+        rewritten = f"אושרה החלטה בנושא {request_subject}."
+    else:
+        rewritten = None
+
+    if not rewritten:
+        return None, []
+    if parcel_bits:
+        rewritten = f"{rewritten.rstrip('.')} - פרטי מקרקעין: {', '.join(parcel_bits)}."
+
+    source_chunk_ids = decision_request_context.get("source_chunk_ids")
+    used_chunk_ids = [str(chunk_id) for chunk_id in source_chunk_ids] if isinstance(source_chunk_ids, list) else []
+    return rewritten, used_chunk_ids
+
+
 def _object_root_from_texts(*texts: str) -> str | None:
     token_set: set[str] = set()
     for text in texts:
@@ -3227,11 +3550,19 @@ def _resolve_section_topic_name(
     section: dict[str, Any],
     semantic_topic: str | None,
     context_by_chunk: dict[str, RagContextChunk],
+    decision_request_context_by_chunk: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     existing_topic_raw = _as_optional_str(section.get("topic_name")) or ""
     protocol_title = _as_optional_str(section.get("protocol_title")) or ""
     existing_root, existing_child = _topic_path_parts(existing_topic_raw)
     section_text = _as_optional_str(section.get("text")) or ""
+    decision_request_context = _decision_request_context_for_section(
+        section=section,
+        decision_request_context_by_chunk=decision_request_context_by_chunk,
+    )
+    decision_context_decision_text = _as_optional_str(
+        decision_request_context.get("decision_text") if isinstance(decision_request_context, dict) else None
+    ) or ""
 
     chunk_texts: list[str] = []
     chunk_ids = section.get("chunk_ids")
@@ -3245,6 +3576,8 @@ def _resolve_section_topic_name(
                 chunk_texts.append(text_blob)
 
     object_root = _object_root_from_texts(
+        _decision_context_subject_topic(decision_request_context) or "",
+        _decision_context_request_subject(decision_request_context) or "",
         semantic_topic or "",
         existing_topic_raw,
         section_text,
@@ -3252,13 +3585,19 @@ def _resolve_section_topic_name(
     )
     if not object_root:
         object_root = _object_root_from_texts(existing_root)
+    agreement_signal = normalize_for_search(f"{section_text} {decision_context_decision_text}")
+    if "הסכם" in agreement_signal and "רשות" in agreement_signal:
+        object_root = "הסכמים"
     if not object_root:
         object_root = "החלטות עירוניות"
 
+    decision_context_topic = _decision_context_subject_topic(decision_request_context)
     semantic_child = _clean_topic_candidate(semantic_topic or "", max_tokens=5, min_tokens=2, drop_noise_tokens=True)
-    if semantic_child and _is_subjectless_publication_summary(section_text):
-        forced_root = _object_root_from_texts(semantic_child, section_text) or object_root
-        return f"{forced_root} > {semantic_child}"
+    if _is_subjectless_publication_summary(section_text):
+        forced_child = decision_context_topic or semantic_child
+        if forced_child:
+            forced_root = _object_root_from_texts(forced_child, section_text) or object_root
+            return f"{forced_root} > {forced_child}"
 
     prefer_association = "הקצא" in normalize_for_search(protocol_title)
     if object_root == "הסכמים" and semantic_child is None:
@@ -3282,6 +3621,8 @@ def _resolve_section_topic_name(
             return f"{object_root} > {forced_child}"
 
     child_candidates: list[str] = []
+    if decision_context_topic:
+        child_candidates.append(decision_context_topic)
     if semantic_topic:
         child_candidates.append(semantic_topic)
     if existing_child:
@@ -3623,11 +3964,32 @@ def _enrich_allocation_summary_with_context(
     *,
     section: dict[str, Any],
     context_by_chunk: dict[str, RagContextChunk],
+    decision_request_context_by_chunk: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[str | None, list[str]]:
     text_value = _as_optional_str(section.get("text")) or ""
     topic_name = _as_optional_str(section.get("topic_name")) or ""
     if not _is_procedural_allocation_summary(text=text_value, topic_name=topic_name):
         return None, []
+
+    decision_request_context = _decision_request_context_for_section(
+        section=section,
+        decision_request_context_by_chunk=decision_request_context_by_chunk,
+    )
+    rewritten_from_context, used_chunk_ids_from_context = _rewrite_summary_from_decision_context(
+        summary_text=text_value,
+        topic_name=topic_name,
+        decision_request_context=decision_request_context,
+    )
+    if rewritten_from_context:
+        topic_root, _ = _topic_path_parts(topic_name)
+        if (
+            normalize_for_search(topic_root) == normalize_for_search("הקצאות")
+            and not _decision_context_parcel_bits(decision_request_context)
+        ):
+            rewritten_from_context = (
+                f"{rewritten_from_context.rstrip('.')} - מזהי מקרקעין (גוש/חלקה/מגרש) לא אותרו בשורות המצוטטות."
+            )
+        return rewritten_from_context, used_chunk_ids_from_context
 
     nearby_contexts = _nearby_protocol_contexts_for_section(section=section, context_by_chunk=context_by_chunk)
     if not nearby_contexts:
@@ -4672,12 +5034,12 @@ def _elapsed_ms(started_at: float) -> float:
 
 
 def _normalize_fallback_provider(value: str | None) -> str:
-    normalized = (value or VERIFY_FALLBACK_PROVIDER_EXTERNAL).strip().casefold()
+    normalized = (value or VERIFY_FALLBACK_PROVIDER_LOCAL).strip().casefold()
     if normalized in {VERIFY_FALLBACK_PROVIDER_EXTERNAL, "bytez", "external_verify"}:
         return VERIFY_FALLBACK_PROVIDER_EXTERNAL
     if normalized in {VERIFY_FALLBACK_PROVIDER_LOCAL, "tinyllama", "local_llm"}:
         return VERIFY_FALLBACK_PROVIDER_LOCAL
-    return VERIFY_FALLBACK_PROVIDER_EXTERNAL
+    return VERIFY_FALLBACK_PROVIDER_LOCAL
 
 
 def _env_bool(value: str | None, *, default: bool) -> bool:

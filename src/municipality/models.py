@@ -166,6 +166,24 @@ class TextChunk(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class ChunkEmbedding(Base):
+    __tablename__ = "chunk_embedding"
+    __table_args__ = (
+        UniqueConstraint("chunk_id", "model_provider", "model_name", "dimensions", name="uq_chunk_embedding_model"),
+        Index("ix_chunk_embedding_chunk_id", "chunk_id"),
+        Index("ix_chunk_embedding_model", "model_provider", "model_name", "dimensions"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chunk_id: Mapped[str] = mapped_column(String(64), ForeignKey("text_chunk.chunk_id"), nullable=False)
+    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class Meeting(Base):
     __tablename__ = "meeting"
     __table_args__ = (
@@ -285,6 +303,53 @@ class DecisionDocumentLink(Base):
     provenance: Mapped[str] = mapped_column(String(32), nullable=False)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class DecisionRequestContext(Base):
+    __tablename__ = "decision_request_context"
+    __table_args__ = (
+        UniqueConstraint("decision_id", name="uq_decision_request_context_decision"),
+        Index("ix_decision_request_context_source_document_id", "source_document_id"),
+        Index("ix_decision_request_context_subject_topic_he", "subject_topic_he"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    decision_id: Mapped[int] = mapped_column(ForeignKey("decision.id"), nullable=False)
+    source_document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
+    request_subject_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_topic_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    address_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gush: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    helka: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    migrash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_chunk_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class DecisionExtractionCache(Base):
+    __tablename__ = "decision_extraction_cache"
+    __table_args__ = (
+        UniqueConstraint("document_version_id", "cache_key", name="uq_decision_extraction_cache_docver_key"),
+        Index("ix_decision_extraction_cache_docver", "document_version_id"),
+        Index("ix_decision_extraction_cache_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_version_id: Mapped[int] = mapped_column(ForeignKey("document_version.id"), nullable=False)
+    cache_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    strategy: Mapped[str] = mapped_column(String(32), nullable=False)
+    selected_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    candidate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quality_reasons_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    candidates_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class SemanticDocumentRun(Base):

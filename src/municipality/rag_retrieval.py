@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from municipality.chunking import normalize_for_search
+from municipality.embeddings import EmbeddingReranker
 from municipality.rag_observability import build_retrieval_set_id, hash_text, log_rag_event
 
 
@@ -54,15 +55,17 @@ class RagContextChunk:
     chunk_id: str
     score: float
     snippet: str
-    citation: str | None
     source_kind: str
     document_id: int
     document_title: str
     document_url: str
     municipality_slug: str
-    meeting_external_id: str | None
-    start_page: int | None
-    end_page: int | None
+    citation: str | None = None
+    meeting_external_id: str | None = None
+    start_page: int | None = None
+    end_page: int | None = None
+    start_offset: int | None = None
+    end_offset: int | None = None
     chunk_index: int | None = None
     chunk_text: str = ""
     semantic_topic_labels: list[str] = field(default_factory=list)
@@ -76,6 +79,7 @@ class RagRetrievalResult:
     retrieval_set_id: str
     requested_source_kinds: list[str]
     contexts: list[RagContextChunk]
+    debug_info: dict[str, Any] = field(default_factory=dict)
 
     @property
     def source_kinds(self) -> set[str]:
@@ -83,8 +87,9 @@ class RagRetrievalResult:
 
 
 class RagRetrievalService:
-    def __init__(self, *, search_service):
+    def __init__(self, *, search_service, reranker: EmbeddingReranker | None = None):
         self.search_service = search_service
+        self.reranker = reranker
 
     def retrieve(
         self,
@@ -134,6 +139,13 @@ class RagRetrievalService:
                 retrieval_set_id=empty_retrieval_set_id,
                 requested_source_kinds=requested_source_kinds,
                 contexts=[],
+                debug_info={
+                    "candidate_limit": 0,
+                    "broad_decision_query": False,
+                    "lexical_top_k_chunk_ids": [],
+                    "reranked_top_k_chunk_ids": [],
+                    "embedding_rerank": {"enabled": False},
+                },
             )
             log_rag_event(
                 "rag.retrieval.result",
@@ -147,7 +159,10 @@ class RagRetrievalService:
             )
             return result
 
-        initial_limit = max(effective_top_k * 3, effective_top_k)
+        if self.reranker is not None:
+            initial_limit = max(self.reranker.initial_candidate_limit(top_k=effective_top_k), effective_top_k * 3)
+        else:
+            initial_limit = max(effective_top_k * 3, effective_top_k)
         hits = self.search_service.search(
             query=query,
             municipality_slug=municipality_slug,
@@ -175,7 +190,7 @@ class RagRetrievalService:
                 semantic_node_id=semantic_node_id,
                 semantic_label=semantic_label,
                 semantic_mode=semantic_mode,
-                limit=effective_top_k,
+                limit=max(effective_top_k, min(initial_limit, effective_top_k * 6)),
             )
             selected_hits.extend(source_hits)
             selected_hits = _dedupe_hits(selected_hits)
@@ -192,6 +207,15 @@ class RagRetrievalService:
                 semantic_node_id=semantic_node_id,
                 semantic_label=semantic_label,
                 semantic_mode=semantic_mode,
+                top_k=effective_top_k,
+            )
+
+        lexical_top_k_chunk_ids = [str(row.chunk_id) for row in selected_hits[:effective_top_k]]
+        rerank_stats: dict[str, Any] = {"enabled": False}
+        if self.reranker is not None and selected_hits:
+            selected_hits, rerank_stats = self.reranker.rerank_hits(
+                query=query,
+                hits=selected_hits,
                 top_k=effective_top_k,
             )
 
@@ -212,6 +236,13 @@ class RagRetrievalService:
             retrieval_set_id=retrieval_set_id,
             requested_source_kinds=requested_source_kinds,
             contexts=contexts,
+            debug_info={
+                "candidate_limit": initial_limit,
+                "broad_decision_query": broad_decision_query,
+                "lexical_top_k_chunk_ids": lexical_top_k_chunk_ids,
+                "reranked_top_k_chunk_ids": [str(row.chunk_id) for row in contexts],
+                "embedding_rerank": dict(rerank_stats),
+            },
         )
         scores = [row.score for row in contexts]
         score_stats = {
@@ -229,6 +260,7 @@ class RagRetrievalService:
             retrieved_source_types=sorted(result.source_kinds),
             chunk_ids=[row.chunk_id for row in contexts],
             score_stats=score_stats,
+            embedding_rerank=rerank_stats,
         )
         return result
 
@@ -285,6 +317,8 @@ def _to_context(hit) -> RagContextChunk:
         document_url=hit.document_url,
         municipality_slug=hit.municipality_slug,
         meeting_external_id=hit.meeting_external_id,
+        start_offset=getattr(hit, "start_offset", None),
+        end_offset=getattr(hit, "end_offset", None),
         start_page=hit.start_page,
         end_page=hit.end_page,
         chunk_index=getattr(hit, "chunk_index", None),

@@ -12,21 +12,24 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 import httpx
 from pydantic import BaseModel, Field
-from sqlalchemy import inspect, select
+from sqlalchemy import and_, func, inspect, select
 
 from municipality.chunking import normalize_for_search
 from municipality.db import build_engine, build_session_factory
+from municipality.embeddings import ChunkEmbeddingService, EmbeddingReranker
 from municipality.fetcher import AssetFetcher
 from municipality.migrations import apply_all
 from municipality.models import (
     Decision,
     DecisionCitation,
     DecisionDocumentLink,
+    DecisionRequestContext,
     Document,
     Meeting,
     MeetingDocumentLink,
     PipelineRun,
     PipelineRunStep,
+    ChunkEmbedding,
     SemanticAlias,
     SemanticCandidateReject,
     SemanticDocumentRun,
@@ -149,6 +152,116 @@ class AskRequest(BaseModel):
     semantic_label: str | None = None
     semantic_mode: str = "off"
     debug_mode: bool = False
+
+
+def _active_embedding_cache_summary(*, db) -> dict[str, Any]:
+    embedding_service = ChunkEmbeddingService(db)
+    model_client = embedding_service.model_client
+    model_provider = model_client.provider_name
+    model_name = model_client.model_name
+    dimensions = model_client.dimensions
+
+    total_chunks = int(db.execute(select(func.count(TextChunk.id))).scalar_one() or 0)
+    embedded_chunks = int(
+        db.execute(
+            select(func.count(func.distinct(ChunkEmbedding.chunk_id))).where(
+                ChunkEmbedding.model_provider == model_provider,
+                ChunkEmbedding.model_name == model_name,
+                ChunkEmbedding.dimensions == dimensions,
+            )
+        ).scalar_one()
+        or 0
+    )
+
+    by_source_rows = db.execute(
+        select(
+            TextChunk.source_kind,
+            func.count(func.distinct(TextChunk.chunk_id)),
+            func.count(func.distinct(ChunkEmbedding.chunk_id)),
+        )
+        .select_from(TextChunk)
+        .outerjoin(
+            ChunkEmbedding,
+            and_(
+                ChunkEmbedding.chunk_id == TextChunk.chunk_id,
+                ChunkEmbedding.model_provider == model_provider,
+                ChunkEmbedding.model_name == model_name,
+                ChunkEmbedding.dimensions == dimensions,
+            ),
+        )
+        .group_by(TextChunk.source_kind)
+        .order_by(TextChunk.source_kind.asc())
+    ).all()
+
+    by_source_kind = []
+    for source_kind, source_total, source_embedded in by_source_rows:
+        total_value = int(source_total or 0)
+        embedded_value = int(source_embedded or 0)
+        missing_value = max(0, total_value - embedded_value)
+        by_source_kind.append(
+            {
+                "source_type": str(source_kind or "unknown"),
+                "total_chunks": total_value,
+                "embedded_chunks": embedded_value,
+                "missing_chunks": missing_value,
+                "coverage_rate": round((embedded_value / total_value), 4) if total_value else 0.0,
+            }
+        )
+
+    missing_chunks = max(0, total_chunks - embedded_chunks)
+    return {
+        "enabled": embedding_service.is_enabled(),
+        "provider": model_provider,
+        "model": model_name,
+        "dimensions": dimensions,
+        "total_chunks": total_chunks,
+        "embedded_chunks": embedded_chunks,
+        "missing_chunks": missing_chunks,
+        "coverage_rate": round((embedded_chunks / total_chunks), 4) if total_chunks else 0.0,
+        "by_source_type": by_source_kind,
+    }
+
+
+def _rerank_debug_summary(*, retrieval_result: RagRetrievalResult) -> dict[str, Any]:
+    retrieval_trace = dict(retrieval_result.debug_info)
+    lexical_top_k_chunk_ids = [
+        str(chunk_id)
+        for chunk_id in retrieval_trace.get("lexical_top_k_chunk_ids", [])
+        if str(chunk_id).strip()
+    ]
+    reranked_top_k_chunk_ids = [
+        str(chunk_id)
+        for chunk_id in retrieval_trace.get("reranked_top_k_chunk_ids", [])
+        if str(chunk_id).strip()
+    ]
+    embedding_rerank = retrieval_trace.get("embedding_rerank")
+    if not isinstance(embedding_rerank, dict):
+        embedding_rerank = {"enabled": False}
+
+    lexical_top_k_set = set(lexical_top_k_chunk_ids)
+    overlap_count = sum(1 for chunk_id in reranked_top_k_chunk_ids if chunk_id in lexical_top_k_set)
+    changed_count = sum(
+        1
+        for index, chunk_id in enumerate(reranked_top_k_chunk_ids)
+        if index >= len(lexical_top_k_chunk_ids) or lexical_top_k_chunk_ids[index] != chunk_id
+    )
+    top_k_count = max(len(reranked_top_k_chunk_ids), 1)
+    candidate_count = int(embedding_rerank.get("candidate_count") or 0)
+    available_chunk_embeddings = int(embedding_rerank.get("available_chunk_embeddings") or 0)
+
+    return {
+        "candidate_limit": int(retrieval_trace.get("candidate_limit") or 0),
+        "broad_decision_query": bool(retrieval_trace.get("broad_decision_query") is True),
+        "lexical_top_k_chunk_ids": lexical_top_k_chunk_ids,
+        "reranked_top_k_chunk_ids": reranked_top_k_chunk_ids,
+        "overlap_count": overlap_count,
+        "changed_count": changed_count,
+        "lexical_top_k_hit_rate": round((overlap_count / top_k_count), 4),
+        "candidate_embedding_hit_rate": round((available_chunk_embeddings / max(candidate_count, 1)), 4)
+        if candidate_count
+        else 0.0,
+        "embedding_rerank": embedding_rerank,
+    }
 
 
 def _llm_thresholds_payload(llm_client: RagLlmClient) -> dict:
@@ -1030,6 +1143,133 @@ def _load_protocol_semantic_topic_labels(
     return out
 
 
+def _load_decision_request_contexts_by_chunk(
+    *,
+    db,
+    contexts: list[RagContextChunk],
+) -> dict[str, dict[str, Any]]:
+    if not contexts:
+        return {}
+    if not inspect(db.get_bind()).has_table("decision_request_context"):
+        return {}
+
+    protocol_contexts = [
+        context
+        for context in contexts
+        if context.source_kind == "protocol" and context.document_id and context.chunk_id
+    ]
+    if not protocol_contexts:
+        return {}
+
+    document_ids = sorted({int(context.document_id) for context in protocol_contexts})
+    rows = db.execute(
+        select(
+            DecisionRequestContext.decision_id,
+            DecisionRequestContext.source_document_id,
+            DecisionRequestContext.request_subject_he,
+            DecisionRequestContext.subject_topic_he,
+            DecisionRequestContext.address_he,
+            DecisionRequestContext.gush,
+            DecisionRequestContext.helka,
+            DecisionRequestContext.migrash,
+            DecisionRequestContext.source_chunk_ids_json,
+            DecisionRequestContext.confidence,
+            Decision.agenda_item,
+            Decision.decision_text,
+            DecisionCitation.start_offset,
+            DecisionCitation.end_offset,
+        )
+        .join(Decision, Decision.id == DecisionRequestContext.decision_id)
+        .join(DecisionCitation, DecisionCitation.decision_id == DecisionRequestContext.decision_id)
+        .where(DecisionRequestContext.source_document_id.in_(document_ids))
+        .where(DecisionCitation.document_id.in_(document_ids))
+        .where(DecisionCitation.source_type == "protocol")
+    ).all()
+
+    contexts_by_document: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        source_chunk_ids = _loads_json(row[8])
+        contexts_by_document.setdefault(int(row[1]), []).append(
+            {
+                "decision_id": int(row[0]),
+                "source_document_id": int(row[1]),
+                "request_subject_he": row[2],
+                "subject_topic_he": row[3],
+                "address_he": row[4],
+                "gush": row[5],
+                "helka": row[6],
+                "migrash": row[7],
+                "source_chunk_ids": source_chunk_ids if isinstance(source_chunk_ids, list) else [],
+                "confidence": float(row[9] or 0.0),
+                "agenda_item": row[10],
+                "decision_text": row[11],
+                "start_offset": int(row[12]) if row[12] is not None else None,
+                "end_offset": int(row[13]) if row[13] is not None else None,
+            }
+        )
+
+    out: dict[str, dict[str, Any]] = {}
+    for context in protocol_contexts:
+        candidates = contexts_by_document.get(int(context.document_id), [])
+        if not candidates:
+            continue
+
+        best_payload: dict[str, Any] | None = None
+        best_score = float("-inf")
+        for candidate in candidates:
+            score = float(candidate.get("confidence") or 0.0)
+            if str(context.chunk_id) in {str(item) for item in candidate.get("source_chunk_ids") or []}:
+                score += 2.0
+            start_offset = candidate.get("start_offset")
+            end_offset = candidate.get("end_offset")
+            if (
+                start_offset is not None
+                and end_offset is not None
+                and context.start_offset is not None
+                and context.end_offset is not None
+            ):
+                if context.start_offset < end_offset and start_offset < context.end_offset:
+                    score += 1.0
+                else:
+                    distance = min(
+                        abs(int(context.start_offset) - int(start_offset)),
+                        abs(int(context.end_offset) - int(end_offset)),
+                    )
+                    if distance <= 2200:
+                        score += max(0.0, 0.5 - (distance / 5000.0))
+            if score > best_score:
+                best_score = score
+                best_payload = candidate
+
+        if best_payload is None:
+            continue
+        out[str(context.chunk_id)] = dict(best_payload)
+    return out
+
+
+def _decision_request_context_payload(*, db, decision_id: int) -> dict[str, Any] | None:
+    if not inspect(db.get_bind()).has_table("decision_request_context"):
+        return None
+
+    row = db.execute(
+        select(DecisionRequestContext).where(DecisionRequestContext.decision_id == decision_id)
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+
+    source_chunk_ids = _loads_json(row.source_chunk_ids_json)
+    return {
+        "request_subject_he": row.request_subject_he,
+        "subject_topic_he": row.subject_topic_he,
+        "address_he": row.address_he,
+        "gush": row.gush,
+        "helka": row.helka,
+        "migrash": row.migrash,
+        "source_chunk_ids": source_chunk_ids if isinstance(source_chunk_ids, list) else [],
+        "confidence": row.confidence,
+    }
+
+
 def _load_cached_topic_tree(
     *,
     db,
@@ -1106,7 +1346,10 @@ def _run_ask(
         semantic_mode=request.semantic_mode,
     )
 
-    retrieval_service = RagRetrievalService(search_service=SearchService(db))
+    retrieval_service = RagRetrievalService(
+        search_service=SearchService(db),
+        reranker=EmbeddingReranker(ChunkEmbeddingService(db)),
+    )
     retrieval_started = time.perf_counter()
     retrieval_result = retrieval_service.retrieve(
         query=request.question,
@@ -1157,6 +1400,10 @@ def _run_ask(
         db=db,
         protocol_document_ids=protocol_document_ids,
     )
+    decision_request_context_by_chunk = _load_decision_request_contexts_by_chunk(
+        db=db,
+        contexts=retrieval_for_answering.contexts,
+    )
 
     resolved_llm_client = llm_client or build_rag_llm_client()
     answering_service = RagAnsweringService(llm_client=resolved_llm_client)
@@ -1168,6 +1415,7 @@ def _run_ask(
         cached_topic_tree=cached_topic_tree,
         protocol_subject_anchors=protocol_subject_anchors,
         protocol_semantic_topic_labels=protocol_semantic_topic_labels,
+        decision_request_context_by_chunk=decision_request_context_by_chunk,
         ask_request_id=ask_request_id,
     )
     answering_ms = round((time.perf_counter() - answering_started) * 1000.0, 3)
@@ -1248,6 +1496,7 @@ def _run_ask(
     }
     if request.debug_mode:
         trace_payload = _normalized_answering_trace(answer_result.scoring)
+        retrieval_trace = dict(retrieval_result.debug_info)
         timing_breakdown = {
             "request_total": total_ms,
             "retrieval": retrieval_ms,
@@ -1258,6 +1507,7 @@ def _run_ask(
             "enabled": True,
             "thresholds": _ask_thresholds_payload(request=request, llm_client=resolved_llm_client),
             "answering_trace": trace_payload,
+            "retrieval_trace": retrieval_trace,
             "timing_ms": timing_breakdown,
             "pipeline": {
                 "stage_order": [
@@ -1344,6 +1594,7 @@ def _decision_payload(decision_id: int, db) -> dict | None:
             "parser_confidence": decision.parser_confidence,
             "source_type": "protocol",
             "metadata": _fallback_metadata_from_json(decision.metadata_json),
+            "request_context": _decision_request_context_payload(db=db, decision_id=decision.id),
         },
         "votes": [
             {
@@ -1493,6 +1744,61 @@ def search(
 @app.post("/ask")
 def ask(request: AskRequest, db=Depends(get_db)) -> dict:
     return _run_ask(request=request, db=db)
+
+
+@app.post("/ask/debug/retrieval")
+def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
+    started = time.perf_counter()
+    retrieval_service = RagRetrievalService(
+        search_service=SearchService(db),
+        reranker=EmbeddingReranker(ChunkEmbeddingService(db)),
+    )
+    retrieval_result = retrieval_service.retrieve(
+        query=request.question,
+        top_k=request.top_k,
+        municipality_slug=request.muni,
+        source_kinds=request.source_types,
+        year=request.year,
+        topic=request.topic,
+        semantic_node_id=request.semantic_node_id,
+        semantic_label=request.semantic_label,
+        semantic_mode=request.semantic_mode,
+    )
+    retrieval_ms = round((time.perf_counter() - started) * 1000.0, 3)
+    rerank_summary = _rerank_debug_summary(retrieval_result=retrieval_result)
+    return {
+        "query": request.question,
+        "retrieval": {
+            "retrieval_set_id": retrieval_result.retrieval_set_id,
+            "count": len(retrieval_result.contexts),
+            "source_types": sorted(retrieval_result.source_kinds),
+            "requested_source_types": retrieval_result.requested_source_kinds,
+            "top_k": retrieval_result.top_k,
+            "semantic_mode": request.semantic_mode,
+            "semantic_node_id": request.semantic_node_id,
+            "semantic_label": request.semantic_label,
+        },
+        "embedding_cache": _active_embedding_cache_summary(db=db),
+        "rerank": rerank_summary,
+        "timing_ms": {
+            "retrieval": retrieval_ms,
+        },
+        "results": [
+            {
+                "chunk_id": context.chunk_id,
+                "score": context.score,
+                "citation": context.citation,
+                "source_type": context.source_kind,
+                "document": {
+                    "id": context.document_id,
+                    "title": context.document_title,
+                    "url": context.document_url,
+                },
+                "semantic_topic_labels": list(context.semantic_topic_labels),
+            }
+            for context in retrieval_result.contexts
+        ],
+    }
 
 
 @app.get("/ui/ask", response_class=HTMLResponse)
@@ -2321,7 +2627,9 @@ def ask_playground_page() -> HTMLResponse:
             body: JSON.stringify(payload),
           });
           if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+            const errorBody = await response.text().catch(() => "");
+            const errorSuffix = errorBody ? `: ${errorBody.slice(0, 220)}` : "";
+            throw new Error(`HTTP ${response.status}${errorSuffix}`);
           }
 
           const data = await response.json();
@@ -2344,6 +2652,20 @@ def ask_playground_page() -> HTMLResponse:
             appendItem(metaList, `timing_ms.request_total: ${debugTiming.request_total ?? "-"}`);
             appendItem(metaList, `timing_ms.retrieval: ${debugTiming.retrieval ?? "-"}`);
             appendItem(metaList, `timing_ms.answering: ${debugTiming.answering ?? "-"}`);
+          }
+
+          const retrievalTrace = debugPayload && debugPayload.retrieval_trace && typeof debugPayload.retrieval_trace === "object"
+            ? debugPayload.retrieval_trace
+            : null;
+          const embeddingRerank = retrievalTrace && retrievalTrace.embedding_rerank && typeof retrievalTrace.embedding_rerank === "object"
+            ? retrievalTrace.embedding_rerank
+            : null;
+          if (embeddingRerank) {
+            appendItem(metaList, `embedding_rerank.enabled: ${embeddingRerank.enabled === true ? "yes" : "no"}`);
+            appendItem(metaList, `embedding_rerank.query_embedding_used: ${embeddingRerank.query_embedding_used === true ? "yes" : "no"}`);
+            appendItem(metaList, `embedding_rerank.candidate_count: ${embeddingRerank.candidate_count ?? "-"}`);
+            appendItem(metaList, `embedding_rerank.available_chunk_embeddings: ${embeddingRerank.available_chunk_embeddings ?? "-"}`);
+            appendItem(metaList, `embedding_rerank.created_chunk_embeddings: ${embeddingRerank.created_chunk_embeddings ?? "-"}`);
           }
 
           const thresholds = data.debug && data.debug.thresholds ? data.debug.thresholds : null;
@@ -2453,13 +2775,15 @@ def ask_playground_page() -> HTMLResponse:
           statusNode.textContent = "Model refused due to evidence policy.";
           await refreshTopicTree();
         } catch (_err) {
+          console.error("ask_playground_request_failed", _err);
+          const errorMessage = _err instanceof Error ? _err.message : String(_err || "unknown_error");
           hide(answerPanel);
           hide(citationsPanel);
           hide(refusalPanel);
           hide(thresholdsPanel);
           hide(tracePanel);
           hide(extendedPanel);
-          statusNode.textContent = "Request failed. Try again in a moment.";
+          statusNode.textContent = `Request failed: ${errorMessage}`;
         }
       });
       refreshTopicTree();
@@ -2951,6 +3275,7 @@ def meeting_detail(meeting_id: int, db=Depends(get_db)) -> dict:
                 if vote
                 else None,
                 "metadata": _fallback_metadata_from_json(decision.metadata_json),
+                "request_context": _decision_request_context_payload(db=db, decision_id=decision.id),
             }
         )
 
@@ -3356,7 +3681,9 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
             body: JSON.stringify(payload),
           }});
           if (!response.ok) {{
-            throw new Error(`HTTP ${{response.status}}`);
+            const errorBody = await response.text().catch(() => "");
+            const errorSuffix = errorBody ? `: ${{errorBody.slice(0, 220)}}` : "";
+            throw new Error(`HTTP ${{response.status}}${{errorSuffix}}`);
           }}
 
           const data = await response.json();
@@ -3572,11 +3899,13 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
           hide(citationsPanel);
           statusNode.textContent = "המערכת סירבה להשיב בגלל חוסר ראיות מספק.";
         }} catch (_err) {{
+          console.error("ask_inline_panel_request_failed", _err);
+          const errorMessage = _err instanceof Error ? _err.message : String(_err || "unknown_error");
           hide(answerPanel);
           hide(refusalPanel);
           hide(citationsPanel);
           hide(thresholdsPanel);
-          statusNode.textContent = "שליחת השאלה נכשלה. נסו שוב בעוד רגע.";
+          statusNode.textContent = `שליחת השאלה נכשלה: ${{errorMessage}}`;
         }}
       }});
     }})();

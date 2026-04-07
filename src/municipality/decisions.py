@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,7 +17,10 @@ from municipality.models import (
     AssetManifest,
     Decision,
     DecisionCitation,
+    DecisionExtractionCache,
     DecisionDocumentLink,
+    DecisionRequestContext,
+    DecisionSemanticLink,
     Document,
     DocumentVersion,
     Meeting,
@@ -48,6 +54,36 @@ WHITESPACE_RE = re.compile(r"\s+")
 NON_WORD_RE = re.compile(r"[^\w\u0590-\u05FF]+")
 HEBREW_CHAR_RE = re.compile(r"[\u0590-\u05FF]")
 
+DECISION_EXTRACTION_STRATEGY_LOCAL_CACHE_FIRST = "local_cache_first"
+DECISION_EXTRACTION_SELECTED_LOCAL = "local_deterministic"
+DECISION_EXTRACTION_SELECTED_EXTERNAL = "external_rescue"
+DEFAULT_DECISION_CACHE_VERSION = "decision_local_v1"
+
+
+@dataclass(slots=True)
+class DecisionLocalQuality:
+    score: float
+    marker_count: int
+    candidate_count: int
+    high_confidence_count: int
+    citation_ready_count: int
+    reasons: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class DecisionExtractionSelection:
+    candidates: list[DecisionCandidate]
+    strategy: str
+    selected_mode: str
+    from_cache: bool
+    cache_key: str | None
+    quality: DecisionLocalQuality | None
+    external_attempts: int = 0
+    external_status: str = "not_attempted"
+    external_reasons: list[str] = field(default_factory=list)
+    external_invoked_at: str | None = None
+    external_configured: bool = False
+
 
 @dataclass(slots=True)
 class ParsedLine:
@@ -76,10 +112,24 @@ class DecisionExtractionService:
         *,
         fallback_client: BytezFallbackClient | None = None,
         low_confidence_threshold: float = 0.75,
+        local_acceptance_threshold: float | None = None,
+        cache_enabled: bool | None = None,
+        external_rescue_enabled: bool | None = None,
     ):
         self.session = session
         self.fallback_client = fallback_client or BytezFallbackClient()
         self.low_confidence_threshold = low_confidence_threshold
+        self.local_acceptance_threshold = (
+            local_acceptance_threshold
+            if local_acceptance_threshold is not None
+            else _env_float(os.getenv("DECISION_LOCAL_ACCEPTANCE_THRESHOLD"), default=0.55, min_value=0.0, max_value=1.0)
+        )
+        self.cache_enabled = _env_bool(os.getenv("DECISION_CACHE_ENABLED"), default=True) if cache_enabled is None else bool(cache_enabled)
+        self.external_rescue_enabled = (
+            _env_bool(os.getenv("DECISION_EXTERNAL_RESCUE_ENABLED"), default=False)
+            if external_rescue_enabled is None
+            else bool(external_rescue_enabled)
+        )
         self._taxonomy_cache: dict[int, dict[str, TaxonomyNode]] = {}
 
     def process_document(
@@ -90,7 +140,7 @@ class DecisionExtractionService:
         extracted_text: str,
         citation_map: list[dict[str, int]],
         source_kind: str,
-    ) -> dict[str, int]:
+    ) -> dict[str, Any]:
         meeting_external_id, provenance, title_hint = self._resolve_meeting_context(document)
         meeting_metadata = _extract_meeting_metadata(
             title_he=document.title_he,
@@ -116,17 +166,12 @@ class DecisionExtractionService:
 
         self._delete_existing_document_decisions(source_document_id=document.id)
 
-        deterministic_candidates = _parse_decision_candidates(extracted_text)
-        api_result = self._extract_api_model_candidates(
+        extraction = self._select_decision_candidates(
+            document_version_id=document_version.id,
             extracted_text=extracted_text,
-            deterministic_candidates=deterministic_candidates,
+            citation_map=citation_map,
         )
-        if api_result["candidates"]:
-            candidates = api_result["candidates"]
-            mode = "api_model"
-        else:
-            candidates = deterministic_candidates
-            mode = "deterministic_backup"
+        candidates = extraction.candidates
 
         seen_signatures: set[str] = set()
         inserted = 0
@@ -137,17 +182,19 @@ class DecisionExtractionService:
 
             metadata = _default_fallback_metadata()
             metadata.update(_default_api_model_metadata())
-            metadata["api_model_used"] = bool(api_result["configured"])
-            metadata["api_model_provider"] = BYTEZ_PROVIDER if api_result["configured"] else None
-            metadata["api_model_name"] = BYTEZ_MODEL if api_result["configured"] else None
-            metadata["api_model_invoked_at"] = api_result["invoked_at"]
-            metadata["api_model_attempts"] = api_result["attempts"]
-            if mode == "api_model":
-                metadata["api_model_status"] = "accepted"
-                metadata["api_model_reasons"] = []
-            else:
-                metadata["api_model_status"] = api_result["status"]
-                metadata["api_model_reasons"] = list(api_result["reasons"])
+            metadata["decision_extraction_strategy"] = extraction.strategy
+            metadata["decision_extraction_selected_mode"] = extraction.selected_mode
+            metadata["decision_extraction_from_cache"] = extraction.from_cache
+            metadata["decision_extraction_cache_key"] = extraction.cache_key
+            metadata["decision_extraction_quality_score"] = extraction.quality.score if extraction.quality else None
+            metadata["decision_extraction_quality_reasons"] = list(extraction.quality.reasons) if extraction.quality else []
+            metadata["api_model_used"] = extraction.selected_mode == DECISION_EXTRACTION_SELECTED_EXTERNAL
+            metadata["api_model_provider"] = BYTEZ_PROVIDER if extraction.selected_mode == DECISION_EXTRACTION_SELECTED_EXTERNAL else None
+            metadata["api_model_name"] = BYTEZ_MODEL if extraction.selected_mode == DECISION_EXTRACTION_SELECTED_EXTERNAL else None
+            metadata["api_model_invoked_at"] = extraction.external_invoked_at
+            metadata["api_model_attempts"] = extraction.external_attempts
+            metadata["api_model_status"] = extraction.external_status
+            metadata["api_model_reasons"] = list(extraction.external_reasons)
 
             signature = _decision_signature(candidate.decision_text)
             if not signature or signature in seen_signatures:
@@ -210,7 +257,244 @@ class DecisionExtractionService:
             self._link_meeting_attachments_to_decision(meeting_id=meeting.id, decision_id=row.id, source_document_id=document.id)
             inserted += 1
 
-        return {"meeting_id": meeting.id, "decisions": inserted}
+        return {
+            "meeting_id": meeting.id,
+            "decisions": inserted,
+            "decision_extraction_mode": extraction.selected_mode,
+            "decision_extraction_from_cache": extraction.from_cache,
+        }
+
+    def _select_decision_candidates(
+        self,
+        *,
+        document_version_id: int,
+        extracted_text: str,
+        citation_map: list[dict[str, int]],
+    ) -> DecisionExtractionSelection:
+        cache_key = _decision_extraction_cache_key(
+            low_confidence_threshold=self.low_confidence_threshold,
+            local_acceptance_threshold=self.local_acceptance_threshold,
+            external_rescue_enabled=self.external_rescue_enabled,
+        )
+        if self.cache_enabled:
+            cached = self._load_cached_decision_extraction(
+                document_version_id=document_version_id,
+                cache_key=cache_key,
+            )
+            if cached is not None:
+                return cached
+
+        local_candidates = self._build_local_candidates(extracted_text)
+        local_quality = self._evaluate_local_candidates(
+            extracted_text=extracted_text,
+            candidates=local_candidates,
+            citation_map=citation_map,
+        )
+
+        selected_mode = DECISION_EXTRACTION_SELECTED_LOCAL
+        candidates = local_candidates
+        api_result = {
+            "configured": self.fallback_client.is_configured(),
+            "invoked_at": None,
+            "attempts": 0,
+            "status": "skipped_local_cache_first",
+            "reasons": list(local_quality.reasons),
+            "candidates": [],
+        }
+
+        should_try_external = bool(
+            self.external_rescue_enabled
+            and self.fallback_client.is_configured()
+            and (
+                not local_candidates or local_quality.score < self.local_acceptance_threshold
+            )
+        )
+        if should_try_external:
+            api_result = self._extract_api_model_candidates(
+                extracted_text=extracted_text,
+                deterministic_candidates=local_candidates,
+            )
+            if api_result["candidates"]:
+                candidates = api_result["candidates"]
+                selected_mode = DECISION_EXTRACTION_SELECTED_EXTERNAL
+
+        selection = DecisionExtractionSelection(
+            candidates=candidates,
+            strategy=DECISION_EXTRACTION_STRATEGY_LOCAL_CACHE_FIRST,
+            selected_mode=selected_mode,
+            from_cache=False,
+            cache_key=cache_key,
+            quality=local_quality,
+            external_attempts=int(api_result.get("attempts", 0) or 0),
+            external_status=str(api_result.get("status") or "not_attempted"),
+            external_reasons=[str(reason) for reason in api_result.get("reasons") or []],
+            external_invoked_at=api_result.get("invoked_at"),
+            external_configured=bool(api_result.get("configured")),
+        )
+        if self.cache_enabled:
+            self._store_decision_extraction_cache(
+                document_version_id=document_version_id,
+                selection=selection,
+            )
+        return selection
+
+    def _load_cached_decision_extraction(
+        self,
+        *,
+        document_version_id: int,
+        cache_key: str,
+    ) -> DecisionExtractionSelection | None:
+        row = self.session.execute(
+            select(DecisionExtractionCache).where(
+                DecisionExtractionCache.document_version_id == document_version_id,
+                DecisionExtractionCache.cache_key == cache_key,
+            )
+        ).scalar_one_or_none()
+        if row is None or row.status != "completed":
+            return None
+
+        candidates_payload = _loads_json_list_of_dicts(row.candidates_json)
+        candidates = [_candidate_from_cache_payload(item) for item in candidates_payload]
+        quality_payload = _loads_json_dict(row.quality_reasons_json)
+        quality = None
+        if quality_payload:
+            quality = DecisionLocalQuality(
+                score=float(quality_payload.get("score") or 0.0),
+                marker_count=int(quality_payload.get("marker_count") or 0),
+                candidate_count=int(quality_payload.get("candidate_count") or 0),
+                high_confidence_count=int(quality_payload.get("high_confidence_count") or 0),
+                citation_ready_count=int(quality_payload.get("citation_ready_count") or 0),
+                reasons=[str(reason) for reason in quality_payload.get("reasons") or []],
+            )
+        metadata = _loads_json_dict(row.metadata_json)
+        return DecisionExtractionSelection(
+            candidates=candidates,
+            strategy=row.strategy,
+            selected_mode=row.selected_mode,
+            from_cache=True,
+            cache_key=row.cache_key,
+            quality=quality,
+            external_attempts=int(metadata.get("external_attempts") or 0),
+            external_status=str(metadata.get("external_status") or row.selected_mode),
+            external_reasons=[str(reason) for reason in metadata.get("external_reasons") or []],
+            external_invoked_at=metadata.get("external_invoked_at"),
+            external_configured=bool(metadata.get("external_configured")),
+        )
+
+    def _store_decision_extraction_cache(
+        self,
+        *,
+        document_version_id: int,
+        selection: DecisionExtractionSelection,
+    ) -> None:
+        if not selection.cache_key:
+            return
+        row = self.session.execute(
+            select(DecisionExtractionCache).where(
+                DecisionExtractionCache.document_version_id == document_version_id,
+                DecisionExtractionCache.cache_key == selection.cache_key,
+            )
+        ).scalar_one_or_none()
+        now = datetime.utcnow()
+        if row is None:
+            row = DecisionExtractionCache(
+                document_version_id=document_version_id,
+                cache_key=selection.cache_key,
+                strategy=selection.strategy,
+                selected_mode=selection.selected_mode,
+                status="completed",
+                created_at=now,
+                updated_at=now,
+            )
+            self.session.add(row)
+        row.strategy = selection.strategy
+        row.selected_mode = selection.selected_mode
+        row.status = "completed"
+        row.candidate_count = len(selection.candidates)
+        row.quality_score = selection.quality.score if selection.quality else None
+        row.quality_reasons_json = json.dumps(_quality_to_payload(selection.quality), ensure_ascii=False)
+        row.candidates_json = json.dumps([_candidate_to_cache_payload(item) for item in selection.candidates], ensure_ascii=False)
+        row.metadata_json = json.dumps(
+            {
+                "external_attempts": selection.external_attempts,
+                "external_status": selection.external_status,
+                "external_reasons": list(selection.external_reasons),
+                "external_invoked_at": selection.external_invoked_at,
+                "external_configured": selection.external_configured,
+            },
+            ensure_ascii=False,
+        )
+        row.updated_at = now
+        self.session.flush()
+
+    def _build_local_candidates(self, extracted_text: str) -> list[DecisionCandidate]:
+        parsed = _parse_decision_candidates(extracted_text)
+        expanded: list[DecisionCandidate] = []
+        for candidate in parsed:
+            expanded.extend(_split_candidate_on_multi_approvals(candidate, extracted_text))
+        deduped = _dedupe_candidates(expanded)
+        return _merge_adjacent_candidates(deduped, extracted_text)
+
+    def _evaluate_local_candidates(
+        self,
+        *,
+        extracted_text: str,
+        candidates: list[DecisionCandidate],
+        citation_map: list[dict[str, int]],
+    ) -> DecisionLocalQuality:
+        marker_count = _count_decision_marker_lines(extracted_text)
+        candidate_count = len(candidates)
+        if candidate_count <= 0:
+            return DecisionLocalQuality(
+                score=0.0,
+                marker_count=marker_count,
+                candidate_count=0,
+                high_confidence_count=0,
+                citation_ready_count=0,
+                reasons=["no_local_candidates"],
+            )
+
+        high_confidence_count = sum(1 for candidate in candidates if candidate.confidence >= self.low_confidence_threshold)
+        citation_ready_count = sum(
+            1
+            for candidate in candidates
+            if resolve_pages_for_span(citation_map, candidate.start_offset, candidate.end_offset)
+            or _nearest_page(citation_map, candidate.start_offset) is not None
+        )
+        marker_coverage = min(1.0, candidate_count / max(marker_count, 1)) if marker_count else 1.0
+        high_confidence_ratio = high_confidence_count / max(candidate_count, 1)
+        citation_ready_ratio = citation_ready_count / max(candidate_count, 1)
+        score = round(
+            max(
+                0.0,
+                min(
+                    1.0,
+                    (0.45 * marker_coverage)
+                    + (0.35 * high_confidence_ratio)
+                    + (0.20 * citation_ready_ratio),
+                ),
+            ),
+            4,
+        )
+        reasons: list[str] = []
+        if marker_count and candidate_count < marker_count:
+            reasons.append("local_marker_undercoverage")
+        if high_confidence_count == 0:
+            reasons.append("local_no_high_confidence_candidates")
+        if citation_ready_count < candidate_count:
+            reasons.append("local_missing_citation_ready_candidates")
+        if score >= self.local_acceptance_threshold:
+            reasons.append("local_quality_accepted")
+        else:
+            reasons.append("local_quality_below_threshold")
+        return DecisionLocalQuality(
+            score=score,
+            marker_count=marker_count,
+            candidate_count=candidate_count,
+            high_confidence_count=high_confidence_count,
+            citation_ready_count=citation_ready_count,
+            reasons=_compact_reason_list(reasons, max_items=6),
+        )
 
     def _extract_api_model_candidates(
         self,
@@ -332,6 +616,12 @@ class DecisionExtractionService:
         self.session.query(Vote).filter(Vote.decision_id.in_(existing_ids)).delete(synchronize_session=False)
         self.session.query(DecisionCitation).filter(DecisionCitation.decision_id.in_(existing_ids)).delete(synchronize_session=False)
         self.session.query(DecisionDocumentLink).filter(DecisionDocumentLink.decision_id.in_(existing_ids)).delete(
+            synchronize_session=False
+        )
+        self.session.query(DecisionRequestContext).filter(DecisionRequestContext.decision_id.in_(existing_ids)).delete(
+            synchronize_session=False
+        )
+        self.session.query(DecisionSemanticLink).filter(DecisionSemanticLink.decision_id.in_(existing_ids)).delete(
             synchronize_session=False
         )
         self.session.query(Decision).filter(Decision.id.in_(existing_ids)).delete(synchronize_session=False)
@@ -792,6 +1082,135 @@ def _normalize_api_vote_hint(value: dict | None) -> dict | None:
         "raw_text": None,
         "metadata": {"pattern": "api_model"},
     }
+
+
+def _decision_extraction_cache_key(
+    *,
+    low_confidence_threshold: float,
+    local_acceptance_threshold: float,
+    external_rescue_enabled: bool,
+) -> str:
+    payload = (
+        f"{DEFAULT_DECISION_CACHE_VERSION}|{DECISION_EXTRACTION_STRATEGY_LOCAL_CACHE_FIRST}|"
+        f"low_conf={low_confidence_threshold:.4f}|local_accept={local_acceptance_threshold:.4f}|"
+        f"external_rescue={1 if external_rescue_enabled else 0}"
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _count_decision_marker_lines(text: str) -> int:
+    count = 0
+    for line in text.split("\n"):
+        compact = WHITESPACE_RE.sub(" ", line).strip()
+        if not compact:
+            continue
+        if any(phrase in compact for phrase in DECISION_PHRASES):
+            count += 1
+            continue
+        if NUMBERED_RE.match(compact) or ALT_NUMBERED_RE.match(compact):
+            count += 1
+    return count
+
+
+def _dedupe_candidates(candidates: list[DecisionCandidate]) -> list[DecisionCandidate]:
+    deduped: list[DecisionCandidate] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        signature = _decision_signature(candidate.decision_text)
+        if not signature or signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(candidate)
+    return deduped
+
+
+def _candidate_to_cache_payload(candidate: DecisionCandidate) -> dict[str, Any]:
+    return {
+        "decision_text": candidate.decision_text,
+        "decision_number": candidate.decision_number,
+        "agenda_item": candidate.agenda_item,
+        "start_offset": candidate.start_offset,
+        "end_offset": candidate.end_offset,
+        "confidence": candidate.confidence,
+        "source_window": candidate.source_window,
+        "vote_hint": candidate.vote_hint,
+    }
+
+
+def _candidate_from_cache_payload(payload: dict[str, Any]) -> DecisionCandidate:
+    return DecisionCandidate(
+        decision_text=str(payload.get("decision_text") or "").strip(),
+        decision_number=_as_optional_str(payload.get("decision_number")),
+        agenda_item=_as_optional_str(payload.get("agenda_item")),
+        start_offset=int(payload.get("start_offset") or 0),
+        end_offset=int(payload.get("end_offset") or 0),
+        confidence=float(payload.get("confidence") or 0.0),
+        source_window=str(payload.get("source_window") or ""),
+        vote_hint=payload.get("vote_hint") if isinstance(payload.get("vote_hint"), dict) else None,
+    )
+
+
+def _quality_to_payload(quality: DecisionLocalQuality | None) -> dict[str, Any]:
+    if quality is None:
+        return {}
+    return {
+        "score": quality.score,
+        "marker_count": quality.marker_count,
+        "candidate_count": quality.candidate_count,
+        "high_confidence_count": quality.high_confidence_count,
+        "citation_ready_count": quality.citation_ready_count,
+        "reasons": list(quality.reasons),
+    }
+
+
+def _loads_json_dict(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _loads_json_list_of_dicts(value: str | None) -> list[dict[str, Any]]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item for item in parsed if isinstance(item, dict)]
+
+
+def _as_optional_str(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    compact = value.strip()
+    return compact or None
+
+
+def _env_bool(value: str | None, *, default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _env_float(value: str | None, *, default: float, min_value: float, max_value: float) -> float:
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        return default
+    return max(min_value, min(max_value, parsed))
 
 
 def _compact_reason_list(reasons: list[str], *, max_items: int = 8) -> list[str]:

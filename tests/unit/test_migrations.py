@@ -36,3 +36,13 @@ def test_migrations_apply_and_reapply_cleanly(tmp_path: Path) -> None:
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='rag_decision_summary_topic_meta'")
         )
         assert summary_topic_meta.first() is not None
+        decision_request_context = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='decision_request_context'")
+        )
+        assert decision_request_context.first() is not None
+        chunk_embedding = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_embedding'"))
+        assert chunk_embedding.first() is not None
+        decision_extraction_cache = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='decision_extraction_cache'")
+        )
+        assert decision_extraction_cache.first() is not None

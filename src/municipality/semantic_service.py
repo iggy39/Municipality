@@ -22,6 +22,11 @@ from municipality.models import (
 )
 from municipality.semantic_contract import SemanticExtractionOutput, SemanticRejectReason, SemanticValidationReport
 from municipality.semantic_extractor import SemanticExtractor
+from municipality.semantic_local import (
+    LocalSemanticTopicMatcher,
+    SEMANTIC_STRATEGY_EXTERNAL,
+    semantic_enrichment_strategy_from_env,
+)
 from municipality.semantic_prompt import (
     SemanticEvidencePacket,
     build_semantic_evidence_packet,
@@ -66,12 +71,59 @@ class SemanticService:
         *,
         extractor: SemanticExtractor | None = None,
         canonicalizer: SemanticCanonicalizer | None = None,
+        strategy: str | None = None,
     ):
         self.session = session
         self.extractor = extractor or SemanticExtractor(session)
         self.canonicalizer = canonicalizer or SemanticCanonicalizer()
+        self.strategy = strategy or semantic_enrichment_strategy_from_env()
+        self.local_matcher = LocalSemanticTopicMatcher(session, canonicalizer=self.canonicalizer)
 
     def run_for_document(
+        self,
+        *,
+        source_site_id: int,
+        document_id: int,
+        document_version_id: int,
+        source_kind: str,
+        extracted_text: str,
+        citation_map: list[dict[str, int]],
+    ) -> SemanticServiceResult:
+        if self.strategy != SEMANTIC_STRATEGY_EXTERNAL:
+            local_result = self.local_matcher.run_for_document(
+                source_site_id=source_site_id,
+                document_id=document_id,
+                document_version_id=document_version_id,
+                source_kind=source_kind,
+            )
+            return SemanticServiceResult(
+                run_id=local_result.run.id,
+                status=local_result.run.status,
+                from_cache=local_result.from_cache,
+                api_call_count=local_result.run.api_call_count,
+                evidence_spans=local_result.evidence_spans,
+                node_candidates=local_result.node_candidates,
+                accepted_nodes=local_result.accepted_nodes,
+                rejected_nodes=0,
+                validation_issues=local_result.validation_issues,
+                aliases=local_result.aliases,
+                mentions=local_result.mentions,
+                edges=local_result.edges,
+                decision_links=local_result.decision_links,
+                chunk_links=local_result.chunk_links,
+                reject_rows=local_result.reject_rows,
+            )
+
+        return self._run_external_document(
+            source_site_id=source_site_id,
+            document_id=document_id,
+            document_version_id=document_version_id,
+            source_kind=source_kind,
+            extracted_text=extracted_text,
+            citation_map=citation_map,
+        )
+
+    def _run_external_document(
         self,
         *,
         source_site_id: int,
