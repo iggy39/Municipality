@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from municipality.chunking import normalize_for_search
+from municipality.decision_embeddings import DecisionEmbeddingService
 from municipality.embeddings import EmbeddingReranker
 from municipality.rag_observability import build_retrieval_set_id, hash_text, log_rag_event
 
@@ -142,6 +143,8 @@ class RagRetrievalService:
                 debug_info={
                     "candidate_limit": 0,
                     "broad_decision_query": False,
+                    "decision_match_count": 0,
+                    "top_decision_matches": [],
                     "lexical_top_k_chunk_ids": [],
                     "reranked_top_k_chunk_ids": [],
                     "embedding_rerank": {"enabled": False},
@@ -163,6 +166,13 @@ class RagRetrievalService:
             initial_limit = max(self.reranker.initial_candidate_limit(top_k=effective_top_k), effective_top_k * 3)
         else:
             initial_limit = max(effective_top_k * 3, effective_top_k)
+        decision_matches = self._match_decisions(
+            query=query,
+            municipality_slug=municipality_slug,
+            year=year,
+            topic=topic,
+            requested_source_kinds=requested_source_kinds,
+        )
         hits = self.search_service.search(
             query=query,
             municipality_slug=municipality_slug,
@@ -176,6 +186,13 @@ class RagRetrievalService:
         )
 
         selected_hits = _dedupe_hits(hits)
+        if decision_matches:
+            decision_chunk_scores = _decision_chunk_scores(decision_matches)
+            decision_hits = self.search_service.hydrate_hits_by_chunk_ids(
+                chunk_ids=list(decision_chunk_scores.keys()),
+                score_by_chunk_id=decision_chunk_scores,
+            )
+            selected_hits = _dedupe_hits([*decision_hits, *selected_hits])
         if requested_source_kinds:
             selected_hits = [hit for hit in selected_hits if hit.source_type in requested_source_kinds]
 
@@ -239,6 +256,20 @@ class RagRetrievalService:
             debug_info={
                 "candidate_limit": initial_limit,
                 "broad_decision_query": broad_decision_query,
+                "decision_match_count": len(decision_matches),
+                "top_decision_matches": [
+                    {
+                        "decision_id": item.decision_id,
+                        "similarity": item.similarity,
+                        "document_id": item.document_id,
+                        "document_title": item.document_title,
+                        "decision_text": item.decision_text[:280],
+                        "agenda_item": item.agenda_item,
+                        "subject_topic_he": item.subject_topic_he,
+                        "citation_chunk_ids": list(item.citation_chunk_ids),
+                    }
+                    for item in decision_matches
+                ],
                 "lexical_top_k_chunk_ids": lexical_top_k_chunk_ids,
                 "reranked_top_k_chunk_ids": [str(row.chunk_id) for row in contexts],
                 "embedding_rerank": dict(rerank_stats),
@@ -264,6 +295,33 @@ class RagRetrievalService:
         )
         return result
 
+    def _match_decisions(
+        self,
+        *,
+        query: str,
+        municipality_slug: str | None,
+        year: int | None,
+        topic: str | None,
+        requested_source_kinds: list[str],
+    ) -> list[Any]:
+        if requested_source_kinds and "protocol" not in requested_source_kinds:
+            return []
+        session = getattr(self.search_service, "session", None)
+        if session is None:
+            return []
+        matcher = DecisionEmbeddingService(session)
+        if not matcher.is_enabled():
+            return []
+        try:
+            return matcher.match_decisions(
+                query=query,
+                municipality_slug=municipality_slug,
+                year=year,
+                topic=topic,
+            )
+        except Exception:  # noqa: BLE001
+            return []
+
 
 def _normalize_source_kinds(source_kinds: list[str] | None) -> list[str]:
     if not source_kinds:
@@ -288,6 +346,20 @@ def _dedupe_hits(hits: list[Any]) -> list[Any]:
     deduped = list(by_chunk_id.values())
     deduped.sort(key=lambda row: row.score, reverse=True)
     return deduped
+
+
+def _decision_chunk_scores(decision_matches: list[Any]) -> dict[str, float]:
+    score_by_chunk_id: dict[str, float] = {}
+    for match in decision_matches:
+        base_score = min(0.99, 0.58 + (0.37 * float(getattr(match, "similarity", 0.0) or 0.0)))
+        for chunk_id in getattr(match, "citation_chunk_ids", []) or []:
+            chunk_key = str(chunk_id or "").strip()
+            if not chunk_key:
+                continue
+            existing = score_by_chunk_id.get(chunk_key)
+            if existing is None or base_score > existing:
+                score_by_chunk_id[chunk_key] = round(base_score, 6)
+    return score_by_chunk_id
 
 
 def _to_context(hit) -> RagContextChunk:

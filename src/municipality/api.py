@@ -30,6 +30,7 @@ from municipality.models import (
     PipelineRun,
     PipelineRunStep,
     ChunkEmbedding,
+    RagAnswerCache,
     SemanticAlias,
     SemanticCandidateReject,
     SemanticDocumentRun,
@@ -45,7 +46,8 @@ from municipality.models import (
 )
 from municipality.pipeline import PipelineService
 from municipality.processing import ProcessingService
-from municipality.rag_answering import RagAnsweringService, rag_answering_thresholds_snapshot
+from municipality.rag_answer_cache import RagAnswerCacheService
+from municipality.rag_answering import RagAnswerResult, RagAnsweringService, RagCitation, rag_answering_thresholds_snapshot
 from municipality.rag_llm import RagLlmClient, RagLlmConfig, build_rag_llm_client
 from municipality.rag_observability import (
     audit_sample_rate,
@@ -252,6 +254,8 @@ def _rerank_debug_summary(*, retrieval_result: RagRetrievalResult) -> dict[str, 
     return {
         "candidate_limit": int(retrieval_trace.get("candidate_limit") or 0),
         "broad_decision_query": bool(retrieval_trace.get("broad_decision_query") is True),
+        "decision_match_count": int(retrieval_trace.get("decision_match_count") or 0),
+        "top_decision_matches": list(retrieval_trace.get("top_decision_matches") or []),
         "lexical_top_k_chunk_ids": lexical_top_k_chunk_ids,
         "reranked_top_k_chunk_ids": reranked_top_k_chunk_ids,
         "overlap_count": overlap_count,
@@ -262,6 +266,183 @@ def _rerank_debug_summary(*, retrieval_result: RagRetrievalResult) -> dict[str, 
         else 0.0,
         "embedding_rerank": embedding_rerank,
     }
+
+
+def _collapse_duplicate_answering_contexts(
+    *,
+    embedding_service: ChunkEmbeddingService,
+    question: str,
+    contexts: list[RagContextChunk],
+) -> tuple[list[RagContextChunk], dict[str, Any]]:
+    stats = {"enabled": embedding_service.is_enabled(), "before_count": len(contexts), "after_count": len(contexts), "dropped_chunk_ids": []}
+    if len(contexts) <= 2 or not embedding_service.is_enabled():
+        return contexts, stats
+    query_vector = embedding_service.embed_query(question, query_kind="answer_context_dedupe")
+    if not query_vector:
+        return contexts, stats
+    lookup = embedding_service.ensure_embeddings_for_hits(hits=contexts)
+    vectors_by_chunk = lookup.vectors_by_chunk_id
+    if not vectors_by_chunk:
+        return contexts, stats
+    threshold = 0.965
+    ranked_contexts = sorted(
+        contexts,
+        key=lambda item: (
+            _cosine_similarity_api(query_vector, vectors_by_chunk.get(str(item.chunk_id))),
+            float(item.score or 0.0),
+        ),
+        reverse=True,
+    )
+    kept: list[RagContextChunk] = []
+    dropped: list[str] = []
+    for context in ranked_contexts:
+        vector = vectors_by_chunk.get(str(context.chunk_id))
+        if vector is None:
+            kept.append(context)
+            continue
+        is_duplicate = False
+        for existing in kept:
+            if context.source_kind != existing.source_kind or context.document_id != existing.document_id:
+                continue
+            existing_vector = vectors_by_chunk.get(str(existing.chunk_id))
+            if existing_vector is None:
+                continue
+            if _cosine_similarity_api(vector, existing_vector) >= threshold:
+                is_duplicate = True
+                break
+        if is_duplicate:
+            dropped.append(str(context.chunk_id))
+            continue
+        kept.append(context)
+    kept_ids = {str(context.chunk_id) for context in kept}
+    ordered_kept = [context for context in contexts if str(context.chunk_id) in kept_ids]
+    stats["after_count"] = len(ordered_kept)
+    stats["dropped_chunk_ids"] = dropped
+    return ordered_kept, stats
+
+
+def _low_relevance_embedding_refusal(
+    *,
+    embedding_service: ChunkEmbeddingService,
+    question: str,
+    retrieval_result: RagRetrievalResult,
+) -> dict[str, Any] | None:
+    if not retrieval_result.contexts or not embedding_service.is_enabled():
+        return None
+    query_vector = embedding_service.embed_query(question, query_kind="low_relevance_gate")
+    if not query_vector:
+        return None
+    lookup = embedding_service.ensure_embeddings_for_hits(hits=retrieval_result.contexts)
+    vectors_by_chunk = lookup.vectors_by_chunk_id
+    if not vectors_by_chunk:
+        return None
+    chunk_similarities = [
+        _cosine_similarity_api(query_vector, vectors_by_chunk.get(str(context.chunk_id)))
+        for context in retrieval_result.contexts
+        if str(context.chunk_id) in vectors_by_chunk
+    ]
+    if not chunk_similarities:
+        return None
+    decision_matches = retrieval_result.debug_info.get("top_decision_matches") if isinstance(retrieval_result.debug_info, dict) else []
+    top_decision_similarity = 0.0
+    if isinstance(decision_matches, list):
+        for item in decision_matches:
+            if isinstance(item, dict):
+                top_decision_similarity = max(top_decision_similarity, float(item.get("similarity") or 0.0))
+    lexical_max = max(float(context.score or 0.0) for context in retrieval_result.contexts)
+    max_chunk_similarity = max(chunk_similarities)
+    avg_chunk_similarity = sum(chunk_similarities) / max(len(chunk_similarities), 1)
+    if max(max_chunk_similarity, top_decision_similarity) >= 0.18 or lexical_max >= 0.2:
+        return None
+    return {
+        "reason": "low_embedding_relevance",
+        "chunk_max_similarity": round(max_chunk_similarity, 6),
+        "chunk_avg_similarity": round(avg_chunk_similarity, 6),
+        "top_decision_similarity": round(top_decision_similarity, 6),
+        "lexical_max_score": round(lexical_max, 6),
+    }
+
+
+def _answer_result_to_cache_payload(answer_result: RagAnswerResult) -> dict[str, Any]:
+    return {
+        "status": answer_result.status,
+        "answer": answer_result.answer,
+        "extended_answer": answer_result.extended_answer,
+        "answer_sections": list(answer_result.answer_sections),
+        "extended_answer_sections": list(answer_result.extended_answer_sections),
+        "citations": [
+            {
+                "chunk_id": citation.chunk_id,
+                "source_kind": citation.source_kind,
+                "citation_label": citation.citation_label,
+                "document_id": citation.document_id,
+                "document_title": citation.document_title,
+                "document_url": citation.document_url,
+                "start_page": citation.start_page,
+                "end_page": citation.end_page,
+                "score": citation.score,
+            }
+            for citation in answer_result.citations
+        ],
+        "claim_assessments": list(answer_result.claim_assessments),
+        "limitations": list(answer_result.limitations),
+        "refusal_reason_code": answer_result.refusal_reason_code,
+        "refusal_message_he": answer_result.refusal_message_he,
+        "missing_source_kinds": list(answer_result.missing_source_kinds),
+        "provider": answer_result.provider,
+        "model": answer_result.model,
+        "scoring": dict(answer_result.scoring),
+    }
+
+
+def _answer_result_from_cache_payload(payload: dict[str, Any]) -> RagAnswerResult | None:
+    if not isinstance(payload, dict) or payload.get("status") != "answer":
+        return None
+    citations_payload = payload.get("citations") if isinstance(payload.get("citations"), list) else []
+    citations: list[RagCitation] = []
+    for row in citations_payload:
+        if not isinstance(row, dict):
+            continue
+        citations.append(
+            RagCitation(
+                chunk_id=str(row.get("chunk_id") or ""),
+                source_kind=str(row.get("source_kind") or ""),
+                citation_label=row.get("citation_label") if isinstance(row.get("citation_label"), str) else None,
+                document_id=int(row.get("document_id") or 0),
+                document_title=str(row.get("document_title") or ""),
+                document_url=str(row.get("document_url") or ""),
+                start_page=int(row.get("start_page")) if row.get("start_page") is not None else None,
+                end_page=int(row.get("end_page")) if row.get("end_page") is not None else None,
+                score=float(row.get("score") or 0.0),
+            )
+        )
+    return RagAnswerResult(
+        status="answer",
+        answer=payload.get("answer") if isinstance(payload.get("answer"), str) else None,
+        extended_answer=payload.get("extended_answer") if isinstance(payload.get("extended_answer"), str) else None,
+        answer_sections=list(payload.get("answer_sections") or []),
+        extended_answer_sections=list(payload.get("extended_answer_sections") or []),
+        citations=citations,
+        claim_assessments=list(payload.get("claim_assessments") or []),
+        limitations=list(payload.get("limitations") or []),
+        refusal_reason_code=None,
+        refusal_message_he=None,
+        missing_source_kinds=[],
+        provider=payload.get("provider") if isinstance(payload.get("provider"), str) else None,
+        model=payload.get("model") if isinstance(payload.get("model"), str) else None,
+        scoring=dict(payload.get("scoring") or {}),
+    )
+
+
+def _cosine_similarity_api(left: list[float] | None, right: list[float] | None) -> float:
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    numerator = sum(a * b for a, b in zip(left, right, strict=True))
+    left_norm = sum(value * value for value in left) ** 0.5
+    right_norm = sum(value * value for value in right) ** 0.5
+    if left_norm <= 0.0 or right_norm <= 0.0:
+        return 0.0
+    return numerator / (left_norm * right_norm)
 
 
 def _llm_thresholds_payload(llm_client: RagLlmClient) -> dict:
@@ -1346,9 +1527,10 @@ def _run_ask(
         semantic_mode=request.semantic_mode,
     )
 
+    embedding_service = ChunkEmbeddingService(db)
     retrieval_service = RagRetrievalService(
         search_service=SearchService(db),
-        reranker=EmbeddingReranker(ChunkEmbeddingService(db)),
+        reranker=EmbeddingReranker(embedding_service),
     )
     retrieval_started = time.perf_counter()
     retrieval_result = retrieval_service.retrieve(
@@ -1369,6 +1551,11 @@ def _run_ask(
         db=db,
         contexts=list(retrieval_result.contexts),
     )
+    answering_contexts, context_dedupe_stats = _collapse_duplicate_answering_contexts(
+        embedding_service=embedding_service,
+        question=request.question,
+        contexts=answering_contexts,
+    )
     retrieval_for_answering = RagRetrievalResult(
         query=retrieval_result.query,
         normalized_query=retrieval_result.normalized_query,
@@ -1376,6 +1563,7 @@ def _run_ask(
         retrieval_set_id=retrieval_result.retrieval_set_id,
         requested_source_kinds=list(retrieval_result.requested_source_kinds),
         contexts=answering_contexts,
+        debug_info={**dict(retrieval_result.debug_info), "answer_context_dedupe": context_dedupe_stats},
     )
 
     protocol_titles = [
@@ -1407,17 +1595,58 @@ def _run_ask(
 
     resolved_llm_client = llm_client or build_rag_llm_client()
     answering_service = RagAnsweringService(llm_client=resolved_llm_client)
+    answer_cache_service = RagAnswerCacheService(db, embedding_service=embedding_service)
     answering_started = time.perf_counter()
-    answer_result = answering_service.compose(
-        question=request.question,
-        retrieval=retrieval_for_answering,
-        required_source_kinds=request.required_source_types,
-        cached_topic_tree=cached_topic_tree,
-        protocol_subject_anchors=protocol_subject_anchors,
-        protocol_semantic_topic_labels=protocol_semantic_topic_labels,
-        decision_request_context_by_chunk=decision_request_context_by_chunk,
-        ask_request_id=ask_request_id,
+    answer_result: RagAnswerResult | None = None
+    cache_hit = answer_cache_service.lookup(
+        query=request.question,
+        retrieval_set_id=retrieval_result.retrieval_set_id,
     )
+    if cache_hit is not None:
+        answer_result = _answer_result_from_cache_payload(cache_hit.payload)
+        if answer_result is None:
+            cache_hit = None
+        else:
+            answer_result.scoring = {
+                **dict(answer_result.scoring),
+                "semantic_answer_cache_hit": True,
+                "semantic_answer_cache_similarity": cache_hit.similarity,
+                "semantic_answer_cache_id": cache_hit.cache_id,
+                "answer_external_api_called": False,
+                "external_call_count": 0,
+            }
+    if cache_hit is None:
+        low_relevance_gate = _low_relevance_embedding_refusal(
+            embedding_service=embedding_service,
+            question=request.question,
+            retrieval_result=retrieval_for_answering,
+        )
+        if low_relevance_gate is not None:
+            answer_result = answering_service._build_refusal(
+                question=request.question,
+                retrieval=retrieval_for_answering,
+                reason_code="INSUFFICIENT_EVIDENCE",
+                missing_source_kinds=[],
+                ask_request_id=ask_request_id,
+                scoring={
+                    "low_relevance_gate": low_relevance_gate,
+                    "answer_external_api_called": False,
+                    "external_call_count": 0,
+                },
+            )
+        else:
+            answer_result = answering_service.compose(
+                question=request.question,
+                retrieval=retrieval_for_answering,
+                required_source_kinds=request.required_source_types,
+                cached_topic_tree=cached_topic_tree,
+                protocol_subject_anchors=protocol_subject_anchors,
+                protocol_semantic_topic_labels=protocol_semantic_topic_labels,
+                decision_request_context_by_chunk=decision_request_context_by_chunk,
+                ask_request_id=ask_request_id,
+            )
+    if answer_result is None:
+        raise HTTPException(status_code=500, detail="ask_answer_result_missing")
     answering_ms = round((time.perf_counter() - answering_started) * 1000.0, 3)
     total_ms = round((time.perf_counter() - request_started) * 1000.0, 3)
 
@@ -1431,6 +1660,15 @@ def _run_ask(
             for context in retrieval_for_answering.contexts
             if context.source_kind == "protocol" and context.chunk_id and context.document_title
         }
+        if not bool(answer_result.scoring.get("semantic_answer_cache_hit")):
+            answer_cache_service.store(
+                query=request.question,
+                query_hash=question_hash,
+                retrieval_set_id=retrieval_result.retrieval_set_id,
+                answer_provider=answer_result.provider,
+                answer_model=answer_result.model,
+                answer_payload=_answer_result_to_cache_payload(answer_result),
+            )
         _persist_decision_summary_cache(
             db=db,
             question_hash=question_hash,

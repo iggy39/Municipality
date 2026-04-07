@@ -34,6 +34,8 @@ LOCAL_VERIFY_PROVIDER_NAME = "TinyLlamaLocal"
 LOCAL_VERIFY_MODEL_DIR_DEFAULT = "local_llm/models/TinyLlama-1.1B-Chat-v1.0"
 DETERMINISTIC_REFUSAL_PROVIDER_NAME = "DeterministicRefusal"
 DETERMINISTIC_REFUSAL_MODEL_NAME = "rule_based_v1"
+DETERMINISTIC_EXTRACTIVE_PROVIDER_NAME = "DeterministicExtractive"
+DETERMINISTIC_EXTRACTIVE_MODEL_NAME = "decision_embedding_match_v1"
 VERIFY_FALLBACK_PROVIDER_EXTERNAL = "external"
 VERIFY_FALLBACK_PROVIDER_LOCAL = "local"
 DETERMINISTIC_SIMILARITY_SOURCE = "deterministic_similarity"
@@ -607,6 +609,28 @@ class RagAnsweringService:
                 missing_source_kinds=missing_sources,
                 ask_request_id=ask_request_id,
             )
+
+        extractive_result = _build_extractive_answer_if_confident(
+            question=question,
+            retrieval=retrieval,
+            required_source_kinds=required_sources,
+        )
+        if extractive_result is not None:
+            log_rag_event(
+                "rag.answering.answer",
+                ask_request_id=ask_request_id,
+                retrieval_set_id=retrieval.retrieval_set_id,
+                citation_count=len(extractive_result.citations),
+                citation_chunk_ids=[citation.chunk_id for citation in extractive_result.citations],
+                limitation_count=len(extractive_result.limitations),
+                provider=extractive_result.provider,
+                model=extractive_result.model,
+                required_source_types=required_sources,
+                covered_source_types=sorted({citation.source_kind for citation in extractive_result.citations}),
+                claim_count=len(extractive_result.claim_assessments),
+                low_score_claim_count=0,
+            )
+            return extractive_result
 
         answer_call_started = time.perf_counter()
         answer_call = self.llm_client.generate(
@@ -1328,6 +1352,87 @@ def _verification_from_answer_claims(
         unsupported_count=unsupported_count,
         claim_support=claim_support,
         semantic_claims=semantic_claims,
+    )
+
+
+def _build_extractive_answer_if_confident(
+    *,
+    question: str,
+    retrieval: RagRetrievalResult,
+    required_source_kinds: list[str],
+) -> RagAnswerResult | None:
+    if required_source_kinds and any(source_kind != "protocol" for source_kind in required_source_kinds):
+        return None
+    top_matches = retrieval.debug_info.get("top_decision_matches") if isinstance(retrieval.debug_info, dict) else []
+    if not isinstance(top_matches, list) or not top_matches:
+        return None
+    top_match = top_matches[0] if isinstance(top_matches[0], dict) else None
+    if top_match is None:
+        return None
+    top_similarity = float(top_match.get("similarity") or 0.0)
+    second_similarity = 0.0
+    if len(top_matches) > 1 and isinstance(top_matches[1], dict):
+        second_similarity = float(top_matches[1].get("similarity") or 0.0)
+    if top_similarity < 0.9 or (top_similarity - second_similarity) < 0.08:
+        return None
+    if len(_primary_topic_tokens(question)) > 4:
+        return None
+
+    cited_chunk_ids = [
+        str(chunk_id)
+        for chunk_id in top_match.get("citation_chunk_ids") or []
+        if isinstance(chunk_id, str) and chunk_id.strip()
+    ]
+    if not cited_chunk_ids:
+        return None
+    citations = _build_citations(retrieval.contexts, cited_chunk_ids)
+    if not citations:
+        return None
+    decision_text = str(top_match.get("decision_text") or "").strip()
+    if len(decision_text) < 12:
+        return None
+    topic_name = (
+        _as_optional_str(top_match.get("subject_topic_he"))
+        or _as_optional_str(top_match.get("agenda_item"))
+        or _default_topic_name(question)
+    )
+    section_payload = {
+        "protocol_title": _as_optional_str(top_match.get("document_title")) or "פרוטוקול",
+        "topic_name": topic_name,
+        "topic_route": "extractive_decision_match",
+        "topic_score": round(top_similarity, 6),
+        "text": decision_text,
+        "chunk_ids": cited_chunk_ids,
+    }
+    return RagAnswerResult(
+        status="answer",
+        answer=decision_text,
+        extended_answer=decision_text,
+        answer_sections=[section_payload],
+        extended_answer_sections=[section_payload],
+        citations=citations,
+        claim_assessments=[
+            {
+                "text": decision_text,
+                "score": round(top_similarity, 6),
+                "citation_chunk_ids": cited_chunk_ids,
+                "semantic_source": "decision_embedding_match",
+                "selected_for_answer": True,
+            }
+        ],
+        limitations=["התשובה נבנתה ישירות מהחלטה תואמת אחת בעלת התאמה סמנטית גבוהה."],
+        provider=DETERMINISTIC_EXTRACTIVE_PROVIDER_NAME,
+        model=DETERMINISTIC_EXTRACTIVE_MODEL_NAME,
+        scoring={
+            "answer_generation_route": "extractive_decision_match",
+            "answer_external_api_called": False,
+            "external_call_count": 0,
+            "verify_route": "not_needed",
+            "semantic_scoring_source": "decision_embedding_match",
+            "extractive_decision_similarity": round(top_similarity, 6),
+            "extractive_decision_gap": round(top_similarity - second_similarity, 6),
+            "extractive_decision_id": top_match.get("decision_id"),
+        },
     )
 
 

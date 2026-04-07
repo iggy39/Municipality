@@ -46,3 +46,15 @@ def test_migrations_apply_and_reapply_cleanly(tmp_path: Path) -> None:
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='decision_extraction_cache'")
         )
         assert decision_extraction_cache.first() is not None
+        query_embedding_cache = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='query_embedding_cache'")
+        )
+        assert query_embedding_cache.first() is not None
+        decision_embedding = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='decision_embedding'")
+        )
+        assert decision_embedding.first() is not None
+        rag_answer_cache = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='rag_answer_cache'")
+        )
+        assert rag_answer_cache.first() is not None

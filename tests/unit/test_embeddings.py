@@ -12,6 +12,7 @@ from municipality.embeddings import (
     ChunkEmbeddingService,
     EmbeddingConfig,
     EmbeddingReranker,
+    build_embedding_client,
 )
 from municipality.migrations import apply_all
 from municipality.models import Document, DocumentVersion, ExtractedDocument, SourceSite
@@ -119,6 +120,41 @@ def test_embedding_reranker_reorders_hits_using_similarity() -> None:
     assert stats["query_embedding_used"] is True
     assert stats["available_chunk_embeddings"] == 2
     assert stats["created_chunk_embeddings"] == 1
+
+
+def test_query_embedding_cache_reuses_same_query_vector(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'query-cache.db'}", future=True)
+    apply_all(engine, Path("migrations"))
+
+    with Session(engine) as session:
+        client = StubEmbeddingClient({"תקציב": [0.3, 0.7]})
+        service = ChunkEmbeddingService(
+            session,
+            model_client=client,
+            config=EmbeddingConfig(enabled=True, api_key="test-key", model_name="stub-embed", dimensions=2, query_cache_enabled=True),
+        )
+
+        first = service.embed_query("תקציב")
+        second = service.embed_query("תקציב")
+
+        assert first == [0.3, 0.7]
+        assert second == [0.3, 0.7]
+        assert len(client.calls) == 1
+
+
+def test_local_hash_embedding_provider_is_available_without_api_key() -> None:
+    client = build_embedding_client(
+        config=EmbeddingConfig(enabled=True, provider="local_hash", model_name="local-hash-multilingual-v1", dimensions=32)
+    )
+
+    vectors = client.embed_texts(["תקציב חינוך", "תקציב חינוך", "כבישים ובטיחות"])
+
+    assert client.provider_name == "LocalHash"
+    assert client.is_configured() is True
+    assert len(vectors) == 3
+    assert len(vectors[0]) == 32
+    assert vectors[0] == vectors[1]
+    assert vectors[0] != vectors[2]
 
 
 def _seed_chunks(session: Session, *, text: str) -> list[dict]:

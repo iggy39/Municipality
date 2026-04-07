@@ -332,6 +332,46 @@ class SearchService:
         hits.sort(key=lambda hit: hit.score, reverse=True)
         return hits[:limit]
 
+    def hydrate_hits_by_chunk_ids(self, *, chunk_ids: list[str], score_by_chunk_id: dict[str, float] | None = None) -> list[SearchHit]:
+        normalized_ids = [str(chunk_id or "").strip() for chunk_id in chunk_ids if str(chunk_id or "").strip()]
+        if not normalized_ids:
+            return []
+        stmt = (
+            select(TextChunk, Document, SourceSite, AssetManifest)
+            .join(Document, TextChunk.document_id == Document.id)
+            .join(SourceSite, Document.source_site_id == SourceSite.id)
+            .outerjoin(
+                AssetManifest,
+                and_(
+                    AssetManifest.source_site_id == Document.source_site_id,
+                    AssetManifest.asset_external_id == Document.document_external_id,
+                ),
+            )
+            .where(TextChunk.chunk_id.in_(normalized_ids))
+        )
+        rows = self.session.execute(stmt).all()
+        by_id: dict[str, SearchHit] = {}
+        for chunk, document, source_site, manifest in rows:
+            chunk_id = str(chunk.chunk_id)
+            by_id[chunk_id] = SearchHit(
+                chunk_id=chunk_id,
+                score=round(float((score_by_chunk_id or {}).get(chunk_id, 0.0)), 6),
+                snippet=_build_snippet(chunk.chunk_text, chunk.chunk_text[:80]),
+                citation=chunk.citation_label,
+                source_type=chunk.source_kind,
+                document_id=document.id,
+                document_url=document.canonical_url,
+                document_title=document.title_he,
+                municipality_slug=source_site.municipality_slug,
+                meeting_external_id=manifest.source_node_external_id if manifest else None,
+                start_offset=chunk.start_offset,
+                end_offset=chunk.end_offset,
+                start_page=chunk.start_page,
+                end_page=chunk.end_page,
+                chunk_text=chunk.chunk_text,
+            )
+        return [by_id[chunk_id] for chunk_id in normalized_ids if chunk_id in by_id]
+
     def _collect_candidate_scores(self, normalized_query: str) -> dict[str, dict[str, float]]:
         candidate_scores: dict[str, dict[str, float]] = {}
 

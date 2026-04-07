@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import importlib
 import math
@@ -11,11 +12,14 @@ from typing import Any, Protocol, Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from municipality.models import ChunkEmbedding
+from municipality.chunking import normalize_for_search
+from municipality.models import ChunkEmbedding, DecisionEmbedding, QueryEmbeddingCache
 
 
 OPENAI_EMBEDDING_PROVIDER = "OpenAI"
+LOCAL_HASH_EMBEDDING_PROVIDER = "LocalHash"
 DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_LOCAL_HASH_MODEL = "local-hash-multilingual-v1"
 DEFAULT_RERANK_WEIGHT = 0.35
 DEFAULT_RERANK_CANDIDATE_MULTIPLIER = 12
 DEFAULT_RERANK_MIN_CANDIDATES = 60
@@ -26,6 +30,7 @@ DEFAULT_EMBED_BATCH_SIZE = 96
 @dataclass(slots=True)
 class EmbeddingConfig:
     enabled: bool = True
+    provider: str = "openai"
     api_key: str | None = None
     model_name: str = DEFAULT_OPENAI_EMBEDDING_MODEL
     dimensions: int | None = None
@@ -34,15 +39,23 @@ class EmbeddingConfig:
     rerank_min_candidates: int = DEFAULT_RERANK_MIN_CANDIDATES
     rerank_max_candidates: int = DEFAULT_RERANK_MAX_CANDIDATES
     batch_size: int = DEFAULT_EMBED_BATCH_SIZE
+    query_cache_enabled: bool = True
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> EmbeddingConfig:
         source = env if env is not None else os.environ
+        provider = _normalize_embedding_provider(source.get("RAG_EMBEDDING_PROVIDER"))
+        default_model = DEFAULT_LOCAL_HASH_MODEL if provider == "local_hash" else DEFAULT_OPENAI_EMBEDDING_MODEL
         return cls(
             enabled=_env_bool(source.get("RAG_EMBEDDING_RERANK_ENABLED"), default=True),
+            provider=provider,
             api_key=(source.get("OPENAI_API_KEY") or "").strip() or None,
-            model_name=(source.get("OPENAI_EMBEDDING_MODEL") or DEFAULT_OPENAI_EMBEDDING_MODEL).strip()
-            or DEFAULT_OPENAI_EMBEDDING_MODEL,
+            model_name=(
+                source.get("OPENAI_EMBEDDING_MODEL")
+                or source.get("LOCAL_EMBEDDING_MODEL")
+                or default_model
+            ).strip()
+            or default_model,
             dimensions=_env_optional_int(source.get("OPENAI_EMBEDDING_DIMENSIONS"), min_value=64, max_value=3072),
             rerank_weight=_env_float(
                 source.get("RAG_EMBEDDING_RERANK_WEIGHT"),
@@ -74,6 +87,7 @@ class EmbeddingConfig:
                 min_value=1,
                 max_value=512,
             ),
+            query_cache_enabled=_env_bool(source.get("RAG_QUERY_EMBEDDING_CACHE_ENABLED"), default=True),
         )
 
     @property
@@ -144,7 +158,7 @@ class OpenAIEmbeddingClient:
         return self.config.effective_dimensions
 
     def is_configured(self) -> bool:
-        return bool(self.config.enabled and self._client is not None)
+        return bool(self.config.enabled and self.config.provider == "openai" and self._client is not None)
 
     def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
         if not self.is_configured() or not texts:
@@ -178,6 +192,36 @@ class OpenAIEmbeddingClient:
         return vectors
 
 
+class LocalHashEmbeddingClient:
+    def __init__(self, *, config: EmbeddingConfig | None = None):
+        self.config = config or EmbeddingConfig.from_env()
+
+    @property
+    def provider_name(self) -> str:
+        return LOCAL_HASH_EMBEDDING_PROVIDER
+
+    @property
+    def model_name(self) -> str:
+        return self.config.model_name or DEFAULT_LOCAL_HASH_MODEL
+
+    @property
+    def dimensions(self) -> int:
+        return self.config.effective_dimensions
+
+    def is_configured(self) -> bool:
+        return bool(self.config.enabled and self.config.provider == "local_hash")
+
+    def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
+        return [_hash_embed_text(str(text or ""), dimensions=self.dimensions) for text in texts if str(text or "").strip()]
+
+
+def build_embedding_client(*, config: EmbeddingConfig | None = None) -> EmbeddingModelClient:
+    resolved_config = config or EmbeddingConfig.from_env()
+    if resolved_config.provider == "local_hash":
+        return LocalHashEmbeddingClient(config=resolved_config)
+    return OpenAIEmbeddingClient(config=resolved_config)
+
+
 class ChunkEmbeddingService:
     def __init__(
         self,
@@ -188,7 +232,7 @@ class ChunkEmbeddingService:
     ):
         self.session = session
         self.config = config or EmbeddingConfig.from_env()
-        self.model_client = model_client or OpenAIEmbeddingClient(config=self.config)
+        self.model_client = model_client or build_embedding_client(config=self.config)
 
     def is_enabled(self) -> bool:
         return self.config.enabled and self.model_client.is_configured()
@@ -197,15 +241,22 @@ class ChunkEmbeddingService:
         base = max(top_k * self.config.rerank_candidate_multiplier, self.config.rerank_min_candidates)
         return max(top_k, min(base, self.config.rerank_max_candidates))
 
-    def embed_query(self, query: str) -> list[float] | None:
+    def embed_query(self, query: str, *, query_kind: str = "ask") -> list[float] | None:
         text = str(query or "").strip()
         if not self.is_enabled() or not text:
             return None
+        if self.config.query_cache_enabled:
+            cached = self._load_query_embedding(query=text, query_kind=query_kind)
+            if cached is not None:
+                return cached
         try:
             vectors = self.model_client.embed_texts([text])
         except Exception:  # noqa: BLE001
             return None
-        return vectors[0] if vectors else None
+        vector = vectors[0] if vectors else None
+        if vector is not None and self.config.query_cache_enabled:
+            self._store_query_embedding(query=text, query_kind=query_kind, vector=vector)
+        return vector
 
     def index_chunks(self, *, chunks: Sequence[dict[str, Any]]) -> ChunkEmbeddingIndexResult:
         items = [
@@ -274,6 +325,65 @@ class ChunkEmbeddingService:
         self.session.query(ChunkEmbedding).filter(ChunkEmbedding.chunk_id.in_(normalized_ids)).delete(
             synchronize_session=False
         )
+
+    def _load_query_embedding(self, *, query: str, query_kind: str) -> list[float] | None:
+        text_hash, normalized = _query_cache_identity(query)
+        try:
+            row = self.session.execute(
+                select(QueryEmbeddingCache).where(
+                    QueryEmbeddingCache.text_hash == text_hash,
+                    QueryEmbeddingCache.query_kind == query_kind,
+                    QueryEmbeddingCache.model_provider == self.model_client.provider_name,
+                    QueryEmbeddingCache.model_name == self.model_client.model_name,
+                    QueryEmbeddingCache.dimensions == self.model_client.dimensions,
+                )
+            ).scalar_one_or_none()
+        except Exception:  # noqa: BLE001
+            self.session.rollback()
+            return None
+        if row is None or row.normalized_text != normalized:
+            return None
+        try:
+            parsed = json.loads(row.embedding_json)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, list) or not parsed:
+            return None
+        return [float(value) for value in parsed]
+
+    def _store_query_embedding(self, *, query: str, query_kind: str, vector: list[float]) -> None:
+        text_hash, normalized = _query_cache_identity(query)
+        try:
+            row = self.session.execute(
+                select(QueryEmbeddingCache).where(
+                    QueryEmbeddingCache.text_hash == text_hash,
+                    QueryEmbeddingCache.query_kind == query_kind,
+                    QueryEmbeddingCache.model_provider == self.model_client.provider_name,
+                    QueryEmbeddingCache.model_name == self.model_client.model_name,
+                    QueryEmbeddingCache.dimensions == self.model_client.dimensions,
+                )
+            ).scalar_one_or_none()
+            now = datetime.utcnow()
+            if row is None:
+                row = QueryEmbeddingCache(
+                    text_hash=text_hash,
+                    normalized_text=normalized,
+                    query_kind=query_kind,
+                    model_provider=self.model_client.provider_name,
+                    model_name=self.model_client.model_name,
+                    dimensions=self.model_client.dimensions,
+                    embedding_json=json.dumps(vector, separators=(",", ":")),
+                    created_at=now,
+                    updated_at=now,
+                )
+                self.session.add(row)
+            else:
+                row.normalized_text = normalized
+                row.embedding_json = json.dumps(vector, separators=(",", ":"))
+                row.updated_at = now
+            self.session.flush()
+        except Exception:  # noqa: BLE001
+            self.session.rollback()
 
     def _ensure_chunk_embeddings(self, rows: Sequence[tuple[str, str]]) -> ChunkEmbeddingIndexResult:
         normalized_rows: list[tuple[str, str]] = []
@@ -480,8 +590,41 @@ def _env_float(value: str | None, *, default: float, min_value: float, max_value
     return max(min_value, min(parsed, max_value))
 
 
+def _normalize_embedding_provider(value: str | None) -> str:
+    normalized = (value or "openai").strip().casefold()
+    if normalized in {"local", "local_hash", "hash", "local-hash"}:
+        return "local_hash"
+    return "openai"
+
+
 def _default_dimensions_for_model(model_name: str) -> int:
     normalized = (model_name or "").strip().casefold()
+    if normalized.startswith("local-hash"):
+        return 512
     if normalized.endswith("3-large"):
         return 3072
     return 1536
+
+
+def _query_cache_identity(query: str) -> tuple[str, str]:
+    normalized = normalize_for_search(str(query or ""))
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return digest, normalized
+
+
+def _hash_embed_text(text: str, *, dimensions: int) -> list[float]:
+    normalized = normalize_for_search(text)
+    tokens = [token for token in normalized.split() if token]
+    if not tokens:
+        return [0.0] * max(1, dimensions)
+    vector = [0.0] * max(1, dimensions)
+    for token in tokens:
+        digest = hashlib.sha256(token.encode("utf-8")).digest()
+        index = int.from_bytes(digest[:4], "big") % len(vector)
+        sign = -1.0 if digest[4] % 2 else 1.0
+        weight = 1.0 + ((digest[5] % 5) / 10.0)
+        vector[index] += sign * weight
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm <= 0.0:
+        return vector
+    return [value / norm for value in vector]

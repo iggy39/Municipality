@@ -352,6 +352,83 @@ class DecisionExtractionCache(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class QueryEmbeddingCache(Base):
+    __tablename__ = "query_embedding_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "text_hash",
+            "query_kind",
+            "model_provider",
+            "model_name",
+            "dimensions",
+            name="uq_query_embedding_cache_key",
+        ),
+        Index(
+            "ix_query_embedding_cache_lookup",
+            "text_hash",
+            "query_kind",
+            "model_provider",
+            "model_name",
+            "dimensions",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    text_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    query_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class DecisionEmbedding(Base):
+    __tablename__ = "decision_embedding"
+    __table_args__ = (
+        UniqueConstraint("decision_id", "model_provider", "model_name", "dimensions", name="uq_decision_embedding_key"),
+        Index("ix_decision_embedding_lookup", "decision_id", "model_provider", "model_name", "dimensions"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    decision_id: Mapped[int] = mapped_column(ForeignKey("decision.id"), nullable=False)
+    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class RagAnswerCache(Base):
+    __tablename__ = "rag_answer_cache"
+    __table_args__ = (
+        Index(
+            "ix_rag_answer_cache_retrieval",
+            "retrieval_set_id",
+            "embedding_provider",
+            "embedding_model",
+            "embedding_dimensions",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    retrieval_set_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    query_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    normalized_query: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    embedding_dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    query_embedding_json: Mapped[str] = mapped_column(Text, nullable=False)
+    answer_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    answer_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    answer_payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class SemanticDocumentRun(Base):
     __tablename__ = "semantic_document_run"
     __table_args__ = (

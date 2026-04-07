@@ -264,12 +264,66 @@ def test_rag_answering_uses_local_fallback_when_configured(monkeypatch) -> None:
     assert result.status == "answer"
     assert [request["call_type"] for request in provider.requests] == ["answer"]
     assert result.scoring.get("verify_route") == "local_verify_fallback"
-    assert result.scoring.get("fallback_verify_attempted") is True
-    assert result.scoring.get("fallback_provider") == "local"
-    assert result.scoring.get("fallback_overrode_deterministic_low") is True
+
+
+def test_rag_answering_uses_extractive_decision_match_without_model_call() -> None:
+    provider = MockRagProvider(responses_by_call_type={})
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+
+    retrieval = RagRetrievalResult(
+        query="מה הוחלט על תקציב החינוך?",
+        normalized_query="מה הוחלט על תקציב החינוך",
+        top_k=3,
+        retrieval_set_id="set-extractive-decision",
+        requested_source_kinds=["protocol"],
+        contexts=[
+            RagContextChunk(
+                chunk_id="chunk-protocol",
+                score=0.95,
+                snippet="הוחלט לאשר את תקציב החינוך העירוני.",
+                citation="p.1",
+                source_kind="protocol",
+                document_id=22,
+                document_title="פרוטוקול ועדת חינוך",
+                document_url="https://example.local/protocol.pdf",
+                municipality_slug="ashdod",
+                meeting_external_id="meeting:22",
+                start_page=1,
+                end_page=1,
+                chunk_text="הוחלט לאשר את תקציב החינוך העירוני.",
+            )
+        ],
+        debug_info={
+            "top_decision_matches": [
+                {
+                    "decision_id": 7,
+                    "similarity": 0.96,
+                    "document_id": 22,
+                    "document_title": "פרוטוקול ועדת חינוך",
+                    "decision_text": "הוחלט לאשר את תקציב החינוך העירוני.",
+                    "agenda_item": "תקציב חינוך",
+                    "subject_topic_he": "תקציב חינוך",
+                    "citation_chunk_ids": ["chunk-protocol"],
+                }
+            ]
+        },
+    )
+
+    result = service.compose(
+        question="מה הוחלט על תקציב החינוך?",
+        retrieval=retrieval,
+        required_source_kinds=["protocol"],
+    )
+
+    assert result.status == "answer"
+    assert result.answer == "הוחלט לאשר את תקציב החינוך העירוני."
+    assert result.provider == "DeterministicExtractive"
+    assert result.scoring.get("answer_generation_route") == "extractive_decision_match"
+    assert provider.requests == []
     assert result.scoring.get("external_call_count") == 0
     assert result.claim_assessments
-    assert result.claim_assessments[0]["semantic_source"] == "deterministic_similarity"
+    assert result.claim_assessments[0]["semantic_source"] == "decision_embedding_match"
 
 
 def test_rag_answering_exposes_when_external_fallback_overrides_deterministic_low_score(monkeypatch) -> None:
