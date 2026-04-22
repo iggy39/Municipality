@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, delete
 from sqlalchemy.orm import Session
 
 from municipality.api import AskRequest, _run_ask
 from municipality.eval_rag import evaluate_rag_eval_set, load_rag_eval_set, required_source_kinds, retrieval_source_kinds
 from municipality.migrations import apply_all
+from municipality.models import RagAnswerCache
+import municipality.rag_answering as rag_answering_module
 from municipality.rag_answering import REASON_MISSING_PROTOCOL_EVIDENCE, RagAnsweringService
 from municipality.rag_llm import MockRagProvider, RagLlmConfig, build_rag_llm_client
 from municipality.rag_retrieval import RagRetrievalService
@@ -119,16 +121,18 @@ def test_m4_bootstrap_missing_protocol_evidence_returns_refusal() -> None:
     assert result.missing_source_kinds == ["protocol"]
 
 
-def test_m4_rag_eval_harness_scores_new_ask_outputs() -> None:
+def test_m4_rag_eval_harness_scores_new_ask_outputs(monkeypatch) -> None:
     eval_set = load_rag_eval_set(BOOTSTRAP_EVAL_SET_PATH)
     assert eval_set.cases
+
+    monkeypatch.setattr(rag_answering_module, "_build_extractive_answer_if_confident", lambda **_kwargs: None)
 
     case = eval_set.cases[0]
     required_chunk_ids = list(case.expected_grounded.required_chunk_ids)
     assert len(required_chunk_ids) >= 1
 
-    claim_labels = [f"טענה מבוססת {idx + 1}" for idx in range(len(required_chunk_ids))]
     answer_text = " ".join(case.expected_grounded.answer_must_include)
+    claim_labels = [answer_text for _ in range(len(required_chunk_ids))]
     provider = MockRagProvider(
         responses_by_call_type={
             "answer": json.dumps(
@@ -141,6 +145,17 @@ def test_m4_rag_eval_harness_scores_new_ask_outputs() -> None:
                             "citation_chunk_ids": [chunk_id],
                         }
                         for idx, chunk_id in enumerate(required_chunk_ids)
+                    ],
+                    "decision_items": [
+                        {
+                            "summary_he": answer_text,
+                            "citation_chunk_ids": [chunk_id],
+                            "topic_root_he": None,
+                            "topic_subtopic_he": None,
+                            "topic_confidence": 0.4,
+                            "topic_granularity_level": 4,
+                        }
+                        for chunk_id in required_chunk_ids
                     ],
                 },
                 ensure_ascii=False,
@@ -171,6 +186,8 @@ def test_m4_rag_eval_harness_scores_new_ask_outputs() -> None:
     engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
     apply_all(engine, Path("migrations"))
     with Session(engine) as session:
+        session.execute(delete(RagAnswerCache))
+        session.commit()
 
         def ask_fn(**kwargs) -> dict:
             request = AskRequest(

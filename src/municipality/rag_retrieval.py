@@ -49,6 +49,7 @@ BOILERPLATE_DECISION_PATTERNS = [
     re.compile(r"רח\s*['\"]"),
     re.compile(r"ת\s*\.?\s*ד\s*\.?"),
 ]
+RETRIEVAL_VERSION = "hierarchy_hebrew_rag_v1"
 
 
 @dataclass(slots=True)
@@ -130,6 +131,15 @@ class RagRetrievalService:
             requested_source_kinds=requested_source_kinds,
             top_k=effective_top_k,
             chunk_ids=[],
+            retrieval_version=RETRIEVAL_VERSION,
+            scope_filters=_retrieval_scope_filters(
+                municipality_slug=municipality_slug,
+                year=year,
+                topic=topic,
+                semantic_node_id=semantic_node_id,
+                semantic_label=semantic_label,
+                semantic_mode=semantic_mode,
+            ),
         )
 
         if not normalized_query:
@@ -245,6 +255,15 @@ class RagRetrievalService:
             requested_source_kinds=requested_source_kinds,
             top_k=effective_top_k,
             chunk_ids=[row.chunk_id for row in contexts],
+            retrieval_version=RETRIEVAL_VERSION,
+            scope_filters=_retrieval_scope_filters(
+                municipality_slug=municipality_slug,
+                year=year,
+                topic=topic,
+                semantic_node_id=semantic_node_id,
+                semantic_label=semantic_label,
+                semantic_mode=semantic_mode,
+            ),
         )
         result = RagRetrievalResult(
             query=query,
@@ -335,6 +354,25 @@ def _normalize_source_kinds(source_kinds: list[str] | None) -> list[str]:
             out.append(normalized)
             seen.add(normalized)
     return out
+
+
+def _retrieval_scope_filters(
+    *,
+    municipality_slug: str | None,
+    year: int | None,
+    topic: str | None,
+    semantic_node_id: int | None,
+    semantic_label: str | None,
+    semantic_mode: str,
+) -> dict[str, Any]:
+    return {
+        "municipality_slug": municipality_slug or None,
+        "year": int(year) if year is not None else None,
+        "topic": str(topic or "").strip() or None,
+        "semantic_node_id": int(semantic_node_id) if semantic_node_id is not None else None,
+        "semantic_label": str(semantic_label or "").strip() or None,
+        "semantic_mode": str(semantic_mode or "off").strip().casefold() or "off",
+    }
 
 
 def _dedupe_hits(hits: list[Any]) -> list[Any]:

@@ -22,7 +22,7 @@ from municipality.models import (
     SourceSite,
     TextChunk,
 )
-from municipality.processing import ProcessingService
+from municipality.processing import ProcessingService, SemanticEnrichmentPolicy
 from municipality.semantic_extractor import SemanticExtractor, SemanticModelResponse
 from municipality.semantic_service import SemanticService
 
@@ -166,6 +166,7 @@ def test_m4_processing_persists_semantic_artifacts_and_rerun_is_idempotent(tmp_p
             extractor=StubExtractor({version.storage_uri: HE_PROTOCOL_TEXT}),
             decision_extraction=NoopDecisionExtractionService(),
             semantic_service=semantic_service,
+            semantic_policy=SemanticEnrichmentPolicy(min_text_chars=0),
         )
 
         processor.run()
@@ -247,6 +248,7 @@ def test_m4_processing_keeps_extraction_and_chunks_when_semantic_fails(tmp_path:
             extractor=StubExtractor({version.storage_uri: HE_PROTOCOL_TEXT}),
             decision_extraction=NoopDecisionExtractionService(),
             semantic_service=semantic_service,
+            semantic_policy=SemanticEnrichmentPolicy(min_text_chars=0),
         )
 
         processor.run()

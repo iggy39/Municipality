@@ -238,6 +238,8 @@ def test_m3_processing_builds_public_cited_decisions_and_api_payloads(tmp_path: 
             session,
             fallback_client=StubFallbackClient(),
             low_confidence_threshold=0.95,
+            local_acceptance_threshold=1.01,
+            external_rescue_enabled=True,
         )
         processor = ProcessingService(
             session=session,

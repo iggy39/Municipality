@@ -32,10 +32,6 @@ def test_migrations_apply_and_reapply_cleanly(tmp_path: Path) -> None:
         assert semantic_run.first() is not None
         semantic_node = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='semantic_node'"))
         assert semantic_node.first() is not None
-        summary_topic_meta = conn.execute(
-            text("SELECT name FROM sqlite_master WHERE type='table' AND name='rag_decision_summary_topic_meta'")
-        )
-        assert summary_topic_meta.first() is not None
         decision_request_context = conn.execute(
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='decision_request_context'")
         )
@@ -58,3 +54,11 @@ def test_migrations_apply_and_reapply_cleanly(tmp_path: Path) -> None:
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='rag_answer_cache'")
         )
         assert rag_answer_cache.first() is not None
+        retired_summary_cache = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='rag_decision_summary_cache'")
+        )
+        assert retired_summary_cache.first() is None
+        retired_summary_topic_meta = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='rag_decision_summary_topic_meta'")
+        )
+        assert retired_summary_topic_meta.first() is None

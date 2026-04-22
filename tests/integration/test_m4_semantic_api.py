@@ -55,6 +55,18 @@ def test_m4_semantic_api_endpoints_expose_search_tree_node_and_runs(tmp_path: Pa
         assert result["semantic_boost"] > 0.0
         assert result["semantic_nodes"][0]["id"] == fixture["child_node_id"]
 
+        root_search_payload = search_endpoint(
+            q="פרויקט",
+            semantic_node_id=fixture["root_node_id"],
+            semantic_mode="filter",
+            include_semantic_debug=True,
+            db=session,
+        )
+        assert root_search_payload["count"] == 1
+        root_result = root_search_payload["results"][0]
+        assert root_result["semantic_match_count"] >= 1
+        assert fixture["child_node_id"] in root_result["semantic_node_ids"]
+
         tree_payload = semantic_tree(muni="ashdod", db=session)
         assert any(item["id"] == fixture["root_node_id"] for item in tree_payload["items"])
 

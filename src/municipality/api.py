@@ -6,7 +6,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any, Generator, cast
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -38,8 +38,6 @@ from municipality.models import (
     SemanticNode,
     ChunkSemanticLink,
     DecisionSemanticLink,
-    RagDecisionSummaryCache,
-    RagDecisionSummaryTopicMeta,
     SourceSite,
     TextChunk,
     Vote,
@@ -58,6 +56,7 @@ from municipality.rag_observability import (
 )
 from municipality.rag_retrieval import RagContextChunk, RagRetrievalResult, RagRetrievalService
 from municipality.search import SearchService, search_thresholds_snapshot
+from municipality.semantic_canonicalization import SemanticCanonicalizer
 
 
 def _default_html_fetcher(url: str) -> str:
@@ -70,6 +69,7 @@ def _default_html_fetcher(url: str) -> str:
 engine = build_engine()
 SessionLocal = build_session_factory(engine)
 app = FastAPI(title="Municipality API")
+TOPIC_SEMANTIC_CANONICALIZER = SemanticCanonicalizer()
 
 
 def get_db() -> Generator:
@@ -398,7 +398,8 @@ def _answer_result_to_cache_payload(answer_result: RagAnswerResult) -> dict[str,
 def _answer_result_from_cache_payload(payload: dict[str, Any]) -> RagAnswerResult | None:
     if not isinstance(payload, dict) or payload.get("status") != "answer":
         return None
-    citations_payload = payload.get("citations") if isinstance(payload.get("citations"), list) else []
+    raw_citations = payload.get("citations")
+    citations_payload = cast(list[Any], raw_citations) if isinstance(raw_citations, list) else []
     citations: list[RagCitation] = []
     for row in citations_payload:
         if not isinstance(row, dict):
@@ -411,8 +412,8 @@ def _answer_result_from_cache_payload(payload: dict[str, Any]) -> RagAnswerResul
                 document_id=int(row.get("document_id") or 0),
                 document_title=str(row.get("document_title") or ""),
                 document_url=str(row.get("document_url") or ""),
-                start_page=int(row.get("start_page")) if row.get("start_page") is not None else None,
-                end_page=int(row.get("end_page")) if row.get("end_page") is not None else None,
+                start_page=_as_optional_int(row.get("start_page")),
+                end_page=_as_optional_int(row.get("end_page")),
                 score=float(row.get("score") or 0.0),
             )
         )
@@ -500,102 +501,13 @@ def _persist_decision_summary_cache(
 ) -> None:
     if not answer_sections:
         return
-
-    if not inspect(db.get_bind()).has_table("rag_decision_summary_cache"):
-        log_rag_event(
-            "rag.ask.summary_cache.skip",
-            reason="missing_table",
-            question_hash=question_hash,
-        )
-        return
-
-    now = datetime.utcnow()
-    title_by_chunk = protocol_title_by_chunk_id or {}
-    has_topic_meta_table = inspect(db.get_bind()).has_table("rag_decision_summary_topic_meta")
-    for section in answer_sections:
-        protocol_title = str(section.get("protocol_title") or "").strip()
-        raw_topic_name = str(section.get("topic_name") or "").strip() or "נושא כללי"
-        topic_name = _cache_topic_name(raw_topic_name)
-        topic_granularity_level = _as_int_in_range(section.get("topic_granularity_level"), min_value=1, max_value=10)
-        summaries = section.get("summaries")
-        if isinstance(summaries, list):
-            summary_list = [str(row).strip() for row in summaries if isinstance(row, str) and row.strip()]
-        else:
-            text_value = str(section.get("text") or "").strip()
-            summary_list = [text_value] if text_value else []
-
-        chunk_ids = section.get("chunk_ids")
-        if not isinstance(chunk_ids, list):
-            continue
-        normalized_chunk_ids = [str(chunk_id).strip() for chunk_id in chunk_ids if str(chunk_id).strip()]
-        if not normalized_chunk_ids or not summary_list:
-            continue
-
-        for chunk_id in normalized_chunk_ids:
-            resolved_protocol_title = str(title_by_chunk.get(chunk_id) or protocol_title or "").strip() or "פרוטוקול"
-            for summary in summary_list:
-                effective_topic_name = topic_name
-                if normalize_for_search(effective_topic_name) in {
-                    normalize_for_search(PLACEHOLDER_TOPIC_LABEL),
-                    normalize_for_search("נושא כללי"),
-                }:
-                    inferred = _infer_topic_path_from_summary(
-                        summary_he=summary,
-                        protocol_title=resolved_protocol_title,
-                    )
-                    if inferred:
-                        effective_topic_name = _cache_topic_name(inferred)
-
-                existing = db.execute(
-                    select(RagDecisionSummaryCache).where(
-                        RagDecisionSummaryCache.question_hash == question_hash,
-                        RagDecisionSummaryCache.chunk_id == chunk_id,
-                        RagDecisionSummaryCache.summary_he == summary,
-                    )
-                ).scalar_one_or_none()
-                if existing is None:
-                    db.add(
-                        RagDecisionSummaryCache(
-                            question_hash=question_hash,
-                            chunk_id=chunk_id,
-                            protocol_title=resolved_protocol_title,
-                            topic_name=effective_topic_name,
-                            summary_he=summary,
-                            model_provider=provider,
-                            model_name=model,
-                            created_at=now,
-                            updated_at=now,
-                        )
-                    )
-                else:
-                    existing.protocol_title = resolved_protocol_title or existing.protocol_title
-                    existing.topic_name = effective_topic_name or existing.topic_name
-                    existing.model_provider = provider or existing.model_provider
-                    existing.model_name = model or existing.model_name
-                    existing.updated_at = now
-
-                if has_topic_meta_table and topic_granularity_level is not None:
-                    meta = db.execute(
-                        select(RagDecisionSummaryTopicMeta).where(
-                            RagDecisionSummaryTopicMeta.question_hash == question_hash,
-                            RagDecisionSummaryTopicMeta.chunk_id == chunk_id,
-                            RagDecisionSummaryTopicMeta.summary_he == summary,
-                        )
-                    ).scalar_one_or_none()
-                    if meta is None:
-                        db.add(
-                            RagDecisionSummaryTopicMeta(
-                                question_hash=question_hash,
-                                chunk_id=chunk_id,
-                                summary_he=summary,
-                                topic_granularity_level=topic_granularity_level,
-                                created_at=now,
-                                updated_at=now,
-                            )
-                        )
-                    else:
-                        meta.topic_granularity_level = topic_granularity_level
-                        meta.updated_at = now
+    log_rag_event(
+        "rag.ask.summary_cache.retired",
+        question_hash=question_hash,
+        section_count=len(answer_sections),
+        provider=provider,
+        model=model,
+    )
 
 
 def _as_int_in_range(value: Any, *, min_value: int, max_value: int) -> int | None:
@@ -608,23 +520,32 @@ def _as_int_in_range(value: Any, *, min_value: int, max_value: int) -> int | Non
     return parsed
 
 
+def _as_optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _cache_topic_name(topic_name: str) -> str:
-    root_topic, child_topic = _split_topic_path(topic_name)
-    root_topic = _sanitize_topic_label(root_topic, min_tokens=1) or "ללא תיוג סמנטי"
-    child_topic = _sanitize_topic_label(child_topic, min_tokens=2)
-    if not child_topic or child_topic == "החלטה כללית":
-        return root_topic
+    segments = _topic_path_segments(topic_name)
+    if not segments:
+        return "ללא תיוג סמנטי"
 
-    normalized_child = child_topic.strip()
-    if normalized_child in {"הזמנה תקציבית", "הצעת מחיר", "אישור תקציבי", "אישור הצעה"}:
-        return root_topic
+    root_topic = segments[0]
+    if len(segments) == 1:
+        return root_topic or "ללא תיוג סמנטי"
 
-    child_tokens = [token for token in normalized_child.split() if token]
-    if len(child_tokens) < 2:
-        return root_topic
-    if len(child_tokens) > 4:
-        child_tokens = child_tokens[:4]
-    return f"{root_topic} > {' '.join(child_tokens)}"
+    out = [root_topic or "ללא תיוג סמנטי"]
+    for segment in segments[1:]:
+        normalized_segment = segment.strip()
+        if normalized_segment in {"הזמנה תקציבית", "הצעת מחיר", "אישור תקציבי", "אישור הצעה", "החלטה כללית"}:
+            continue
+        segment_tokens = [token for token in normalized_segment.split() if token]
+        if len(segment_tokens) < 2:
+            continue
+        out.append(" ".join(segment_tokens[:8]))
+    return _join_topic_path(out)
 
 
 TOPIC_LABEL_STOP_TOKENS = {
@@ -648,24 +569,53 @@ TOPIC_LABEL_STOP_TOKENS = {
     "עירייה",
     "העירייה",
 }
+TOPIC_TOKEN_RE = re.compile(r"[\u0590-\u05FF]{2,}|[A-Za-z]{2,}")
+
+
+def _topic_display_tokens(value: str, *, max_tokens: int | None = None) -> list[str]:
+    compact = " ".join(str(value or "").split())
+    if not compact:
+        return []
+
+    tokens: list[str] = []
+    for token in TOPIC_TOKEN_RE.findall(compact):
+        token_norm = normalize_for_search(token)
+        if not token_norm or token_norm in TOPIC_LABEL_STOP_TOKENS:
+            continue
+        tokens.append(token)
+        if max_tokens is not None and len(tokens) >= max_tokens:
+            break
+    return tokens
 
 
 def _sanitize_topic_label(value: str, *, min_tokens: int = 2, max_tokens: int = 4) -> str:
-    normalized = normalize_for_search(str(value or ""))
-    if not normalized:
-        return ""
-    tokens = [
-        token
-        for token in re.findall(r"[\u0590-\u05FF]{2,}", normalized)
-        if token not in TOPIC_LABEL_STOP_TOKENS
-    ]
+    tokens = _topic_display_tokens(value, max_tokens=max_tokens)
     if len(tokens) < min_tokens:
         return ""
-    return " ".join(tokens[:max_tokens]).strip()
+    return " ".join(tokens).strip()
+
+
+def _topic_path_segments(topic_name: str | None) -> list[str]:
+    parts = [part.strip() for part in str(topic_name or "").split(">") if part and part.strip()]
+    if not parts:
+        return []
+
+    out: list[str] = []
+    for index, part in enumerate(parts):
+        min_tokens = 1 if index == 0 else 2
+        cleaned = _sanitize_topic_label(part, min_tokens=min_tokens, max_tokens=8)
+        if cleaned:
+            out.append(cleaned)
+    return out
+
+
+def _join_topic_path(segments: list[str]) -> str:
+    cleaned = [segment.strip() for segment in segments if str(segment).strip()]
+    return " > ".join(cleaned)
 
 
 def _split_topic_path(topic_name: str | None) -> tuple[str, str]:
-    parts = [part.strip() for part in str(topic_name or "").split(">") if part and part.strip()]
+    parts = _topic_path_segments(topic_name)
     if len(parts) >= 2:
         return parts[0], " > ".join(parts[1:])
     if parts:
@@ -802,6 +752,1120 @@ def _canonicalize_topic_child(*, root_topic: str, child_topic: str) -> str:
     return child_topic
 
 
+TOPIC_REQUEST_SUBJECT_PREFERRED_MARKERS = (
+    "בקשה למתן ",
+    "בקשה להסדרת ",
+    "בקשה להקצאת ",
+    "בקשה להקצאה ",
+    "בקשה להחלפת ",
+    "בקשה לביטול ",
+    "בקשה לקבלת ",
+    "בקשת ",
+    "העמותה מבקשת ",
+    "העמותה מבקשה ",
+    "מבקשת ",
+    "מבקשה ",
+    "מבוקש ",
+    "מבוקשת ",
+)
+TOPIC_REQUEST_SUBJECT_STOP_MARKERS = (
+    ".",
+    "מורשי חתימה",
+    "חברי הנהלה",
+    "בעלי זכות חתימה",
+    "הבקשה פורסמה",
+    "הוצבה הודעה",
+    "בהתאם להחלטת",
+    "בהמשך לבקשת",
+    "לקראת שנת הלימודים",
+    "לאור סיום",
+)
+TOPIC_REQUEST_SUBJECT_LEADING_NORMALIZATION = {
+    "למתן ": "מתן ",
+    "להסדרת ": "הסדרת ",
+    "להסדיר ": "הסדרת ",
+    "להקצאת ": "הקצאת ",
+    "להקצאה ": "הקצאה ",
+    "להחלפת ": "החלפת ",
+    "לביטול ": "ביטול ",
+    "לקבלת ": "קבלת ",
+    "לרשות שימוש": "רשות שימוש",
+}
+TOPIC_LEAF_ENTITY_LEAD_TOKENS = {
+    "העמותה",
+    "לעמותה",
+    "עמותה",
+    "עמותת",
+    "העירייה",
+    "העיריה",
+}
+TOPIC_LEAF_RELATIONAL_LEAD_TOKENS = {
+    "מבקשת",
+    "מבוקש",
+    "מבוקשת",
+    "ממליצה",
+    "מדובר",
+    "מאשרת",
+    "מאשר",
+    "לגבי",
+    "בנוגע",
+    "עבור",
+    "עבור",
+}
+TOPIC_LEAF_TRUNCATED_TAIL_TOKENS = {
+    "דו",
+}
+TOPIC_LEAF_MAX_PROTOCOL_LINKS = 8
+TOPIC_LEAF_MAX_SUPPORT_LINKS = 8
+TOPIC_LEAF_SEMANTIC_CANDIDATE_LIMIT = 14
+TOPIC_LEAF_EMBED_MIN_SIMILARITY = 0.18
+TOPIC_LEAF_SCORE_MARGIN = 0.035
+TOPIC_LEAF_NEIGHBOR_LOOKBACK = 4
+TOPIC_LEAF_NEIGHBOR_LOOKAHEAD = 1
+TOPIC_LOCAL_SUBJECT_MAX_CANDIDATES = 10
+TOPIC_SEMANTIC_MERGE_THRESHOLD = 0.82
+TOPIC_SEMANTIC_EMBED_MERGE_THRESHOLD = 0.86
+TOPIC_LOCAL_ALIGNMENT_MIN = 0.45
+TOPIC_NON_SUBJECT_PROTOTYPES = (
+    "גורם מנהלי",
+    "בעל תפקיד",
+    "אגף עירוני",
+    "מחלקה עירונית",
+    "יחידה ארגונית",
+    "מינהל עירוני",
+    "גורם מקצועי",
+    "עמותה",
+    "ספק חיצוני",
+)
+FIXED_TAXONOMY_ROOTS = {
+    normalize_for_search("הקצאות"),
+    normalize_for_search("הסכמים"),
+    normalize_for_search("תמרורים"),
+    normalize_for_search("ניקיון"),
+    normalize_for_search("אבטחה"),
+    normalize_for_search("עירוניות"),
+    normalize_for_search("החלטות עירוניות"),
+}
+PROTOCOL_TITLE_SUBJECT_RE = re.compile(r"\bבנושא\s+(.+)$")
+TOPIC_PROCEDURAL_PREFIX_PATTERNS = (
+    re.compile(r"^החלטה(?:\s+מספר|\s+מס['\"]?)?[\s:\-–]*\d+[\d/.-]*\s*"),
+    re.compile(r"^נושא\s+החלטה\s*"),
+    re.compile(r"^סעיף\s*:?\s*\d+[\d/.-]*\s*"),
+    re.compile(r"^מכרז\s*\d+[\d/.-]*\s*[-:]?\s*"),
+    re.compile(r"^מס['\"]?\s*\d+[\d/.-]*\s*"),
+)
+TOPIC_GENERIC_SUBJECT_PREFIXES = (
+    "הועדה",
+    "הוועדה",
+    "ועדת",
+    "הוחלט",
+    "מאשרים",
+    "מאשרת",
+    "מאושר",
+    "אושרה",
+    "לפיכך",
+    "לאור",
+    "בהתאם",
+)
+TOPIC_GENERIC_SUBJECT_VALUES = {
+    normalize_for_search("מבקש"),
+    normalize_for_search("תאריך"),
+    normalize_for_search("עמוד"),
+    normalize_for_search("נושא המשימה"),
+}
+TOPIC_PROCEDURAL_SUBJECT_TOKENS = {
+    "תקופה",
+    "שנים",
+    "שנה",
+    "אופציה",
+    "הארכת",
+    "הסכם",
+    "הסכמי",
+    "התקשרות",
+    "הרחבה",
+    "הרחבת",
+    "פריט",
+    "פריטים",
+    "מכרז",
+    "תשלום",
+    "אישור",
+    "אישרה",
+    "מאשרים",
+    "מאשרת",
+    "תושבים",
+    "עמותה",
+    "עירייה",
+    "עיריה",
+    "התנגדות",
+    "התנגדויות",
+    "ערעור",
+    "דחייה",
+    "דחיית",
+    "פרסום",
+    "עיתונות",
+}
+TOPIC_OBJECT_FIELD_POSITIVE_TOKENS = {
+    "שימוש",
+    "שימושים",
+    "ייעוד",
+    "יעוד",
+    "סוג",
+    "סיווג",
+    "מטרה",
+    "מטרת",
+}
+TOPIC_OBJECT_FIELD_SECONDARY_TOKENS = {
+    "תאור",
+    "תיאור",
+    "מהות",
+    "נושא",
+}
+TOPIC_OBJECT_FIELD_NEGATIVE_TOKENS = {
+    "גוש",
+    "חלקה",
+    "מגרש",
+    "כתובת",
+    "שטח",
+    "החלטה",
+    "החלטת",
+    "החלטות",
+    "סעיף",
+    "נוכחים",
+    "נעדרו",
+    "חברי הנהלה",
+    "מורשי חתימה",
+}
+TOPIC_OBJECT_VALUE_STOP_MARKERS = (
+    ".",
+    ",",
+    "הבקשה",
+    "חברי הנהלה",
+    "מורשי חתימה",
+    "בעלי זכות חתימה",
+    "פרטי מקרקעין",
+    "נחתמו",
+    "בהתאם",
+    "הוצבה",
+    "פורסמה",
+    "לא התקבלו",
+)
+TOPIC_OBJECT_DETAIL_TOKENS = {
+    "דו",
+    "תכליתי",
+    "לגברים",
+    "לנשים",
+    "לבנות",
+    "לבנים",
+    "בקומת",
+    "במתחם",
+    "בתחום",
+    "בשטח",
+    "טהרה",
+    "רחצה",
+}
+TOPIC_REQUEST_GENERIC_LEAD_TOKENS = {
+    "בקשה",
+    "בקשת",
+    "מבקשת",
+    "מבקשה",
+}
+TOPIC_CANDIDATE_SOURCE_BONUS = {
+    "current": 0.02,
+    "structured": 0.18,
+    "local_subject": 0.2,
+    "semantic_local": 0.14,
+    "agenda_item": 0.12,
+    "decision_text": 0.1,
+    "semantic_node": -0.08,
+    "subject_topic": 0.02,
+    "request_subject": -0.04,
+}
+
+
+def _clean_topic_candidate_phrase(value: str, *, max_tokens: int = 8) -> str:
+    compact = _strip_topic_entity_detail(value)
+    compact = re.sub(r"[\r\n]+", " ", compact)
+    compact = re.sub(r"\s+", " ", compact).strip(" ,;:-")
+    if not compact:
+        return ""
+
+    for pattern in TOPIC_PROCEDURAL_PREFIX_PATTERNS:
+        compact = pattern.sub("", compact).strip(" ,;:-")
+
+    compact = re.sub(r"^\d+[\d/.-]*", "", compact).strip(" ,;:-")
+    compact = re.sub(r"^(?:ועדת|ועדה|הועדה|הוועדה)\s+", "", compact).strip(" ,;:-")
+    compact = re.sub(r"^(?:בנושא|הנדון)\s*:?\s*", "", compact).strip(" ,;:-")
+
+    candidate = _sanitize_topic_label(compact, min_tokens=2, max_tokens=max_tokens)
+    if not candidate:
+        return ""
+    return candidate
+
+
+def _looks_generic_topic_candidate(value: str) -> bool:
+    candidate = _clean_topic_candidate_phrase(value)
+    if not candidate:
+        return True
+    raw_value = str(value or "")
+    if "@" in raw_value or "http" in raw_value.casefold():
+        return True
+
+    normalized = normalize_for_search(candidate)
+    if normalized in TOPIC_GENERIC_SUBJECT_VALUES:
+        return True
+
+    tokens = _topic_text_tokens(candidate)
+    if len(tokens) < 2:
+        return True
+    if tokens[0] in TOPIC_GENERIC_SUBJECT_PREFIXES:
+        return True
+    return False
+
+
+def _extract_inline_topic_candidates(text: str) -> list[str]:
+    if not text:
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw_line in str(text).splitlines()[:3]:
+        line = " ".join(raw_line.split())
+        if not line:
+            continue
+        if "@" in line or "http" in line.casefold():
+            continue
+        if ":" in line:
+            continue
+        if ":" not in line and not re.search(r"^(?:החלטה|סעיף|מכרז|בנושא)", line) and line.endswith("."):
+            continue
+        candidate = _clean_topic_candidate_phrase(line)
+        if not candidate or _looks_generic_topic_candidate(candidate):
+            continue
+        key = normalize_for_search(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(candidate)
+        if len(out) >= 4:
+            break
+    return out
+
+
+def _structured_topic_fields_from_chunk_text(text: str) -> list[tuple[str, str]]:
+    if not text:
+        return []
+
+    lines = [" ".join(str(raw_line or "").split()) for raw_line in str(text).splitlines()]
+    out: list[tuple[str, str]] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index].strip()
+        index += 1
+        if not line or ":" not in line:
+            continue
+
+        left, right = line.split(":", 1)
+        label = _normalize_headline_text(left)
+        value = _normalize_headline_text(right)
+        if not value:
+            while index < len(lines):
+                fallback_value = _normalize_headline_text(lines[index])
+                index += 1
+                if fallback_value:
+                    value = fallback_value
+                    break
+        if label and value:
+            out.append((label, value))
+    return out
+
+
+def _clean_topic_object_value(value: str) -> str:
+    compact = _strip_topic_entity_detail(value)
+    compact = re.sub(r"[\r\n]+", " ", compact)
+    compact = re.sub(r"\s+", " ", compact).strip(" ,;:-")
+    for pattern in TOPIC_PROCEDURAL_PREFIX_PATTERNS:
+        compact = pattern.sub("", compact).strip(" ,;:-")
+    if not compact:
+        return ""
+    for marker in TOPIC_OBJECT_VALUE_STOP_MARKERS:
+        marker_norm = normalize_for_search(marker)
+        compact_norm = normalize_for_search(compact)
+        split_index = compact_norm.find(marker_norm)
+        if split_index > 0:
+            compact = compact[:split_index].rstrip(" ,;:-")
+            break
+
+    candidate_tokens = [token for token in _sanitize_topic_label(compact, min_tokens=1, max_tokens=6).split() if token]
+    while candidate_tokens and candidate_tokens[-1] in TOPIC_OBJECT_DETAIL_TOKENS:
+        candidate_tokens.pop()
+    if not candidate_tokens:
+        return ""
+    candidate = " ".join(candidate_tokens)
+    candidate_norm = normalize_for_search(candidate)
+    if candidate_norm in TOPIC_GENERIC_SUBJECT_VALUES:
+        return ""
+    if normalize_for_search(candidate).startswith(normalize_for_search("החלטת")):
+        return ""
+    return candidate
+
+
+def _topic_object_field_score(*, label: str, value: str, distance: int) -> float:
+    label_norm = normalize_for_search(label)
+    value_norm = normalize_for_search(value)
+    if not label_norm or not value_norm:
+        return -1.0
+    object_candidate = _clean_topic_object_value(value)
+    if not object_candidate and _looks_generic_topic_candidate(value):
+        return -1.0
+    if any(token in label_norm for token in TOPIC_OBJECT_FIELD_NEGATIVE_TOKENS):
+        return -1.0
+    if any(token in label_norm for token in {"בעלי ענין", "פקס", "email", "e-mail", "טל"}):
+        return -1.0
+    if any(token in label_norm for token in {"דיון", "דיונים", "מהלך"}):
+        return -1.0
+    if any(token in label_norm for token in {"נוכחים", "נעדרו", "פרוטוקול", "תאריך", "עמוד"}):
+        return -1.0
+    if any(token in value_norm for token in {"גוש", "חלקה", "מגרש", "כתובת"}):
+        return -1.0
+
+    score = 1.4
+    label_tokens = _topic_text_tokens(label)
+    value_tokens = _topic_text_tokens(value)
+    if "מהות" in label_norm:
+        score -= 0.45
+    if 1 <= len(label_tokens) <= 4:
+        score += 0.2
+    if 2 <= len(value_tokens) <= 5:
+        score += 0.4
+    if any(re.search(r"[A-Za-z]", token) for token in value.split()):
+        score += 0.2
+
+    if not value_tokens:
+        return -1.0
+    if any(char.isdigit() for char in value_norm):
+        score -= 0.35
+    score -= max(0, distance) * 0.2
+    return score
+
+
+def _protocol_subject_root_from_title(protocol_title: str) -> str | None:
+    compact = " ".join(str(protocol_title or "").split())
+    if not compact:
+        return None
+    match = PROTOCOL_TITLE_SUBJECT_RE.search(compact)
+    if match is None:
+        return None
+    return _sanitize_topic_label(match.group(1), min_tokens=3, max_tokens=8) or None
+
+
+def _is_substantive_protocol_root(value: str) -> bool:
+    candidate = _sanitize_topic_label(value, min_tokens=2, max_tokens=8)
+    if not candidate:
+        return False
+    candidate_tokens = _topic_text_tokens(candidate)
+    if candidate_tokens and candidate_tokens[0] in TOPIC_LEAF_ENTITY_LEAD_TOKENS:
+        return False
+    if candidate_tokens and candidate_tokens[0] in TOPIC_LEAF_RELATIONAL_LEAD_TOKENS:
+        return False
+    if candidate_tokens and candidate_tokens[0] in TOPIC_REQUEST_GENERIC_LEAD_TOKENS:
+        return False
+    if candidate_tokens and candidate_tokens[0] in {
+        "הקמה",
+        "הפעלת",
+        "לתקופה",
+        "הארכת",
+        "הרחבה",
+        "הרחבת",
+        "מכרז",
+        "חשכ",
+        "תוספת",
+        "הסדרת",
+        "ביטול",
+        "החלפת",
+        "יצירת",
+        "גישה",
+        "בקשה",
+        "בקשת",
+        "מבקשת",
+        "מתן",
+        "רשות",
+    }:
+        return False
+    if _preferred_root_from_action(candidate) is not None:
+        return False
+    return normalize_for_search(candidate) not in FIXED_TAXONOMY_ROOTS and len(_topic_text_tokens(candidate)) >= 3
+
+
+def _topic_action_from_texts(*values: str) -> str | None:
+    combined = normalize_for_search(" ".join(str(value or "") for value in values if str(value or "").strip()))
+    if not combined:
+        return None
+    if "ביטול" in combined and "הקצא" in combined:
+        return "ביטול הקצאה"
+    if "תוספת" in combined and "שימוש" in combined:
+        return "תוספת שימוש"
+    if "הסדרת" in combined and "שימוש" in combined:
+        return "הסדרת שימוש"
+    if "רשות" in combined and "שימוש" in combined:
+        return "רשות שימוש"
+    if "החלפ" in combined and "הקצא" in combined:
+        return "החלפת הקצאה"
+    if "הקצא" in combined and "קרקע" in combined:
+        return "הקצאת קרקע"
+    if "הקצא" in combined and "מבנ" in combined:
+        return "הקצאת מבנה"
+    return None
+
+
+def _topic_action_preposition(action: str) -> str:
+    if normalize_for_search(action) in {
+        normalize_for_search("הסדרת שימוש"),
+        normalize_for_search("רשות שימוש"),
+    }:
+        return "ב"
+    return "ל"
+
+
+def _compose_topic_from_action_and_object(*, action: str, object_value: str) -> str | None:
+    object_candidate = _clean_topic_object_value(object_value)
+    if not object_candidate:
+        return None
+
+    action_tokens = set(_topic_text_tokens(action))
+    def is_action_related(token: str) -> bool:
+        token_norm = normalize_for_search(token)
+        token_stripped = re.sub(r"^[בלכמשוה]", "", token_norm)
+        return token_norm in action_tokens or token_stripped in action_tokens
+
+    object_tokens_list = _topic_display_tokens(object_candidate, max_tokens=8)
+    filtered_object_tokens = [
+        token
+        for token in object_tokens_list
+        if not is_action_related(token)
+        and normalize_for_search(token) not in TOPIC_REQUEST_GENERIC_LEAD_TOKENS
+        and normalize_for_search(token) not in TOPIC_PROCEDURAL_SUBJECT_TOKENS
+    ]
+    if filtered_object_tokens:
+        object_candidate = " ".join(filtered_object_tokens)
+
+    object_tokens = set(_topic_text_tokens(object_candidate))
+    if object_tokens and object_tokens.issubset(action_tokens):
+        return _clean_topic_candidate_phrase(action)
+
+    return f"{action} {_topic_action_preposition(action)}{object_candidate}".strip()
+
+
+def _preferred_root_from_action(action: str | None) -> str | None:
+    normalized = normalize_for_search(action or "")
+    if normalized in {
+        normalize_for_search("הקצאת קרקע"),
+        normalize_for_search("הקצאת מבנה"),
+        normalize_for_search("ביטול הקצאה"),
+        normalize_for_search("החלפת הקצאה"),
+        normalize_for_search("תוספת שימוש"),
+        normalize_for_search("הסדרת שימוש"),
+        normalize_for_search("רשות שימוש"),
+    }:
+        return "הקצאות"
+    if normalized == normalize_for_search("הסכם רשות"):
+        return "הסכמים"
+    return None
+
+
+def _strip_topic_entity_detail(value: str) -> str:
+    compact = str(value or "")
+    compact = re.sub(r"\([^)]*\)", " ", compact)
+    compact = re.sub(r"[\"״][^\"״]+[\"״]", " ", compact)
+    compact = re.sub(r"\s*[–—-]\s*(?=[\u0590-\u05FFA-Za-z]{2,})", " - ", compact)
+    for separator in (" - ", " – ", " — "):
+        if separator in compact:
+            left, _right = compact.split(separator, 1)
+            if len(_topic_display_tokens(left, max_tokens=6)) >= 2:
+                compact = left
+                break
+    return " ".join(compact.split()).strip()
+
+
+def _compact_request_subject_for_topic(value: str) -> str | None:
+    compact = _strip_topic_entity_detail(value)
+    compact = " ".join(str(compact or "").split()).strip(" ,;:-")
+    if not compact:
+        return None
+
+    start_index = 0
+    for marker in TOPIC_REQUEST_SUBJECT_PREFERRED_MARKERS:
+        marker_index = compact.find(marker)
+        if marker_index >= 0:
+            start_index = marker_index
+            break
+    compact = compact[start_index:].strip(" ,;:-")
+
+    for stop_marker in TOPIC_REQUEST_SUBJECT_STOP_MARKERS:
+        marker_index = compact.find(stop_marker)
+        if marker_index > 0:
+            compact = compact[:marker_index].strip(" ,;:-")
+            break
+
+    compact = re.sub(r"^בקשת\s+[^\s]+\s+ל", "ל", compact)
+    compact = re.sub(r"^בקשת\s+העמותה\s+ל", "ל", compact)
+    compact = re.sub(r"^בקשה\s+ל", "ל", compact)
+    compact = re.sub(r"^העמותה\s+מבקש(?:ה|ת)\s+", "", compact)
+    compact = re.sub(r"^מבקשת\s+", "", compact)
+    compact = re.sub(r"^מבקשה\s+", "", compact)
+    compact = re.sub(r"^מבוקש(?:ת)?\s+", "", compact)
+    compact = re.sub(r"^לעמותה\s+קיים\s+הסכם[^.]*", "", compact).strip(" ,;:-")
+
+    for prefix, replacement in TOPIC_REQUEST_SUBJECT_LEADING_NORMALIZATION.items():
+        if compact.startswith(prefix):
+            compact = f"{replacement}{compact[len(prefix):]}"
+            break
+
+    compact = _sanitize_topic_label(compact, min_tokens=2, max_tokens=6)
+    return compact or None
+
+
+def _topic_text_tokens(value: str, *, max_tokens: int | None = None) -> list[str]:
+    tokens = [normalize_for_search(token) for token in _topic_display_tokens(value, max_tokens=max_tokens)]
+    if max_tokens is not None:
+        return tokens[:max_tokens]
+    return tokens
+
+
+def _topic_text_overlap_ratio(topic: str, text: str) -> float:
+    topic_tokens = set(_topic_merge_tokens(topic))
+    text_tokens = set(_topic_text_tokens(text))
+    if not topic_tokens or not text_tokens:
+        return 0.0
+    return len(topic_tokens.intersection(text_tokens)) / max(len(topic_tokens), 1)
+
+
+def _topic_label_vector(
+    label: str,
+    *,
+    embedding_service: ChunkEmbeddingService | None,
+    candidate_vector_cache: dict[str, list[float]],
+) -> list[float] | None:
+    cleaned = _clean_topic_candidate_phrase(label)
+    if not cleaned:
+        return None
+    vector = candidate_vector_cache.get(cleaned)
+    if vector is not None:
+        return vector
+    if embedding_service is None or not embedding_service.is_enabled():
+        return None
+    try:
+        vectors = embedding_service.model_client.embed_texts([cleaned])
+    except Exception:  # noqa: BLE001
+        return None
+    if len(vectors) != 1:
+        return None
+    vector = [float(value) for value in vectors[0]]
+    candidate_vector_cache[cleaned] = vector
+    return vector
+
+
+def _topic_concept_similarity(
+    left: str,
+    right: str,
+    *,
+    embedding_service: ChunkEmbeddingService | None,
+    candidate_vector_cache: dict[str, list[float]],
+) -> float:
+    left_clean = _clean_topic_candidate_phrase(left)
+    right_clean = _clean_topic_candidate_phrase(right)
+    if not left_clean or not right_clean:
+        return 0.0
+
+    lexical_score = TOPIC_SEMANTIC_CANONICALIZER.similarity_score(
+        TOPIC_SEMANTIC_CANONICALIZER.normalize_text(left_clean, expand_abbreviations=False),
+        TOPIC_SEMANTIC_CANONICALIZER.normalize_text(right_clean, expand_abbreviations=False),
+    )
+    left_vector = _topic_label_vector(left_clean, embedding_service=embedding_service, candidate_vector_cache=candidate_vector_cache)
+    right_vector = _topic_label_vector(right_clean, embedding_service=embedding_service, candidate_vector_cache=candidate_vector_cache)
+    embedding_score = _cosine_similarity_api(left_vector, right_vector) if left_vector is not None and right_vector is not None else 0.0
+    return max(float(lexical_score), float(embedding_score))
+
+
+def _topic_label_alignment_score(
+    label: str,
+    *,
+    reference_labels: list[str],
+    embedding_service: ChunkEmbeddingService | None,
+    candidate_vector_cache: dict[str, list[float]],
+) -> float:
+    cleaned = _clean_topic_candidate_phrase(label)
+    if not cleaned:
+        return 0.0
+    scores = [
+        _topic_concept_similarity(
+            cleaned,
+            reference,
+            embedding_service=embedding_service,
+            candidate_vector_cache=candidate_vector_cache,
+        )
+        for reference in reference_labels
+        if _clean_topic_candidate_phrase(reference)
+    ]
+    if not scores:
+        return 0.0
+    return max(scores)
+
+
+def _topic_non_subject_similarity(
+    label: str,
+    *,
+    embedding_service: ChunkEmbeddingService | None,
+    candidate_vector_cache: dict[str, list[float]],
+) -> float:
+    cleaned = _clean_topic_candidate_phrase(label)
+    if not cleaned:
+        return 0.0
+
+    lexical_tokens = set(_topic_text_tokens(cleaned))
+    lexical_penalty = 0.0
+    if lexical_tokens.intersection({"מנהל", "מינהל", "אגף", "מחלקה", "יחידה", "ועדה", "חברה", "ספק"}):
+        lexical_penalty = 0.7
+
+    embedding_penalty = 0.0
+    for prototype in TOPIC_NON_SUBJECT_PROTOTYPES:
+        embedding_penalty = max(
+            embedding_penalty,
+            _topic_concept_similarity(
+                cleaned,
+                prototype,
+                embedding_service=embedding_service,
+                candidate_vector_cache=candidate_vector_cache,
+            ),
+        )
+    return max(lexical_penalty, embedding_penalty)
+
+
+def _topic_is_action_equivalent(label: str) -> bool:
+    cleaned = _clean_topic_candidate_phrase(label)
+    action = _topic_action_from_texts(cleaned)
+    if not cleaned or not action:
+        return False
+    if normalize_for_search(cleaned) == normalize_for_search(action):
+        return True
+    if (
+        len(_topic_text_tokens(cleaned)) <= len(_topic_text_tokens(action)) + 1
+        and _topic_text_overlap_ratio(action, cleaned) >= 0.5
+    ):
+        return True
+    similarity = TOPIC_SEMANTIC_CANONICALIZER.similarity_score(
+        TOPIC_SEMANTIC_CANONICALIZER.normalize_text(cleaned, expand_abbreviations=False),
+        TOPIC_SEMANTIC_CANONICALIZER.normalize_text(action, expand_abbreviations=False),
+    )
+    return similarity >= 0.8 and len(_topic_text_tokens(cleaned)) <= len(_topic_text_tokens(action)) + 1
+
+
+def _topic_canonical_preference_score(label: str, *, support_count: int = 0) -> float:
+    cleaned = _clean_topic_candidate_phrase(label)
+    if not cleaned:
+        return -1.0
+    tokens = _topic_text_tokens(cleaned)
+    if not tokens:
+        return -1.0
+    action = _topic_action_from_texts(cleaned)
+    score = _topic_leaf_quality_adjustment(cleaned)
+    score += min(0.2, max(0, support_count) * 0.03)
+    score -= max(0, len(tokens) - 3) * 0.03
+    if _is_procedural_topic_phrase(cleaned):
+        score -= 0.2
+    if set(tokens).intersection({"מנהל", "מינהל", "אגף", "מחלקה", "יחידה", "ועדה", "חברה", "ספק"}):
+        score -= 0.18
+    if action and normalize_for_search(cleaned) == normalize_for_search(action):
+        score += 0.08
+    if tokens and tokens[0] in TOPIC_LEAF_RELATIONAL_LEAD_TOKENS.union(TOPIC_LEAF_ENTITY_LEAD_TOKENS):
+        score -= 0.08
+    return score
+
+
+def _prefer_topic_label(
+    left: str,
+    right: str,
+    *,
+    left_support_count: int = 0,
+    right_support_count: int = 0,
+) -> str:
+    left_clean = _clean_topic_candidate_phrase(left)
+    right_clean = _clean_topic_candidate_phrase(right)
+    if not left_clean:
+        return right_clean
+    if not right_clean:
+        return left_clean
+
+    left_tokens = set(_topic_text_tokens(left_clean))
+    right_tokens = set(_topic_text_tokens(right_clean))
+    left_score = _topic_canonical_preference_score(left_clean, support_count=left_support_count)
+    right_score = _topic_canonical_preference_score(right_clean, support_count=right_support_count)
+
+    if left_tokens and right_tokens:
+        if left_tokens.issubset(right_tokens) and left_score >= right_score - 0.08:
+            return left_clean
+        if right_tokens.issubset(left_tokens) and right_score >= left_score - 0.08:
+            return right_clean
+
+    if right_score > left_score + 0.03:
+        return right_clean
+    if left_score > right_score + 0.03:
+        return left_clean
+    return left_clean if len(left_clean) <= len(right_clean) else right_clean
+
+
+def _topic_leaf_quality_adjustment(topic: str) -> float:
+    tokens = _topic_merge_tokens(topic)
+    if not tokens:
+        return -1.0
+
+    score = 0.0
+    detail_token_count = len(set(tokens).intersection(TOPIC_OBJECT_DETAIL_TOKENS))
+    procedural_token_count = len(set(tokens).intersection(TOPIC_PROCEDURAL_SUBJECT_TOKENS))
+    administrative_token_count = len(set(tokens).intersection({"מנהל", "מינהל", "אגף", "מחלקה", "יחידה", "ועדה", "חברה", "ספק"}))
+    if detail_token_count > 0:
+        score -= min(0.24, detail_token_count * 0.12)
+    if procedural_token_count > 0:
+        score -= min(0.28, procedural_token_count * 0.08)
+    if administrative_token_count > 0:
+        score -= min(0.32, administrative_token_count * 0.16)
+    if tokens[0] in TOPIC_REQUEST_GENERIC_LEAD_TOKENS:
+        score -= 0.12
+    if tokens[0] in TOPIC_LEAF_ENTITY_LEAD_TOKENS:
+        score -= 0.2
+    if tokens[0] in TOPIC_LEAF_RELATIONAL_LEAD_TOKENS:
+        score -= 0.14
+    if tokens[-1] in TOPIC_LEAF_TRUNCATED_TAIL_TOKENS:
+        score -= 0.22
+    if tokens[0] in {"הסדרת", "שימוש", "רשות", "הקצאה", "הקצאת", "תוספת", "החלפת", "ביטול", "הסכם"}:
+        score += 0.06
+    if len(tokens) >= 3:
+        score += 0.03
+    if len(tokens) >= 4:
+        score += 0.02
+    return score
+
+
+def _topic_leaf_is_low_quality(topic: str) -> bool:
+    return _topic_leaf_quality_adjustment(topic) <= -0.1
+
+
+def _protocol_title_topic_root(protocol_title: str) -> str | None:
+    return _object_root_from_topic_parts(root_topic=str(protocol_title or ""), child_topic="")
+
+
+def _topic_leaf_root_for_row(
+    *,
+    topic_name: str,
+    protocol_title: str,
+    summary_he: str,
+    request_subject_he: str | None = None,
+    subject_topic_he: str | None = None,
+) -> str:
+    cached_topic = _cache_topic_name(topic_name)
+    root_topic, child_topic = _split_topic_path(cached_topic)
+    root_topic = _sanitize_topic_label(root_topic, min_tokens=1, max_tokens=6)
+    child_topic = _sanitize_topic_label(child_topic, min_tokens=2, max_tokens=6)
+    request_subject = _compact_request_subject_for_topic(request_subject_he or "")
+    subject_topic = _sanitize_topic_label(subject_topic_he or "", min_tokens=2, max_tokens=6)
+    inferred_topic = _infer_topic_path_from_summary(summary_he=summary_he, protocol_title=protocol_title)
+    inferred_root, _ = _split_topic_path(inferred_topic)
+    inferred_root = _sanitize_topic_label(inferred_root, min_tokens=1, max_tokens=6)
+    protocol_subject_root = _protocol_subject_root_from_title(protocol_title)
+    preferred_action_root = _preferred_root_from_action(
+        _topic_action_from_texts(topic_name, summary_he, request_subject or "", subject_topic or "")
+    )
+    return (
+        protocol_subject_root
+        or (root_topic if _is_substantive_protocol_root(root_topic) else None)
+        or (inferred_root if _is_substantive_protocol_root(inferred_root) else None)
+        or preferred_action_root
+        or _object_root_from_topic_parts(root_topic="", child_topic=" ".join(bit for bit in [subject_topic, request_subject] if bit))
+        or _protocol_title_topic_root(protocol_title)
+        or _object_root_from_topic_parts(root_topic=root_topic, child_topic=child_topic)
+        or (inferred_root if _is_substantive_protocol_root(inferred_root) else None)
+        or (root_topic if _is_substantive_protocol_root(root_topic) else None)
+        or "החלטות עירוניות"
+    )
+
+
+def _topic_leaf_candidate_score(
+    *,
+    candidate: str,
+    evidence_text: str,
+    embedding_similarity: float | None,
+    support_count: int,
+    source_bonus: float,
+    local_alignment: float,
+    non_subject_penalty: float,
+) -> float:
+    lexical_overlap = _topic_text_overlap_ratio(candidate, evidence_text)
+    embedding_score = embedding_similarity if embedding_similarity is not None else 0.0
+    support_bonus = min(0.08, max(0, support_count) * 0.02)
+    quality_score = _topic_leaf_quality_adjustment(candidate)
+    return (0.52 * embedding_score) + (0.22 * lexical_overlap) + (0.18 * local_alignment) + support_bonus + quality_score + source_bonus - (0.22 * non_subject_penalty)
+
+
+def _best_topic_leaf_label(
+    *,
+    root_topic: str,
+    current_child: str,
+    summary_he: str,
+    chunk_text: str,
+    request_subject_he: str | None,
+    subject_topic_he: str | None,
+    agenda_item_he: str | None,
+    decision_text_he: str | None,
+    structured_candidates: list[str],
+    semantic_candidates: list[dict[str, Any]],
+    chunk_vector: list[float] | None,
+    embedding_service: ChunkEmbeddingService | None,
+    candidate_vector_cache: dict[str, list[float]],
+) -> str | None:
+    evidence_text = " ".join(
+        bit
+        for bit in [summary_he, chunk_text, agenda_item_he or "", decision_text_he or "", request_subject_he or "", subject_topic_he or ""]
+        if str(bit).strip()
+    )
+    candidates_by_key: dict[str, dict[str, Any]] = {}
+    reference_labels = [
+        label
+        for label in [*structured_candidates, agenda_item_he or "", decision_text_he or "", subject_topic_he or "", request_subject_he or ""]
+        if _clean_topic_candidate_phrase(label)
+    ]
+    reference_labels.extend(
+        [str(row.get("label") or "") for row in semantic_candidates if _clean_topic_candidate_phrase(str(row.get("label") or ""))]
+    )
+
+    def add_candidate(label: str, *, source: str, support_count: int = 0) -> None:
+        candidate = _sanitize_topic_label(_strip_topic_entity_detail(label), min_tokens=2, max_tokens=6)
+        if not candidate:
+            return
+        candidate_root = _object_root_from_topic_parts(root_topic="", child_topic=candidate)
+        if candidate_root and candidate_root != root_topic:
+            return
+        key = normalize_for_search(candidate)
+        if not key:
+            return
+        bucket = candidates_by_key.setdefault(
+            key,
+            {"label": candidate, "support_count": 0, "sources": set(), "source_bonus": 0.0},
+        )
+        bucket["label"] = candidate
+        bucket["support_count"] = max(int(bucket["support_count"]), int(support_count))
+        bucket["source_bonus"] = max(
+            float(bucket.get("source_bonus") or 0.0),
+            float(TOPIC_CANDIDATE_SOURCE_BONUS.get(source, 0.0)),
+        )
+        sources = bucket.get("sources")
+        if isinstance(sources, set):
+            sources.add(source)
+
+    add_candidate(current_child, source="current")
+    add_candidate(agenda_item_he or "", source="agenda_item")
+    add_candidate(decision_text_he or "", source="decision_text")
+    for structured_candidate in structured_candidates:
+        add_candidate(structured_candidate, source="structured")
+    add_candidate(_compact_request_subject_for_topic(request_subject_he or "") or "", source="request_subject")
+    add_candidate(subject_topic_he or "", source="subject_topic")
+
+    for row in semantic_candidates[:TOPIC_LEAF_SEMANTIC_CANDIDATE_LIMIT]:
+        add_candidate(str(row.get("label") or ""), source="semantic_node", support_count=int(row.get("support_count") or 0))
+
+    if not candidates_by_key:
+        return None
+
+    texts_to_embed = [
+        payload["label"]
+        for payload in candidates_by_key.values()
+        if payload["label"] not in candidate_vector_cache
+    ]
+    if embedding_service is not None and embedding_service.is_enabled() and texts_to_embed:
+        try:
+            vectors = embedding_service.model_client.embed_texts(texts_to_embed)
+        except Exception:  # noqa: BLE001
+            vectors = []
+        if len(vectors) == len(texts_to_embed):
+            for text, vector in zip(texts_to_embed, vectors, strict=True):
+                candidate_vector_cache[text] = [float(value) for value in vector]
+
+    ranked: list[tuple[float, str]] = []
+    score_by_key: dict[str, float] = {}
+    current_key = normalize_for_search(_sanitize_topic_label(current_child, min_tokens=2, max_tokens=6))
+    current_score: float | None = None
+    for key, payload in candidates_by_key.items():
+        label = str(payload["label"])
+        vector = candidate_vector_cache.get(label)
+        payload_sources = payload.get("sources")
+        has_request_subject_source = isinstance(payload_sources, set) and "request_subject" in payload_sources
+        embedding_similarity = _cosine_similarity_api(chunk_vector, vector) if chunk_vector is not None and vector is not None else None
+        score = _topic_leaf_candidate_score(
+            candidate=label,
+            evidence_text=evidence_text,
+            embedding_similarity=embedding_similarity,
+            support_count=int(payload.get("support_count") or 0),
+            source_bonus=float(payload.get("source_bonus") or 0.0),
+            local_alignment=_topic_label_alignment_score(
+                label,
+                reference_labels=reference_labels,
+                embedding_service=embedding_service,
+                candidate_vector_cache=candidate_vector_cache,
+            ),
+            non_subject_penalty=_topic_non_subject_similarity(
+                label,
+                embedding_service=embedding_service,
+                candidate_vector_cache=candidate_vector_cache,
+            ),
+        )
+        if key == current_key:
+            current_score = score
+        if embedding_similarity is not None and embedding_similarity < TOPIC_LEAF_EMBED_MIN_SIMILARITY and not has_request_subject_source:
+            continue
+        score_by_key[key] = score
+        ranked.append((score, label))
+
+    if not ranked:
+        return _sanitize_topic_label(current_child, min_tokens=2, max_tokens=6) or None
+
+    ranked.sort(key=lambda row: row[0], reverse=True)
+    best_score, best_label = ranked[0]
+    if _topic_action_from_texts(best_label) is None:
+        best_core_tokens = _topic_core_object_tokens(best_label)
+        richer_action_candidates: list[tuple[float, str]] = []
+        for candidate_score, candidate_label in ranked[1:]:
+            candidate_action = _topic_action_from_texts(candidate_label)
+            candidate_core_tokens = _topic_core_object_tokens(candidate_label)
+            if (
+                candidate_action
+                and not _is_procedural_topic_phrase(candidate_label)
+                and not _topic_leaf_is_low_quality(candidate_label)
+                and best_core_tokens
+                and candidate_core_tokens
+                and best_core_tokens.intersection(candidate_core_tokens)
+            ):
+                richer_action_candidates.append((candidate_score, candidate_label))
+        if richer_action_candidates:
+            richer_action_candidates.sort(key=lambda row: row[0], reverse=True)
+            action_score, action_label = richer_action_candidates[0]
+            if (best_score - action_score) <= 0.22:
+                best_label = action_label
+                best_score = action_score
+    best_action = _topic_action_from_texts(best_label)
+    if best_action and normalize_for_search(best_label) == normalize_for_search(best_action):
+        richer_structured = []
+        best_alignment = _topic_label_alignment_score(
+            best_label,
+            reference_labels=reference_labels,
+            embedding_service=embedding_service,
+            candidate_vector_cache=candidate_vector_cache,
+        )
+        for structured_candidate in structured_candidates:
+            candidate_label = _clean_topic_candidate_phrase(structured_candidate)
+            candidate_score = score_by_key.get(normalize_for_search(candidate_label))
+            candidate_action = _topic_action_from_texts(candidate_label)
+            if (
+                candidate_label
+                and candidate_score is not None
+                and candidate_action
+                and normalize_for_search(candidate_action) == normalize_for_search(best_action)
+                and normalize_for_search(candidate_label) != normalize_for_search(best_label)
+                and not _topic_leaf_is_low_quality(candidate_label)
+            ):
+                richer_structured.append(
+                    (
+                        _topic_label_alignment_score(
+                            candidate_label,
+                            reference_labels=reference_labels,
+                            embedding_service=embedding_service,
+                            candidate_vector_cache=candidate_vector_cache,
+                        ),
+                        candidate_score,
+                        candidate_label,
+                    )
+                )
+        if richer_structured:
+            richer_structured.sort(key=lambda row: (row[0], row[1]), reverse=True)
+            richer_alignment, richer_score, richer_label = richer_structured[0]
+            if richer_alignment >= max(best_alignment, TOPIC_LOCAL_ALIGNMENT_MIN):
+                best_label = richer_label
+                best_score = richer_score
+                best_action = _topic_action_from_texts(best_label)
+
+    best_tokens = set(_topic_text_tokens(best_label))
+    if best_action and best_tokens:
+        broader_candidates: list[tuple[float, str]] = []
+        for candidate_score, candidate_label in ranked[1:]:
+            candidate_action = _topic_action_from_texts(candidate_label)
+            candidate_tokens = set(_topic_text_tokens(candidate_label))
+            if (
+                candidate_action
+                and normalize_for_search(candidate_action) == normalize_for_search(best_action)
+                and candidate_tokens
+                and candidate_tokens.issubset(best_tokens)
+                and normalize_for_search(candidate_label) != normalize_for_search(best_label)
+                and not _topic_leaf_is_low_quality(candidate_label)
+            ):
+                extra_tokens = best_tokens - candidate_tokens
+                if extra_tokens and extra_tokens.issubset(TOPIC_OBJECT_DETAIL_TOKENS.union(TOPIC_PROCEDURAL_SUBJECT_TOKENS)):
+                    broader_candidates.append((candidate_score, candidate_label))
+        if broader_candidates:
+            broader_candidates.sort(key=lambda row: row[0], reverse=True)
+            broader_score, broader_label = broader_candidates[0]
+            if (best_score - broader_score) <= 0.25:
+                best_label = broader_label
+                best_score = broader_score
+                best_action = _topic_action_from_texts(best_label)
+    if structured_candidates:
+        preferred_structured = ""
+        preferred_score: float | None = None
+        for structured_candidate in structured_candidates:
+            candidate_label = _clean_topic_candidate_phrase(structured_candidate)
+            candidate_score = score_by_key.get(normalize_for_search(candidate_label))
+            if not candidate_label or candidate_score is None:
+                continue
+            if preferred_score is None or candidate_score > preferred_score:
+                preferred_structured = candidate_label
+                preferred_score = candidate_score
+        if preferred_structured and preferred_score is not None:
+            best_action = _topic_action_from_texts(best_label)
+            preferred_action = _topic_action_from_texts(preferred_structured)
+            best_tokens = set(_topic_text_tokens(best_label))
+            preferred_tokens = set(_topic_text_tokens(preferred_structured))
+            best_detail_count = len(set(_topic_text_tokens(best_label)).intersection(TOPIC_OBJECT_DETAIL_TOKENS))
+            preferred_detail_count = len(set(_topic_text_tokens(preferred_structured)).intersection(TOPIC_OBJECT_DETAIL_TOKENS))
+            if (
+                (
+                    (
+                        best_action
+                        and preferred_action
+                        and normalize_for_search(best_action) == normalize_for_search(preferred_action)
+                    )
+                    or (preferred_tokens and preferred_tokens.issubset(best_tokens) and len(best_tokens - preferred_tokens) <= 2)
+                )
+                and (
+                    best_detail_count > preferred_detail_count
+                    or (preferred_tokens and preferred_tokens.issubset(best_tokens) and len(best_tokens - preferred_tokens) <= 2)
+                )
+                and (best_score - preferred_score) <= 0.3
+            ):
+                best_label = preferred_structured
+                best_score = preferred_score
+    current_label = _sanitize_topic_label(current_child, min_tokens=2, max_tokens=6) or ""
+    current_action = _topic_action_from_texts(current_label)
+    current_is_action_only = bool(
+        current_label
+        and current_action
+        and normalize_for_search(current_label) == normalize_for_search(current_action)
+    )
+    if current_label and current_score is not None and normalize_for_search(best_label) != normalize_for_search(current_label):
+        if (
+            not current_is_action_only
+            and not _topic_leaf_is_low_quality(current_label)
+            and (best_score - current_score) < TOPIC_LEAF_SCORE_MARGIN
+        ):
+            return current_label
+    return best_label
+
+
 def _merge_root_payload_into_target(*, target: dict[str, Any], source: dict[str, Any]) -> None:
     target["count"] += int(source["count"])
     target["protocols"].update(source["protocols"])
@@ -840,6 +1904,195 @@ def _merge_root_payload_into_target(*, target: dict[str, Any], source: dict[str,
             not target_variant_last_seen or str(source_variant_last_seen) > str(target_variant_last_seen)
         ):
             target_variant["last_seen_at"] = source_variant_last_seen
+
+
+def _topic_same_action_family(left: str, right: str) -> bool:
+    left_action = _topic_action_from_texts(left)
+    right_action = _topic_action_from_texts(right)
+    return bool(
+        left_action
+        and right_action
+        and normalize_for_search(left_action) == normalize_for_search(right_action)
+    )
+
+
+def _topic_is_action_only(label: str) -> bool:
+    action = _topic_action_from_texts(label)
+    return bool(action and normalize_for_search(label) == normalize_for_search(action))
+
+
+def _topic_core_object_tokens(label: str) -> set[str]:
+    cleaned = _clean_topic_candidate_phrase(label)
+    tokens = set(_topic_text_tokens(cleaned))
+    action_tokens = set(_topic_text_tokens(_topic_action_from_texts(cleaned) or ""))
+    return {
+        token
+        for token in tokens
+        if token not in action_tokens
+        and token not in TOPIC_PROCEDURAL_SUBJECT_TOKENS
+        and token not in TOPIC_REQUEST_GENERIC_LEAD_TOKENS
+        and token not in TOPIC_LEAF_ENTITY_LEAD_TOKENS
+        and token not in TOPIC_LEAF_RELATIONAL_LEAD_TOKENS
+    }
+
+
+def _topic_labels_should_merge(
+    left: str,
+    right: str,
+    *,
+    embedding_service: ChunkEmbeddingService | None,
+    candidate_vector_cache: dict[str, list[float]],
+) -> bool:
+    left_clean = _clean_topic_candidate_phrase(left)
+    right_clean = _clean_topic_candidate_phrase(right)
+    if not left_clean or not right_clean:
+        return False
+    if normalize_for_search(left_clean) == normalize_for_search(right_clean):
+        return True
+
+    similarity = _topic_concept_similarity(
+        left_clean,
+        right_clean,
+        embedding_service=embedding_service,
+        candidate_vector_cache=candidate_vector_cache,
+    )
+    if similarity >= TOPIC_SEMANTIC_EMBED_MERGE_THRESHOLD:
+        return True
+    if similarity >= TOPIC_SEMANTIC_MERGE_THRESHOLD:
+        return True
+
+    left_tokens = set(_topic_text_tokens(left_clean))
+    right_tokens = set(_topic_text_tokens(right_clean))
+    if not left_tokens or not right_tokens:
+        return False
+
+    same_action_family = _topic_same_action_family(left_clean, right_clean)
+    if same_action_family:
+        if _topic_is_action_equivalent(left_clean) and _topic_is_action_equivalent(right_clean):
+            return True
+        if left_tokens.issubset(right_tokens) or right_tokens.issubset(left_tokens):
+            return True
+        if (_topic_is_action_only(left_clean) or _topic_is_action_only(right_clean)) and (
+            _topic_leaf_is_low_quality(left_clean) or _topic_leaf_is_low_quality(right_clean)
+        ):
+            return similarity >= 0.55
+
+    overlap = len(left_tokens.intersection(right_tokens)) / max(1, min(len(left_tokens), len(right_tokens)))
+    left_core_tokens = _topic_core_object_tokens(left_clean)
+    right_core_tokens = _topic_core_object_tokens(right_clean)
+    if left_core_tokens and right_core_tokens and left_core_tokens.intersection(right_core_tokens) and (
+        left_core_tokens.issubset(right_core_tokens) or right_core_tokens.issubset(left_core_tokens)
+    ) and (
+        _is_procedural_topic_phrase(left_clean)
+        or _is_procedural_topic_phrase(right_clean)
+        or _topic_leaf_is_low_quality(left_clean)
+        or _topic_leaf_is_low_quality(right_clean)
+    ):
+        return True
+    if overlap >= 0.5 and similarity >= 0.6 and (
+        _is_procedural_topic_phrase(left_clean)
+        or _is_procedural_topic_phrase(right_clean)
+        or _topic_leaf_is_low_quality(left_clean)
+        or _topic_leaf_is_low_quality(right_clean)
+    ):
+        return True
+    return False
+
+
+def _merge_tree_node_payload(*, target: dict[str, Any], source: dict[str, Any], add_counts: bool) -> None:
+    if add_counts:
+        previous_samples = int(target.get("samples") or 0)
+        source_samples = int(source.get("samples") or 0)
+        total_samples = previous_samples + source_samples
+        target["count"] += int(source.get("count") or 0)
+        if total_samples > 0:
+            target["avg_granularity"] = (
+                (float(target.get("avg_granularity") or 0.0) * previous_samples)
+                + (float(source.get("avg_granularity") or 0.0) * source_samples)
+            ) / total_samples
+        target["samples"] = total_samples
+
+    target["protocols"].update(source.get("protocols", set()))
+    source_last_seen = source.get("last_seen_at")
+    if source_last_seen and (not target.get("last_seen_at") or str(source_last_seen) > str(target.get("last_seen_at"))):
+        target["last_seen_at"] = source_last_seen
+
+    for doc_id, payload in source.get("protocol_links", {}).items():
+        target.setdefault("protocol_links", {}).setdefault(doc_id, payload)
+    for doc_id, payload in source.get("support_documents", {}).items():
+        target.setdefault("support_documents", {}).setdefault(doc_id, payload)
+
+    target_children = target.setdefault("children", {})
+    for child_topic, child_node in source.get("children", {}).items():
+        existing_child = target_children.get(child_topic)
+        if existing_child is None:
+            target_children[child_topic] = child_node
+            continue
+        _merge_tree_node_payload(target=existing_child, source=child_node, add_counts=True)
+
+
+def _normalize_topic_tree_node(
+    node: dict[str, Any],
+    *,
+    parent_topic: str | None,
+    embedding_service: ChunkEmbeddingService | None,
+    candidate_vector_cache: dict[str, list[float]],
+) -> dict[str, Any]:
+    raw_children = list(node.get("children", {}).values())
+    normalized_children = [
+        _normalize_topic_tree_node(
+            child,
+            parent_topic=str(node.get("topic") or "") if str(node.get("topic") or "") != "__root__" else None,
+            embedding_service=embedding_service,
+            candidate_vector_cache=candidate_vector_cache,
+        )
+        for child in raw_children
+    ]
+
+    merged_children: list[dict[str, Any]] = []
+    for child in sorted(normalized_children, key=lambda item: int(item.get("count") or 0), reverse=True):
+        merged = False
+        for existing in merged_children:
+            if _topic_labels_should_merge(
+                str(existing.get("topic") or ""),
+                str(child.get("topic") or ""),
+                embedding_service=embedding_service,
+                candidate_vector_cache=candidate_vector_cache,
+            ):
+                preferred = _prefer_topic_label(
+                    str(existing.get("topic") or ""),
+                    str(child.get("topic") or ""),
+                    left_support_count=int(existing.get("count") or 0),
+                    right_support_count=int(child.get("count") or 0),
+                )
+                existing["topic"] = preferred
+                _merge_tree_node_payload(target=existing, source=child, add_counts=True)
+                merged = True
+                break
+        if not merged:
+            merged_children.append(child)
+
+    collapsed_children: list[dict[str, Any]] = []
+    for child in merged_children:
+        parent_label = str(node.get("topic") or "")
+        if parent_topic is not None and parent_label and _topic_labels_should_merge(
+            parent_label,
+            str(child.get("topic") or ""),
+            embedding_service=embedding_service,
+            candidate_vector_cache=candidate_vector_cache,
+        ):
+            node["topic"] = _prefer_topic_label(
+                parent_label,
+                str(child.get("topic") or ""),
+                left_support_count=int(node.get("count") or 0),
+                right_support_count=int(child.get("count") or 0),
+            )
+            _merge_tree_node_payload(target=node, source=child, add_counts=False)
+            continue
+        collapsed_children.append(child)
+
+    node["children"] = {str(child.get("topic") or ""): child for child in collapsed_children if str(child.get("topic") or "")}
+    return node
 
 
 def _coalesce_sparse_single_token_roots(global_roots: dict[str, dict[str, Any]]) -> None:
@@ -1328,6 +2581,7 @@ def _load_decision_request_contexts_by_chunk(
     *,
     db,
     contexts: list[RagContextChunk],
+    allow_nearby_match: bool = True,
 ) -> dict[str, dict[str, Any]]:
     if not contexts:
         return {}
@@ -1411,7 +2665,7 @@ def _load_decision_request_contexts_by_chunk(
             ):
                 if context.start_offset < end_offset and start_offset < context.end_offset:
                     score += 1.0
-                else:
+                elif allow_nearby_match:
                     distance = min(
                         abs(int(context.start_offset) - int(start_offset)),
                         abs(int(context.end_offset) - int(end_offset)),
@@ -1454,53 +2708,754 @@ def _decision_request_context_payload(*, db, decision_id: int) -> dict[str, Any]
 def _load_cached_topic_tree(
     *,
     db,
-    protocol_titles: list[str],
+    protocol_document_ids: list[int],
 ) -> dict[str, list[str]]:
-    normalized_titles = sorted({str(title).strip() for title in protocol_titles if str(title).strip()})
-    if not normalized_titles:
+    normalized_ids = sorted(
+        {
+            int(document_id)
+            for document_id in protocol_document_ids
+            if isinstance(document_id, int) and int(document_id) > 0
+        }
+    )
+    if not normalized_ids:
+        return {}
+    rows = db.execute(
+        select(
+            Document.title_he,
+            SemanticNode.pref_label_he,
+            SemanticNode.depth,
+            ChunkSemanticLink.confidence,
+        )
+        .join(TextChunk, TextChunk.document_id == Document.id)
+        .join(ChunkSemanticLink, ChunkSemanticLink.chunk_id == TextChunk.chunk_id)
+        .join(SemanticNode, SemanticNode.id == ChunkSemanticLink.semantic_node_id)
+        .where(Document.id.in_(normalized_ids))
+        .where(TextChunk.source_kind == "protocol")
+        .where(SemanticNode.node_kind == "topic")
+        .where(SemanticNode.status == "active")
+    ).all()
+    scored_children_by_title: dict[str, dict[str, float]] = {}
+    for protocol_title, label_he, depth, confidence in rows:
+        protocol_key = str(protocol_title or "").strip()
+        child_label = _sanitize_topic_label(str(label_he or ""), min_tokens=2, max_tokens=6)
+        if not protocol_key or not child_label:
+            continue
+        child_norm = normalize_for_search(child_label)
+        if child_norm in {
+            normalize_for_search("נושא כללי"),
+            normalize_for_search("החלטה כללית"),
+            normalize_for_search(protocol_key),
+        }:
+            continue
+        weight = max(0.0, min(1.0, float(confidence or 0.0))) + (0.06 * max(0, int(depth or 0)))
+        bucket = scored_children_by_title.setdefault(protocol_key, {})
+        bucket[child_label] = bucket.get(child_label, 0.0) + weight
+
+    out: dict[str, list[str]] = {}
+    for protocol_title, child_scores in scored_children_by_title.items():
+        ordered_children = [
+            child
+            for child, _score in sorted(child_scores.items(), key=lambda row: row[1], reverse=True)
+            if child
+        ]
+        if ordered_children:
+            out[protocol_title] = ordered_children[:12]
+    return out
+
+
+def _load_topic_leaf_chunk_metadata(
+    *,
+    db,
+    chunk_ids: list[str],
+) -> tuple[dict[str, dict[str, Any]], list[RagContextChunk]]:
+    normalized_chunk_ids = [str(chunk_id).strip() for chunk_id in chunk_ids if str(chunk_id).strip()]
+    if not normalized_chunk_ids:
+        return {}, []
+
+    rows = db.execute(
+        select(
+            TextChunk.chunk_id,
+            TextChunk.document_id,
+            TextChunk.chunk_text,
+            TextChunk.start_page,
+            TextChunk.end_page,
+            TextChunk.start_offset,
+            TextChunk.end_offset,
+            TextChunk.chunk_index,
+            TextChunk.citation_label,
+            Document.title_he,
+            Document.canonical_url,
+        )
+        .join(Document, Document.id == TextChunk.document_id)
+        .where(TextChunk.chunk_id.in_(normalized_chunk_ids))
+    ).all()
+
+    chunk_meta_by_id: dict[str, dict[str, Any]] = {}
+    contexts: list[RagContextChunk] = []
+    for chunk_id, document_id, chunk_text, start_page, end_page, start_offset, end_offset, chunk_index, citation_label, title_he, canonical_url in rows:
+        key = str(chunk_id or "").strip()
+        if not key:
+            continue
+        payload = {
+            "chunk_id": key,
+            "document_id": int(document_id),
+            "chunk_text": str(chunk_text or ""),
+            "start_page": int(start_page) if start_page is not None else None,
+            "end_page": int(end_page) if end_page is not None else None,
+            "start_offset": int(start_offset) if start_offset is not None else None,
+            "end_offset": int(end_offset) if end_offset is not None else None,
+            "chunk_index": int(chunk_index) if chunk_index is not None else None,
+            "citation_label": str(citation_label or "").strip() or None,
+            "document_title": str(title_he or "").strip(),
+            "document_url": str(canonical_url or "").strip(),
+        }
+        chunk_meta_by_id[key] = payload
+        contexts.append(
+            RagContextChunk(
+                chunk_id=key,
+                score=0.0,
+                snippet=payload["chunk_text"][:240],
+                citation=payload["citation_label"],
+                source_kind="protocol",
+                document_id=int(document_id),
+                document_title=payload["document_title"] or "פרוטוקול",
+                document_url=payload["document_url"],
+                municipality_slug="",
+                start_page=payload["start_page"],
+                end_page=payload["end_page"],
+                start_offset=payload["start_offset"],
+                end_offset=payload["end_offset"],
+                chunk_index=payload["chunk_index"],
+                chunk_text=payload["chunk_text"],
+            )
+        )
+    return chunk_meta_by_id, contexts
+
+
+def _load_topic_leaf_neighbor_fields(
+    *,
+    db,
+    chunk_meta_by_id: dict[str, dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    if not chunk_meta_by_id:
         return {}
 
-    if not inspect(db.get_bind()).has_table("rag_decision_summary_cache"):
+    document_ids = sorted(
+        {
+            int(meta.get("document_id") or 0)
+            for meta in chunk_meta_by_id.values()
+            if int(meta.get("document_id") or 0) > 0
+        }
+    )
+    if not document_ids:
+        return {}
+
+    rows = db.execute(
+        select(TextChunk.document_id, TextChunk.chunk_id, TextChunk.chunk_index, TextChunk.chunk_text)
+        .where(TextChunk.document_id.in_(document_ids))
+        .where(TextChunk.source_kind == "protocol")
+        .order_by(TextChunk.document_id.asc(), TextChunk.chunk_index.asc())
+    ).all()
+
+    rows_by_document: dict[int, list[dict[str, Any]]] = {}
+    for document_id, neighbor_chunk_id, chunk_index, chunk_text in rows:
+        rows_by_document.setdefault(int(document_id), []).append(
+            {
+                "chunk_id": str(neighbor_chunk_id or "").strip(),
+                "chunk_index": int(chunk_index) if chunk_index is not None else None,
+                "chunk_text": str(chunk_text or ""),
+            }
+        )
+
+    out: dict[str, list[dict[str, Any]]] = {}
+    for chunk_id, meta in chunk_meta_by_id.items():
+        document_id = int(meta.get("document_id") or 0)
+        anchor_index = meta.get("chunk_index")
+        if document_id <= 0 or anchor_index is None:
+            continue
+
+        candidates: list[dict[str, Any]] = []
+        for row in rows_by_document.get(document_id, []):
+            row_index = row.get("chunk_index")
+            if row_index is None:
+                continue
+            if row_index < int(anchor_index) - TOPIC_LEAF_NEIGHBOR_LOOKBACK:
+                continue
+            if row_index > int(anchor_index) + TOPIC_LEAF_NEIGHBOR_LOOKAHEAD:
+                continue
+
+            distance = max(0, int(anchor_index) - int(row_index))
+            chunk_text = str(row.get("chunk_text") or "")
+            for label, value in _structured_topic_fields_from_chunk_text(chunk_text):
+                object_value = _clean_topic_object_value(value)
+                subject_value = _clean_topic_candidate_phrase(value) or object_value
+                score = _topic_object_field_score(label=label, value=value, distance=distance)
+                if score <= 0 or not subject_value:
+                    continue
+                candidates.append(
+                    {
+                        "label": label,
+                        "value": value,
+                        "subject": subject_value,
+                        "object": object_value,
+                        "kind": "structured",
+                        "score": score,
+                        "source_chunk_id": row.get("chunk_id"),
+                    }
+                )
+
+            for candidate in _extract_inline_topic_candidates(chunk_text):
+                if _looks_generic_topic_candidate(candidate):
+                    continue
+                candidates.append(
+                    {
+                        "label": "inline",
+                        "value": candidate,
+                        "subject": candidate,
+                        "object": _clean_topic_object_value(candidate),
+                        "kind": "local_subject",
+                        "score": 1.55 - (distance * 0.18),
+                        "source_chunk_id": row.get("chunk_id"),
+                    }
+                )
+
+        deduped: dict[str, dict[str, Any]] = {}
+        for candidate in sorted(candidates, key=lambda item: float(item.get("score") or 0.0), reverse=True):
+            key = normalize_for_search(str(candidate.get("subject") or candidate.get("object") or ""))
+            if not key or key in deduped:
+                continue
+            deduped[key] = candidate
+        if deduped:
+            out[chunk_id] = list(deduped.values())[:TOPIC_LOCAL_SUBJECT_MAX_CANDIDATES]
+    return out
+
+
+def _load_topic_leaf_local_semantic_candidates(
+    *,
+    db,
+    chunk_meta_by_id: dict[str, dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    if not chunk_meta_by_id:
+        return {}
+
+    document_ids = sorted(
+        {
+            int(meta.get("document_id") or 0)
+            for meta in chunk_meta_by_id.values()
+            if int(meta.get("document_id") or 0) > 0
+        }
+    )
+    if not document_ids:
         return {}
 
     rows = db.execute(
         select(
-            RagDecisionSummaryCache.protocol_title,
-            RagDecisionSummaryCache.topic_name,
-            RagDecisionSummaryCache.updated_at,
-        ).where(RagDecisionSummaryCache.protocol_title.in_(normalized_titles))
+            TextChunk.document_id,
+            TextChunk.chunk_id,
+            TextChunk.chunk_index,
+            SemanticNode.pref_label_he,
+            ChunkSemanticLink.confidence,
+        )
+        .join(ChunkSemanticLink, ChunkSemanticLink.chunk_id == TextChunk.chunk_id)
+        .join(SemanticNode, SemanticNode.id == ChunkSemanticLink.semantic_node_id)
+        .where(TextChunk.document_id.in_(document_ids))
+        .where(TextChunk.source_kind == "protocol")
+        .where(SemanticNode.node_kind == "topic")
+        .order_by(TextChunk.document_id.asc(), TextChunk.chunk_index.asc())
     ).all()
 
-    tree_scores: dict[str, dict[str, float]] = {}
-    for protocol_title, topic_name, updated_at in rows:
-        protocol_key = str(protocol_title or "").strip()
-        if not protocol_key:
-            continue
-        root_topic, child_topic = _split_topic_path(topic_name)
-        root_topic = _sanitize_topic_label(root_topic, min_tokens=1)
-        child_topic = _sanitize_topic_label(child_topic, min_tokens=2)
-        if not root_topic:
-            root_topic = "ללא תיוג סמנטי"
-        if not child_topic or child_topic == "החלטה כללית":
-            continue
-        score = 1.0
-        if isinstance(updated_at, datetime):
-            age_days = max(0.0, (datetime.utcnow() - updated_at).total_seconds() / 86400.0)
-            score = max(0.2, 1.0 - min(age_days / 120.0, 0.8))
+    rows_by_document: dict[int, list[dict[str, Any]]] = {}
+    for document_id, neighbor_chunk_id, chunk_index, pref_label_he, confidence in rows:
+        object_value = _clean_topic_object_value(str(pref_label_he or ""))
+        rows_by_document.setdefault(int(document_id), []).append(
+            {
+                "chunk_id": str(neighbor_chunk_id or "").strip(),
+                "chunk_index": int(chunk_index) if chunk_index is not None else None,
+                "subject": _clean_topic_candidate_phrase(str(pref_label_he or "")) or object_value,
+                "object": object_value,
+                "score": float(confidence or 0.0),
+            }
+        )
 
-        protocol_bucket = tree_scores.setdefault(protocol_key, {})
-        protocol_bucket[child_topic] = protocol_bucket.get(child_topic, 0.0) + score
+    out: dict[str, list[dict[str, Any]]] = {}
+    for chunk_id, meta in chunk_meta_by_id.items():
+        document_id = int(meta.get("document_id") or 0)
+        anchor_index = meta.get("chunk_index")
+        if document_id <= 0 or anchor_index is None:
+            continue
 
-    out: dict[str, list[str]] = {}
-    for protocol_title, child_scores in tree_scores.items():
-        ordered_children = [
-            child
-            for child, _ in sorted(child_scores.items(), key=lambda row: row[1], reverse=True)
-            if child and child != "החלטה כללית"
-        ]
-        if ordered_children:
-            out[protocol_title] = ordered_children[:50]
+        deduped: dict[str, dict[str, Any]] = {}
+        for row in rows_by_document.get(document_id, []):
+            row_index = row.get("chunk_index")
+            if row_index is None:
+                continue
+            if row_index < int(anchor_index) - TOPIC_LEAF_NEIGHBOR_LOOKBACK:
+                continue
+            if row_index > int(anchor_index) + TOPIC_LEAF_NEIGHBOR_LOOKAHEAD:
+                continue
+
+            subject = str(row.get("subject") or "")
+            if not subject or _looks_generic_topic_candidate(subject) or _is_procedural_topic_phrase(subject):
+                continue
+            distance = max(0, int(anchor_index) - int(row_index))
+            score = max(0.0, float(row.get("score") or 0.0)) + 1.5 - (distance * 0.15)
+            if str(row.get("chunk_id") or "") == chunk_id:
+                score += 0.6
+            key = normalize_for_search(subject)
+            existing = deduped.get(key)
+            payload = {
+                "label": "semantic_local",
+                "value": subject,
+                "subject": subject,
+                "object": str(row.get("object") or _clean_topic_object_value(subject) or ""),
+                "kind": "semantic_local",
+                "score": score,
+                "source_chunk_id": row.get("chunk_id"),
+            }
+            if existing is None or float(existing.get("score") or 0.0) < score:
+                deduped[key] = payload
+        if deduped:
+            ordered = sorted(deduped.values(), key=lambda item: float(item.get("score") or 0.0), reverse=True)
+            out[chunk_id] = ordered[:TOPIC_LOCAL_SUBJECT_MAX_CANDIDATES]
     return out
+
+
+def _load_topic_leaf_support_documents(
+    *,
+    db,
+    decision_ids: list[int],
+) -> dict[int, list[dict[str, Any]]]:
+    normalized_decision_ids = sorted({int(decision_id) for decision_id in decision_ids if int(decision_id) > 0})
+    if not normalized_decision_ids:
+        return {}
+
+    rows = db.execute(
+        select(DecisionDocumentLink, Document)
+        .join(Document, Document.id == DecisionDocumentLink.document_id)
+        .where(DecisionDocumentLink.decision_id.in_(normalized_decision_ids))
+        .where(DecisionDocumentLink.source_type != "protocol")
+        .where(DecisionDocumentLink.provenance != "heuristic")
+        .order_by(DecisionDocumentLink.decision_id.asc(), Document.id.asc())
+    ).all()
+
+    out: dict[int, list[dict[str, Any]]] = {}
+    for link, document in rows:
+        decision_id = int(link.decision_id)
+        bucket = out.setdefault(decision_id, [])
+        bucket.append(
+            {
+                "id": int(document.id),
+                "title": str(document.title_he or "").strip() or "מסמך תומך",
+                "url": str(document.canonical_url or "").strip(),
+                "doc_kind": document.doc_kind,
+                "source_type": link.source_type,
+                "provenance": link.provenance,
+            }
+        )
+    return out
+
+
+def _load_semantic_topic_candidate_bank(*, db) -> list[dict[str, Any]]:
+    rows = db.execute(
+        select(SemanticNode.pref_label_he, SemanticNode.support_count)
+        .where(SemanticNode.node_kind == "topic")
+        .order_by(SemanticNode.support_count.desc(), SemanticNode.id.asc())
+    ).all()
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for label_he, support_count in rows:
+        label = _sanitize_topic_label(str(label_he or ""), min_tokens=2, max_tokens=6)
+        if not label:
+            continue
+        key = normalize_for_search(label)
+        if not key:
+            continue
+        existing = deduped.get(key)
+        if existing is None or int(support_count or 0) > int(existing.get("support_count") or 0):
+            deduped[key] = {
+                "label": label,
+                "support_count": int(support_count or 0),
+            }
+    return list(deduped.values())
+
+
+def _decision_context_seed_topic(*, request_subject_he: str | None, subject_topic_he: str | None, agenda_item: str | None) -> str:
+    agenda_item_candidate = _sanitize_topic_label(str(agenda_item or ""), min_tokens=2, max_tokens=6)
+    subject_topic_candidate = _sanitize_topic_label(str(subject_topic_he or ""), min_tokens=2, max_tokens=6)
+    request_subject_candidate = _compact_request_subject_for_topic(str(request_subject_he or "")) or ""
+
+    if subject_topic_candidate and not _topic_leaf_is_low_quality(subject_topic_candidate):
+        return subject_topic_candidate
+    if agenda_item_candidate and not _topic_leaf_is_low_quality(agenda_item_candidate):
+        return agenda_item_candidate
+    if request_subject_candidate:
+        return request_subject_candidate
+    if agenda_item_candidate:
+        return agenda_item_candidate
+    if subject_topic_candidate:
+        return subject_topic_candidate
+    return "החלטה כללית"
+
+
+def _load_supplemental_topic_rows_from_decision_context(
+    *,
+    db,
+    existing_cache_chunk_ids: set[str],
+    existing_cache_decision_ids: set[int],
+) -> list[tuple[str, str, str, str, str, datetime | None]]:
+    if not inspect(db.get_bind()).has_table("decision_request_context"):
+        return []
+
+    rows = db.execute(
+        select(
+            DecisionRequestContext.decision_id,
+            DecisionRequestContext.source_document_id,
+            DecisionRequestContext.request_subject_he,
+            DecisionRequestContext.subject_topic_he,
+            DecisionRequestContext.source_chunk_ids_json,
+            DecisionRequestContext.updated_at,
+            Decision.agenda_item,
+            Decision.decision_text,
+            Document.title_he,
+        )
+        .join(Decision, Decision.id == DecisionRequestContext.decision_id)
+        .join(Document, Document.id == DecisionRequestContext.source_document_id)
+        .order_by(DecisionRequestContext.id.asc())
+    ).all()
+
+    out: list[tuple[str, str, str, str, str, datetime | None]] = []
+    for decision_id, _source_document_id, request_subject_he, subject_topic_he, source_chunk_ids_json, updated_at, agenda_item, decision_text, title_he in rows:
+        decision_id_int = int(decision_id)
+        if decision_id_int in existing_cache_decision_ids:
+            continue
+        parsed_chunk_ids = _loads_json(source_chunk_ids_json)
+        source_chunk_ids = [str(item).strip() for item in parsed_chunk_ids] if isinstance(parsed_chunk_ids, list) else []
+        source_chunk_ids = [chunk_id for chunk_id in source_chunk_ids if chunk_id]
+        if not source_chunk_ids:
+            continue
+        if any(chunk_id in existing_cache_chunk_ids for chunk_id in source_chunk_ids):
+            continue
+
+        seed_topic = _decision_context_seed_topic(
+            request_subject_he=str(request_subject_he or ""),
+            subject_topic_he=str(subject_topic_he or ""),
+            agenda_item=str(agenda_item or ""),
+        )
+        if not seed_topic:
+            continue
+
+        summary_he = str(decision_text or request_subject_he or agenda_item or "").strip()
+        if not summary_he:
+            continue
+
+        out.append(
+            (
+                f"decision-context:{decision_id_int}",
+                source_chunk_ids[0],
+                summary_he,
+                str(title_he or "").strip(),
+                seed_topic,
+                updated_at if isinstance(updated_at, datetime) else None,
+            )
+        )
+    return out
+
+
+def _is_procedural_topic_phrase(value: str) -> bool:
+    tokens = _topic_text_tokens(value)
+    if not tokens:
+        return False
+    overlap = len(set(tokens).intersection(TOPIC_PROCEDURAL_SUBJECT_TOKENS))
+    return overlap >= 2 or (overlap >= 1 and len(tokens) <= 4)
+
+
+def _allocation_asset_kind(*, action: str | None, metadata_fields: list[dict[str, Any]]) -> str | None:
+    for field in metadata_fields:
+        object_value = normalize_for_search(str(field.get("object") or ""))
+        if object_value == normalize_for_search("מבנה"):
+            return "מבנה"
+        if object_value == normalize_for_search("קרקע"):
+            return "קרקע"
+
+    action_norm = normalize_for_search(action or "")
+    if "קרקע" in action_norm:
+        return "קרקע"
+    if "מבנה" in action_norm:
+        return "מבנה"
+    return None
+
+
+def _allocation_category_segment(*, asset_kind: str | None, leaf_topic: str) -> str | None:
+    if asset_kind == "מבנה":
+        return "הקצאות מבנים"
+    if asset_kind == "קרקע" and normalize_for_search(leaf_topic) != normalize_for_search("הקצאת קרקע"):
+        return "הקצאות קרקע"
+    return None
+
+
+def _structured_topic_candidates_for_row(
+    *,
+    root_topic: str,
+    current_child: str,
+    summary_he: str,
+    request_subject_he: str | None,
+    agenda_item_he: str | None,
+    decision_text_he: str | None,
+    metadata_fields: list[dict[str, Any]],
+    local_semantic_candidates: list[dict[str, Any]],
+) -> list[str]:
+    action = _topic_action_from_texts(
+        current_child,
+        summary_he,
+        request_subject_he or "",
+        agenda_item_he or "",
+        decision_text_he or "",
+    )
+    local_context_text = " ".join(
+        bit
+        for bit in [current_child, summary_he, request_subject_he or "", agenda_item_he or "", decision_text_he or ""]
+        if str(bit).strip()
+    )
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add_candidate(candidate: str | None) -> None:
+        cleaned = _clean_topic_candidate_phrase(candidate or "")
+        if not cleaned or _looks_generic_topic_candidate(cleaned):
+            return
+        key = normalize_for_search(cleaned)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        out.append(cleaned)
+
+    scored_local_candidates = [
+        field
+        for field in [*metadata_fields, *local_semantic_candidates]
+        if (
+            str(field.get("subject") or "").strip()
+            and float(field.get("score") or 0.0) >= 0.95
+            and not (
+                _topic_leaf_is_low_quality(str(field.get("subject") or ""))
+                and _topic_leaf_is_low_quality(str(field.get("object") or field.get("subject") or ""))
+            )
+        )
+    ]
+    scored_local_candidates.sort(
+        key=lambda field: (
+            float(field.get("score") or 0.0)
+            + _topic_text_overlap_ratio(str(field.get("subject") or field.get("object") or ""), local_context_text)
+            + _topic_text_overlap_ratio(str(field.get("object") or field.get("subject") or ""), local_context_text)
+        ),
+        reverse=True,
+    )
+    subject_candidates = [str(field.get("subject") or "") for field in scored_local_candidates[:TOPIC_LOCAL_SUBJECT_MAX_CANDIDATES]]
+
+    if normalize_for_search(root_topic) == normalize_for_search("הקצאות"):
+        asset_kind = _allocation_asset_kind(action=action, metadata_fields=metadata_fields)
+        for field in scored_local_candidates:
+            object_value = str(field.get("object") or field.get("subject") or field.get("value") or "")
+            if action:
+                add_candidate(_compose_topic_from_action_and_object(action=action, object_value=object_value))
+            elif asset_kind == "מבנה":
+                add_candidate(_compose_topic_from_action_and_object(action="הקצאת מבנה", object_value=object_value))
+            elif asset_kind == "קרקע":
+                add_candidate(_compose_topic_from_action_and_object(action="הקצאת קרקע", object_value=object_value))
+
+        if action and asset_kind == "מבנה" and (
+            _is_procedural_topic_phrase(current_child)
+            or _is_procedural_topic_phrase(summary_he)
+            or normalize_for_search(action)
+            in {
+                normalize_for_search("רשות שימוש"),
+                normalize_for_search("הסדרת שימוש"),
+                normalize_for_search("הסכם רשות"),
+            }
+        ):
+            for subject_candidate in subject_candidates:
+                add_candidate(_compose_topic_from_action_and_object(action="הקצאת מבנה", object_value=subject_candidate))
+        elif action and asset_kind == "קרקע":
+            for subject_candidate in subject_candidates:
+                add_candidate(_compose_topic_from_action_and_object(action="הקצאת קרקע", object_value=subject_candidate))
+        if not out:
+            for subject_candidate in subject_candidates:
+                add_candidate(subject_candidate)
+        return out
+
+    for subject_candidate in subject_candidates:
+        add_candidate(subject_candidate)
+
+    if action:
+        for field in scored_local_candidates:
+            object_value = str(field.get("object") or field.get("subject") or field.get("value") or "")
+            add_candidate(_compose_topic_from_action_and_object(action=action, object_value=object_value))
+
+    if not out and action:
+        add_candidate(action)
+    return out
+
+
+def _topic_path_for_row(
+    *,
+    root_topic: str,
+    leaf_topic: str,
+    current_child: str,
+    summary_he: str,
+    request_subject_he: str | None,
+    subject_topic_he: str | None,
+    agenda_item_he: str | None,
+    decision_text_he: str | None,
+    metadata_fields: list[dict[str, Any]],
+) -> list[str]:
+    canonical_leaf = _canonicalize_topic_child(root_topic=root_topic, child_topic=leaf_topic)
+    segments = [root_topic]
+
+    if normalize_for_search(root_topic) == normalize_for_search("הקצאות"):
+        action = _topic_action_from_texts(
+            canonical_leaf,
+            current_child,
+            summary_he,
+            request_subject_he or "",
+            subject_topic_he or "",
+            agenda_item_he or "",
+            decision_text_he or "",
+        )
+        category_segment = _allocation_category_segment(
+            asset_kind=_allocation_asset_kind(action=action, metadata_fields=metadata_fields),
+            leaf_topic=canonical_leaf,
+        )
+        if category_segment:
+            segments.append(category_segment)
+
+    if normalize_for_search(canonical_leaf) != normalize_for_search(segments[-1]):
+        segments.append(canonical_leaf)
+    return segments
+
+
+def _canonicalize_topic_cache_row(
+    *,
+    topic_name: str,
+    protocol_title: str,
+    summary_he: str,
+    chunk_id: str,
+    chunk_meta_by_id: dict[str, dict[str, Any]],
+    neighbor_fields_by_chunk: dict[str, list[dict[str, Any]]],
+    request_context_by_chunk: dict[str, dict[str, Any]],
+    local_semantic_candidates_by_chunk: dict[str, list[dict[str, Any]]],
+    embedding_service: ChunkEmbeddingService | None,
+    chunk_vectors_by_id: dict[str, list[float]],
+    candidate_vector_cache: dict[str, list[float]],
+) -> str:
+    current_topic = str(topic_name or "").strip()
+    if normalize_for_search(current_topic) in {
+        "",
+        normalize_for_search(PLACEHOLDER_TOPIC_LABEL),
+        normalize_for_search("נושא כללי"),
+    }:
+        inferred = _infer_topic_path_from_summary(summary_he=str(summary_he or ""), protocol_title=str(protocol_title or ""))
+        if inferred:
+            current_topic = inferred
+
+    current_root, current_child = _split_topic_path(current_topic)
+    current_child = _sanitize_topic_label(current_child, min_tokens=2, max_tokens=6)
+    if not current_child:
+        current_child = _sanitize_topic_label(current_root, min_tokens=2, max_tokens=6)
+
+    chunk_key = str(chunk_id or "").strip()
+    chunk_meta = chunk_meta_by_id.get(chunk_key, {})
+    request_context = request_context_by_chunk.get(chunk_key, {})
+    metadata_fields = neighbor_fields_by_chunk.get(chunk_key, [])
+    local_semantic_candidates = local_semantic_candidates_by_chunk.get(chunk_key, [])
+    request_subject_he = str(request_context.get("request_subject_he") or "").strip() or None
+    subject_topic_he = str(request_context.get("subject_topic_he") or "").strip() or None
+    agenda_item_he = str(request_context.get("agenda_item") or "").strip() or None
+    decision_text_he = str(request_context.get("decision_text") or "").strip() or None
+    root_topic = _topic_leaf_root_for_row(
+        topic_name=current_topic,
+        protocol_title=str(protocol_title or ""),
+        summary_he=str(summary_he or ""),
+        request_subject_he=request_subject_he,
+        subject_topic_he=subject_topic_he,
+    )
+    agenda_root_candidate = _clean_topic_candidate_phrase(agenda_item_he or "")
+    if agenda_root_candidate and _is_substantive_protocol_root(agenda_root_candidate):
+        root_topic_norm = normalize_for_search(root_topic)
+        agenda_root_norm = normalize_for_search(agenda_root_candidate)
+        if root_topic_norm.startswith(agenda_root_norm) or _topic_leaf_is_low_quality(root_topic):
+            root_topic = agenda_root_candidate
+    allocation_root_signal = normalize_for_search(
+        " ".join(bit for bit in [current_topic, request_subject_he or "", subject_topic_he or ""] if str(bit).strip())
+    )
+    if (
+        normalize_for_search(root_topic) == normalize_for_search("הסכמים")
+        and any(token in allocation_root_signal for token in {"הקצא", "שימוש"})
+        and _allocation_asset_kind(action=_topic_action_from_texts(current_topic, request_subject_he or "", subject_topic_he or ""), metadata_fields=metadata_fields)
+    ):
+        root_topic = "הקצאות"
+    structured_candidates = _structured_topic_candidates_for_row(
+        root_topic=root_topic,
+        current_child=current_child,
+        summary_he=str(summary_he or ""),
+        request_subject_he=request_subject_he,
+        agenda_item_he=agenda_item_he,
+        decision_text_he=decision_text_he,
+        metadata_fields=metadata_fields,
+        local_semantic_candidates=local_semantic_candidates,
+    )
+    if structured_candidates:
+        current_child_norm = normalize_for_search(current_child)
+        current_action = _topic_action_from_texts(current_child)
+        if current_action and current_child_norm == normalize_for_search(current_action):
+            current_child = structured_candidates[0]
+        elif any(token in current_child_norm for token in TOPIC_OBJECT_DETAIL_TOKENS):
+            current_child = structured_candidates[0]
+
+    semantic_candidates = [
+        {
+            "label": str(candidate.get("subject") or ""),
+            "support_count": int(max(1, round(float(candidate.get("score") or 0.0) * 10))),
+        }
+        for candidate in local_semantic_candidates
+        if str(candidate.get("subject") or "").strip()
+    ]
+    best_child = _best_topic_leaf_label(
+        root_topic=root_topic,
+        current_child=current_child,
+        summary_he=str(summary_he or ""),
+        chunk_text=str(chunk_meta.get("chunk_text") or ""),
+        request_subject_he=request_subject_he,
+        subject_topic_he=subject_topic_he,
+        agenda_item_he=agenda_item_he,
+        decision_text_he=decision_text_he,
+        structured_candidates=structured_candidates,
+        semantic_candidates=semantic_candidates,
+        chunk_vector=chunk_vectors_by_id.get(chunk_key),
+        embedding_service=embedding_service,
+        candidate_vector_cache=candidate_vector_cache,
+    )
+    if not best_child:
+        return root_topic
+    if normalize_for_search(root_topic) != normalize_for_search("הקצאות") and (
+        _is_procedural_topic_phrase(best_child) or _topic_leaf_is_low_quality(best_child)
+    ):
+        return root_topic
+
+    path_segments = _topic_path_for_row(
+        root_topic=root_topic,
+        leaf_topic=best_child,
+        current_child=current_child,
+        summary_he=str(summary_he or ""),
+        request_subject_he=request_subject_he,
+        subject_topic_he=subject_topic_he,
+        agenda_item_he=agenda_item_he,
+        decision_text_he=decision_text_he,
+        metadata_fields=metadata_fields,
+    )
+    if not path_segments:
+        return root_topic
+    if len(path_segments) == 1:
+        return path_segments[0]
+    return _join_topic_path(path_segments)
 
 
 def _run_ask(
@@ -1566,11 +3521,6 @@ def _run_ask(
         debug_info={**dict(retrieval_result.debug_info), "answer_context_dedupe": context_dedupe_stats},
     )
 
-    protocol_titles = [
-        context.document_title
-        for context in retrieval_for_answering.contexts
-        if context.source_kind == "protocol" and context.document_title
-    ]
     protocol_document_ids = [
         context.document_id
         for context in retrieval_for_answering.contexts
@@ -1578,7 +3528,7 @@ def _run_ask(
     ]
     cached_topic_tree = _load_cached_topic_tree(
         db=db,
-        protocol_titles=protocol_titles,
+        protocol_document_ids=protocol_document_ids,
     )
     protocol_subject_anchors = _load_protocol_subject_anchors(
         db=db,
@@ -2294,10 +4244,6 @@ def ask_playground_page() -> HTMLResponse:
       </details>
     </section>
 
-    <section id="ask-playground-topic-tree-panel" class="output hidden">
-      <h3>Full Topic Tree (DB cache)</h3>
-      <div id="ask-playground-topic-tree-body" class="topic-tree-body"></div>
-    </section>
   </article>
   <script>
     (() => {
@@ -2334,8 +4280,6 @@ def ask_playground_page() -> HTMLResponse:
       const traceList = document.getElementById("ask-playground-trace-list");
       const metaList = document.getElementById("ask-playground-meta");
       const rawJson = document.getElementById("ask-playground-json");
-      const topicTreePanel = document.getElementById("ask-playground-topic-tree-panel");
-      const topicTreeBody = document.getElementById("ask-playground-topic-tree-body");
       let lastExtendedAnswer = null;
       let lastAnswerSections = [];
       let lastExtendedSections = [];
@@ -2630,12 +4574,13 @@ def ask_playground_page() -> HTMLResponse:
                   sourceLink.href = page ? `${hrefBase}#page=${page}` : hrefBase;
                   sourceLink.target = "_blank";
                   sourceLink.rel = "noopener";
-                  sourceLink.textContent = citation.citation || citation.chunk_id || "source";
+                  sourceLink.textContent = doc.title || "document";
                   sourceItem.appendChild(sourceLink);
 
                   const sourceMeta = document.createElement("span");
                   sourceMeta.className = "muted";
-                  sourceMeta.textContent = ` [${citation.source_type || "source"}] ${doc.title || "document"}`;
+                  const citationLabel = citation.citation || (page ? `עמוד ${page}` : citation.chunk_id || "source");
+                  sourceMeta.textContent = ` [${citation.source_type || "source"} | ${citationLabel}]`;
                   sourceItem.appendChild(sourceMeta);
 
                   sourceList.appendChild(sourceItem);
@@ -2676,100 +4621,6 @@ def ask_playground_page() -> HTMLResponse:
         }
         extendedText.textContent = "";
         hide(extendedPanel);
-      };
-
-      const renderTopicTree = (payload) => {
-        if (!topicTreePanel || !topicTreeBody) {
-          return;
-        }
-        topicTreeBody.innerHTML = "";
-
-        const roots = Array.isArray(payload && payload.roots) ? payload.roots : [];
-        if (roots.length === 0) {
-          hide(topicTreePanel);
-          return;
-        }
-
-        for (const root of roots) {
-          if (!root || typeof root !== "object") {
-            continue;
-          }
-          const rootTopic = typeof root.topic === "string" ? root.topic : "נושא כללי";
-          const rootCount = Number.isFinite(Number(root.count)) ? Number(root.count) : 0;
-          const protocolCount = Number.isFinite(Number(root.protocol_count)) ? Number(root.protocol_count) : 0;
-          const children = Array.isArray(root.children) ? root.children : [];
-
-          const rootBlock = document.createElement("section");
-          rootBlock.className = "protocol-group";
-
-          const rootHeader = document.createElement("h4");
-          rootHeader.textContent = `${rootTopic} (${rootCount})`;
-          rootBlock.appendChild(rootHeader);
-
-          const rootMeta = document.createElement("p");
-          rootMeta.className = "muted";
-          rootMeta.textContent = `protocol coverage: ${protocolCount}`;
-          rootBlock.appendChild(rootMeta);
-
-          const rootContent = document.createElement("div");
-          rootContent.className = "topic-root-content";
-
-          for (const child of children) {
-            if (!child || typeof child !== "object") {
-              continue;
-            }
-            const childTopic = typeof child.topic === "string" ? child.topic : "החלטה כללית";
-            const childCount = Number.isFinite(Number(child.count)) ? Number(child.count) : 0;
-            const childProtocolCount = Number.isFinite(Number(child.protocol_count)) ? Number(child.protocol_count) : 0;
-            const childGranularity = Number.isFinite(Number(child.avg_granularity))
-              ? Number(child.avg_granularity)
-              : null;
-
-            const childDetails = document.createElement("details");
-            childDetails.className = "topic-child";
-            childDetails.open = false;
-
-            const childSummary = document.createElement("summary");
-            childSummary.textContent = `${childTopic} (${childCount})`;
-            childDetails.appendChild(childSummary);
-
-            const childContent = document.createElement("div");
-            childContent.className = "topic-child-content";
-            const note = document.createElement("p");
-            note.className = "muted";
-            const granularityText = childGranularity === null ? "-" : childGranularity.toFixed(2);
-            note.textContent = `support: ${childCount}; protocols: ${childProtocolCount}; granularity: ${granularityText}`;
-            childContent.appendChild(note);
-            childDetails.appendChild(childContent);
-
-            rootContent.appendChild(childDetails);
-          }
-
-          rootBlock.appendChild(rootContent);
-
-          topicTreeBody.appendChild(rootBlock);
-        }
-
-        show(topicTreePanel);
-      };
-
-      const refreshTopicTree = async () => {
-        if (!topicTreePanel || !topicTreeBody) {
-          return;
-        }
-        try {
-          const response = await fetch("/topic/tree/cache", {
-            method: "GET",
-            headers: { "Accept": "application/json" },
-          });
-          if (!response.ok) {
-            throw new Error("topic_tree_request_failed");
-          }
-          const payload = await response.json();
-          renderTopicTree(payload);
-        } catch (_err) {
-          hide(topicTreePanel);
-        }
       };
 
       if (showExtendedInput) {
@@ -2993,7 +4844,6 @@ def ask_playground_page() -> HTMLResponse:
             show(citationsPanel);
             hide(refusalPanel);
             statusNode.textContent = "Received grounded answer with citations.";
-            await refreshTopicTree();
             return;
           }
 
@@ -3011,7 +4861,6 @@ def ask_playground_page() -> HTMLResponse:
           hide(citationsPanel);
           show(refusalPanel);
           statusNode.textContent = "Model refused due to evidence policy.";
-          await refreshTopicTree();
         } catch (_err) {
           console.error("ask_playground_request_failed", _err);
           const errorMessage = _err instanceof Error ? _err.message : String(_err || "unknown_error");
@@ -3024,7 +4873,6 @@ def ask_playground_page() -> HTMLResponse:
           statusNode.textContent = `Request failed: ${errorMessage}`;
         }
       });
-      refreshTopicTree();
     })();
   </script>
 </body>
@@ -3225,170 +5073,11 @@ def semantic_node_detail(node_id: int, db=Depends(get_db)) -> dict:
 
 @app.get("/topic/tree/cache")
 def topic_tree_cache(*, limit: int = 5000, db=Depends(get_db)) -> dict:
-    if not inspect(db.get_bind()).has_table("rag_decision_summary_cache"):
-        return {"count": 0, "roots": []}
-
-    effective_limit = max(100, min(10000, int(limit)))
-    rows = db.execute(
-        select(
-            RagDecisionSummaryCache.question_hash,
-            RagDecisionSummaryCache.chunk_id,
-            RagDecisionSummaryCache.summary_he,
-            RagDecisionSummaryCache.protocol_title,
-            RagDecisionSummaryCache.topic_name,
-            RagDecisionSummaryCache.updated_at,
-        )
-        .order_by(RagDecisionSummaryCache.updated_at.desc(), RagDecisionSummaryCache.id.desc())
-        .limit(effective_limit)
-    ).all()
-
-    granularity_by_key: dict[tuple[str, str, str], int] = {}
-    if rows and inspect(db.get_bind()).has_table("rag_decision_summary_topic_meta"):
-        question_hashes = sorted({str(question_hash) for question_hash, *_ in rows if str(question_hash)})
-        if question_hashes:
-            meta_rows = db.execute(
-                select(
-                    RagDecisionSummaryTopicMeta.question_hash,
-                    RagDecisionSummaryTopicMeta.chunk_id,
-                    RagDecisionSummaryTopicMeta.summary_he,
-                    RagDecisionSummaryTopicMeta.topic_granularity_level,
-                ).where(RagDecisionSummaryTopicMeta.question_hash.in_(question_hashes))
-            ).all()
-            for question_hash, chunk_id, summary_he, granularity in meta_rows:
-                level = _as_int_in_range(granularity, min_value=1, max_value=10)
-                if level is None:
-                    continue
-                granularity_by_key[(str(question_hash), str(chunk_id), str(summary_he))] = level
-
-    global_roots: dict[str, dict[str, Any]] = {}
-    seen_cache_rows: set[tuple[str, str]] = set()
-    for question_hash, chunk_id, summary_he, protocol_title, topic_name, updated_at in rows:
-        topic_name_value = str(topic_name or "").strip()
-        if normalize_for_search(topic_name_value) in {
-            "",
-            normalize_for_search(PLACEHOLDER_TOPIC_LABEL),
-            normalize_for_search("נושא כללי"),
-        }:
-            inferred = _infer_topic_path_from_summary(
-                summary_he=str(summary_he or ""),
-                protocol_title=str(protocol_title or ""),
-            )
-            if inferred:
-                topic_name_value = inferred
-
-        topic_key = normalize_for_search(topic_name_value)
-        dedupe_key = (str(chunk_id or ""), topic_key)
-        if not dedupe_key[0] or not dedupe_key[1] or dedupe_key in seen_cache_rows:
-            continue
-        seen_cache_rows.add(dedupe_key)
-
-        protocol_key = str(protocol_title or "").strip() or "פרוטוקול"
-        root_topic, child_topic = _split_topic_path(topic_name_value)
-        root_topic = _sanitize_topic_label(root_topic, min_tokens=1) or PLACEHOLDER_TOPIC_LABEL
-        child_topic = _sanitize_topic_label(child_topic, min_tokens=1)
-        if normalize_for_search(child_topic) in {
-            normalize_for_search("החלטה כללית"),
-            normalize_for_search("כללית"),
-        }:
-            child_topic = ""
-        variant_topic = child_topic or root_topic
-
-        level_key = (str(question_hash or ""), str(chunk_id or ""), str(summary_he or ""))
-        granularity_level = granularity_by_key.get(level_key)
-        if granularity_level is None:
-            granularity_level = _topic_granularity_heuristic(variant_topic)
-
-        object_root = _object_root_from_topic_parts(root_topic=root_topic, child_topic=variant_topic)
-        if object_root:
-            merged_root = object_root
-        else:
-            merged_root = _merge_head_phrase(variant_topic, granularity_level=granularity_level)
-
-        variant_topic = _canonicalize_topic_child(
-            root_topic=merged_root,
-            child_topic=variant_topic,
-        )
-        root_bucket = global_roots.setdefault(
-            merged_root,
-            {
-                "count": 0,
-                "last_seen_at": None,
-                "protocols": set(),
-                "variants": {},
-            },
-        )
-        root_bucket["count"] += 1
-        root_bucket["protocols"].add(protocol_key)
-        if isinstance(updated_at, datetime):
-            iso = updated_at.isoformat()
-            if root_bucket["last_seen_at"] is None or iso > root_bucket["last_seen_at"]:
-                root_bucket["last_seen_at"] = iso
-
-        lexical_overlap = _topic_lexical_overlap(variant_topic, merged_root)
-        variant_tokens = _topic_merge_tokens(variant_topic)
-        keep_as_variant = (
-            normalize_for_search(merged_root) != normalize_for_search(PLACEHOLDER_TOPIC_LABEL)
-            and
-            normalize_for_search(variant_topic) != normalize_for_search(merged_root)
-            and (
-                granularity_level <= 6
-                or lexical_overlap >= 2
-                or len(variant_tokens) >= 2
-            )
-        )
-        if not keep_as_variant:
-            continue
-
-        variant_bucket = root_bucket["variants"].setdefault(
-            variant_topic,
-            {
-                "count": 0,
-                "last_seen_at": None,
-                "protocols": set(),
-                "avg_granularity": 0.0,
-                "samples": 0,
-            },
-        )
-        variant_bucket["count"] += 1
-        variant_bucket["protocols"].add(protocol_key)
-        variant_bucket["samples"] += 1
-        variant_bucket["avg_granularity"] += (granularity_level - variant_bucket["avg_granularity"]) / variant_bucket["samples"]
-        if isinstance(updated_at, datetime):
-            iso = updated_at.isoformat()
-            if variant_bucket["last_seen_at"] is None or iso > variant_bucket["last_seen_at"]:
-                variant_bucket["last_seen_at"] = iso
-
-    _coalesce_sparse_single_token_roots(global_roots)
-
-    root_items: list[dict[str, Any]] = []
-    for root_topic, root_payload in sorted(global_roots.items(), key=lambda row: row[1]["count"], reverse=True):
-        child_items = [
-            {
-                "topic": variant_topic,
-                "count": int(variant_payload["count"]),
-                "last_seen_at": variant_payload["last_seen_at"],
-                "protocol_count": len(variant_payload["protocols"]),
-                "avg_granularity": round(float(variant_payload["avg_granularity"]), 2),
-            }
-            for variant_topic, variant_payload in sorted(
-                root_payload["variants"].items(),
-                key=lambda row: row[1]["count"],
-                reverse=True,
-            )
-        ]
-        root_items.append(
-            {
-                "topic": root_topic,
-                "count": int(root_payload["count"]),
-                "last_seen_at": root_payload["last_seen_at"],
-                "protocol_count": len(root_payload["protocols"]),
-                "children": child_items,
-            }
-        )
-
     return {
-        "count": len(root_items),
-        "roots": root_items,
+        "count": 0,
+        "roots": [],
+        "status": "retired",
+        "replacement_endpoint": "/semantic/tree",
     }
 
 
@@ -4058,14 +5747,14 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
                         sourceLink.href = page ? `${{hrefBase}}#page=${{page}}` : hrefBase;
                         sourceLink.target = "_blank";
                         sourceLink.rel = "noopener";
-                        sourceLink.textContent = citation.citation || (page ? `עמוד ${{page}}` : "מקור");
+                        sourceLink.textContent = documentPayload.title || "מסמך";
                         sourceItem.appendChild(sourceLink);
 
                         const sourceMeta = document.createElement("span");
                         sourceMeta.className = "muted";
                         const sourceType = citation.source_type || "source";
-                        const title = documentPayload.title || "מסמך";
-                        sourceMeta.textContent = ` [${{sourceType}}] ${{title}}`;
+                        const citationLabel = citation.citation || (page ? `עמוד ${{page}}` : "מקור");
+                        sourceMeta.textContent = ` [${{sourceType}} | ${{citationLabel}}]`;
                         sourceItem.appendChild(sourceMeta);
                         sourceList.appendChild(sourceItem);
                       }}
@@ -4102,13 +5791,13 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
                 link.href = page ? `${{hrefBase}}#page=${{page}}` : hrefBase;
                 link.target = "_blank";
                 link.rel = "noopener";
-                link.textContent = citation.citation || (page ? `עמוד ${{page}}` : "מקור");
+                link.textContent = documentPayload.title || "מסמך";
 
                 const meta = document.createElement("span");
                 meta.className = "muted";
                 const sourceType = citation.source_type || "source";
-                const title = documentPayload.title || "מסמך";
-                meta.textContent = ` [${{sourceType}}] ${{title}}`;
+                const citationLabel = citation.citation || (page ? `עמוד ${{page}}` : "מקור");
+                meta.textContent = ` [${{sourceType}} | ${{citationLabel}}]`;
 
                 const item = document.createElement("li");
                 item.appendChild(link);

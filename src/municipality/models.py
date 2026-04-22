@@ -609,43 +609,6 @@ class ChunkSemanticLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class RagDecisionSummaryCache(Base):
-    __tablename__ = "rag_decision_summary_cache"
-    __table_args__ = (
-        UniqueConstraint("question_hash", "chunk_id", "summary_he", name="uq_rag_decision_summary_cache_triplet"),
-        Index("ix_rag_decision_summary_cache_question_hash", "question_hash"),
-        Index("ix_rag_decision_summary_cache_chunk_id", "chunk_id"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    question_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    chunk_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    protocol_title: Mapped[str] = mapped_column(Text, nullable=False)
-    topic_name: Mapped[str] = mapped_column(Text, nullable=False)
-    summary_he: Mapped[str] = mapped_column(Text, nullable=False)
-    model_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-
-class RagDecisionSummaryTopicMeta(Base):
-    __tablename__ = "rag_decision_summary_topic_meta"
-    __table_args__ = (
-        UniqueConstraint("question_hash", "chunk_id", "summary_he", name="uq_rag_decision_summary_topic_meta_triplet"),
-        Index("ix_rag_decision_summary_topic_meta_question_hash", "question_hash"),
-        Index("ix_rag_decision_summary_topic_meta_chunk_id", "chunk_id"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    question_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    chunk_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    summary_he: Mapped[str] = mapped_column(Text, nullable=False)
-    topic_granularity_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-
 class SemanticCandidateReject(Base):
     __tablename__ = "semantic_candidate_reject"
     __table_args__ = (

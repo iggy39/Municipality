@@ -18,8 +18,6 @@ from municipality.models import (
     DocumentVersion,
     ExtractedDocument,
     SemanticNode,
-    RagDecisionSummaryCache,
-    RagDecisionSummaryTopicMeta,
     SourceSite,
     TextChunk,
 )
@@ -49,12 +47,10 @@ def test_m4_ask_ui_playground_exposes_debug_threshold_panels() -> None:
     assert "hasMeaningfulExtraInfo" in body
     assert "topic-root" in body
     assert "topic-child" in body
-    assert 'id="ask-playground-topic-tree-panel"' in body
-    assert 'id="ask-playground-topic-tree-body"' in body
-    assert '"/topic/tree/cache"' in body
     assert "debug mode (show thresholds)" in body
     assert 'fetch("/ask"' in body
     assert "debug_mode" in body
+    assert '"/topic/tree/cache"' not in body
 
 
 def test_m4_ask_api_returns_answer_with_citation_contract(tmp_path: Path) -> None:
@@ -278,92 +274,13 @@ def test_m4_ask_api_semantic_filter_preserves_citation_first_refusal(tmp_path: P
         assert payload["refusal"]["missing_source_types"] == ["attachment"]
 
 
-def test_topic_tree_cache_returns_global_merged_topics(tmp_path: Path) -> None:
-    db_path = tmp_path / "m4_topic_tree_global.db"
-    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
-    apply_all(engine, Path("migrations"))
+def test_topic_tree_cache_endpoint_is_retired() -> None:
+    payload = topic_tree_cache(limit=5000)
 
-    with Session(engine) as session:
-        now = datetime.utcnow()
-        session.add_all(
-            [
-                RagDecisionSummaryCache(
-                    question_hash="q1",
-                    chunk_id="c1",
-                    protocol_title="פרוטוקול בטיחות א",
-                    topic_name="בטיחות בדרכים > תמרורים מוארים",
-                    summary_he="הוחלט להוסיף תמרורים מוארים.",
-                    model_provider="mock",
-                    model_name="mock",
-                    created_at=now,
-                    updated_at=now,
-                ),
-                RagDecisionSummaryCache(
-                    question_hash="q2",
-                    chunk_id="c2",
-                    protocol_title="פרוטוקול בטיחות ב",
-                    topic_name="בטיחות > תמרורים קיימים",
-                    summary_he="הוחלט להשאיר תמרורים קיימים.",
-                    model_provider="mock",
-                    model_name="mock",
-                    created_at=now,
-                    updated_at=now,
-                ),
-                RagDecisionSummaryCache(
-                    question_hash="q3",
-                    chunk_id="c2",
-                    protocol_title="פרוטוקול בטיחות ב",
-                    topic_name="בטיחות > תמרורים קיימים",
-                    summary_he="הוחלט להשאיר תמרורים קיימים.",
-                    model_provider="mock",
-                    model_name="mock",
-                    created_at=now,
-                    updated_at=now,
-                ),
-                RagDecisionSummaryCache(
-                    question_hash="q4",
-                    chunk_id="c3",
-                    protocol_title="פרוטוקול ג",
-                    topic_name="ללא תיוג סמנטי",
-                    summary_he="אושרה החלטה פרוצדורלית.",
-                    model_provider="mock",
-                    model_name="mock",
-                    created_at=now,
-                    updated_at=now,
-                ),
-                RagDecisionSummaryTopicMeta(
-                    question_hash="q1",
-                    chunk_id="c1",
-                    summary_he="הוחלט להוסיף תמרורים מוארים.",
-                    topic_granularity_level=8,
-                    created_at=now,
-                    updated_at=now,
-                ),
-                RagDecisionSummaryTopicMeta(
-                    question_hash="q2",
-                    chunk_id="c2",
-                    summary_he="הוחלט להשאיר תמרורים קיימים.",
-                    topic_granularity_level=8,
-                    created_at=now,
-                    updated_at=now,
-                ),
-            ]
-        )
-        session.commit()
-
-        payload = topic_tree_cache(limit=5000, db=session)
-
-        assert payload["count"] >= 1
-        roots = payload.get("roots") or []
-        root_topics = {row.get("topic") for row in roots}
-        assert "תמרורים" in root_topics
-        assert "ללא תיוג סמנטי" not in root_topics
-
-        tmarur_root = next(row for row in roots if row.get("topic") == "תמרורים")
-        tmarur_children = {child.get("topic") for child in (tmarur_root.get("children") or [])}
-        assert "תמרורים מוארים" in tmarur_children
-        assert "תמרורים קיימים" in tmarur_children
-        assert tmarur_root.get("count") == 2
+    assert payload["count"] == 0
+    assert payload["roots"] == []
+    assert payload["status"] == "retired"
+    assert payload["replacement_endpoint"] == "/semantic/tree"
 
 
 def _seed_mixed_source_chunks(session: Session) -> tuple[str, str]:

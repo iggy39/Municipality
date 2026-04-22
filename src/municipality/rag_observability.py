@@ -33,12 +33,16 @@ def build_retrieval_set_id(
     requested_source_kinds: Sequence[str],
     top_k: int,
     chunk_ids: Sequence[str],
+    retrieval_version: str | None = None,
+    scope_filters: Mapping[str, Any] | None = None,
 ) -> str:
     payload = {
+        "retrieval_version": retrieval_version or "default",
         "normalized_query": normalized_query,
         "requested_source_kinds": list(requested_source_kinds),
         "top_k": top_k,
         "chunk_ids": list(chunk_ids),
+        "scope_filters": dict(scope_filters or {}),
     }
     packed = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha1(packed.encode("utf-8")).hexdigest()[:20]

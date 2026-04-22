@@ -98,7 +98,7 @@ def search_thresholds_snapshot() -> dict[str, Any]:
             "fallback_contains_limit": SEARCH_FALLBACK_CONTAINS_LIMIT,
         },
         "semantic_modes": ["off", "boost", "filter"],
-        "semantic_filter_rule": "filter mode with explicit semantic selector drops chunks with semantic_match_count == 0",
+        "semantic_filter_rule": "explicit semantic selectors use hierarchy-aware subtree matching; filter mode drops chunks with semantic_match_count == 0",
     }
 
 
@@ -114,6 +114,49 @@ def _clamp(value: float | None) -> float:
     if value is None:
         return 0.0
     return max(0.0, min(1.0, float(value)))
+
+
+def _semantic_path_labels(*, node: SemanticNode, nodes_by_id: dict[int, SemanticNode]) -> list[str]:
+    labels: list[str] = []
+    path_parts = [str(node.pref_label_norm or "").strip()]
+    seen_ids = {int(node.id)}
+    parent_id = node.parent_node_id
+    while parent_id is not None:
+        parent = nodes_by_id.get(int(parent_id))
+        if parent is None or int(parent.id) in seen_ids:
+            break
+        seen_ids.add(int(parent.id))
+        parent_label = str(parent.pref_label_norm or "").strip()
+        if parent_label:
+            labels.append(parent_label)
+            path_parts.append(parent_label)
+        parent_id = parent.parent_node_id
+    if len(path_parts) >= 2:
+        labels.append(" ".join(reversed(path_parts)))
+    deduped: list[str] = []
+    seen_labels: set[str] = set()
+    for label in labels:
+        key = str(label or "").strip()
+        if not key or key in seen_labels:
+            continue
+        seen_labels.add(key)
+        deduped.append(key)
+    return deduped
+
+
+def _descendant_node_ids(*, root_ids: set[int], children_by_parent: dict[int, list[int]]) -> set[int]:
+    if not root_ids:
+        return set()
+    out = set(root_ids)
+    frontier = list(root_ids)
+    while frontier:
+        parent_id = frontier.pop(0)
+        for child_id in children_by_parent.get(parent_id, []):
+            if child_id in out:
+                continue
+            out.add(child_id)
+            frontier.append(child_id)
+    return out
 
 
 @dataclass(slots=True)
@@ -226,13 +269,14 @@ class SearchService:
 
         chunk_ids = list(candidate_scores.keys())
         semantic_by_chunk: dict[str, list[_SemanticMatchScore]] = {}
-        semantic_by_chunk = self._collect_semantic_scores(
-            chunk_ids=chunk_ids,
-            normalized_query=normalized_query,
-            semantic_node_id=semantic_node_id,
-            normalized_semantic_label=normalized_semantic_label,
-            explicit_semantic_filter=explicit_semantic_filter,
-        )
+        if semantic_scoring_enabled:
+            semantic_by_chunk = self._collect_semantic_scores(
+                chunk_ids=chunk_ids,
+                normalized_query=normalized_query,
+                semantic_node_id=semantic_node_id,
+                normalized_semantic_label=normalized_semantic_label,
+                explicit_semantic_filter=explicit_semantic_filter,
+            )
         stmt = (
             select(TextChunk, Document, SourceSite, AssetManifest)
             .join(Document, TextChunk.document_id == Document.id)
@@ -440,7 +484,27 @@ class SearchService:
         if not rows:
             return {}
 
-        node_ids = sorted({node.id for _link, node in rows})
+        nodes_by_id: dict[int, SemanticNode] = {int(node.id): node for _link, node in rows}
+        pending_parent_ids = {
+            int(node.parent_node_id)
+            for node in nodes_by_id.values()
+            if node.parent_node_id is not None and int(node.parent_node_id) not in nodes_by_id
+        }
+        while pending_parent_ids:
+            ancestor_rows = self.session.execute(
+                select(SemanticNode).where(SemanticNode.id.in_(sorted(pending_parent_ids)))
+            ).scalars().all()
+            next_parent_ids: set[int] = set()
+            for ancestor in ancestor_rows:
+                ancestor_id = int(ancestor.id)
+                if ancestor_id in nodes_by_id:
+                    continue
+                nodes_by_id[ancestor_id] = ancestor
+                if ancestor.parent_node_id is not None and int(ancestor.parent_node_id) not in nodes_by_id:
+                    next_parent_ids.add(int(ancestor.parent_node_id))
+            pending_parent_ids = next_parent_ids
+
+        node_ids = sorted(nodes_by_id)
         alias_rows = self.session.execute(
             select(SemanticAlias.semantic_node_id, SemanticAlias.alias_label_norm).where(
                 SemanticAlias.semantic_node_id.in_(node_ids)
@@ -450,17 +514,34 @@ class SearchService:
         for alias_node_id, alias_label_norm in alias_rows:
             aliases_by_node.setdefault(alias_node_id, []).append(alias_label_norm)
 
+        children_by_parent: dict[int, list[int]] = {}
+        for node in nodes_by_id.values():
+            if node.parent_node_id is None:
+                continue
+            children_by_parent.setdefault(int(node.parent_node_id), []).append(int(node.id))
+
+        explicit_root_ids: set[int] = set()
+        if semantic_node_id is not None and int(semantic_node_id) in nodes_by_id:
+            explicit_root_ids.add(int(semantic_node_id))
+        if normalized_semantic_label:
+            for node_id, node in nodes_by_id.items():
+                selector_labels = [str(node.pref_label_norm or "").strip()]
+                selector_labels.extend(str(label or "").strip() for label in aliases_by_node.get(node_id, []))
+                selector_labels.extend(_semantic_path_labels(node=node, nodes_by_id=nodes_by_id))
+                if _semantic_text_match_score(normalized_semantic_label, selector_labels) > 0.0:
+                    explicit_root_ids.add(node_id)
+        explicit_node_ids = _descendant_node_ids(root_ids=explicit_root_ids, children_by_parent=children_by_parent)
+
         scored_by_chunk: dict[str, dict[int, _SemanticMatchScore]] = {}
         for link, node in rows:
-            labels = [node.pref_label_norm]
-            labels.extend(aliases_by_node.get(node.id, []))
+            labels = [str(node.pref_label_norm or "").strip()]
+            labels.extend(str(label or "").strip() for label in aliases_by_node.get(int(node.id), []))
+            labels.extend(_semantic_path_labels(node=node, nodes_by_id=nodes_by_id))
 
             query_score = _semantic_text_match_score(normalized_query, labels)
             explicit_score = 0.0
-            if semantic_node_id is not None and node.id == semantic_node_id:
+            if int(node.id) in explicit_node_ids:
                 explicit_score = 1.0
-            if normalized_semantic_label:
-                explicit_score = max(explicit_score, _semantic_text_match_score(normalized_semantic_label, labels))
 
             match_score = explicit_score if explicit_semantic_filter else query_score
             if match_score <= 0.0:
