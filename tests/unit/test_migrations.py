@@ -54,6 +54,18 @@ def test_migrations_apply_and_reapply_cleanly(tmp_path: Path) -> None:
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='rag_answer_cache'")
         )
         assert rag_answer_cache.first() is not None
+        document_section = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='document_section'")
+        )
+        assert document_section.first() is not None
+        retrieval_artifact = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='retrieval_artifact'")
+        )
+        assert retrieval_artifact.first() is not None
+        retrieval_artifact_embedding = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='retrieval_artifact_embedding'")
+        )
+        assert retrieval_artifact_embedding.first() is not None
         retired_summary_cache = conn.execute(
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='rag_decision_summary_cache'")
         )

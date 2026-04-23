@@ -16,7 +16,7 @@ from sqlalchemy import and_, func, inspect, select
 
 from municipality.chunking import normalize_for_search
 from municipality.db import build_engine, build_session_factory
-from municipality.embeddings import ChunkEmbeddingService, EmbeddingReranker
+from municipality.embeddings import EmbeddingReranker
 from municipality.fetcher import AssetFetcher
 from municipality.migrations import apply_all
 from municipality.models import (
@@ -44,8 +44,10 @@ from municipality.models import (
 )
 from municipality.pipeline import PipelineService
 from municipality.processing import ProcessingService
+from municipality.rag_arch import RagArchitectureConfig
 from municipality.rag_answer_cache import RagAnswerCacheService
 from municipality.rag_answering import RagAnswerResult, RagAnsweringService, RagCitation, rag_answering_thresholds_snapshot
+from municipality.rag_backend import build_embedding_backend, build_search_backend
 from municipality.rag_llm import RagLlmClient, RagLlmConfig, build_rag_llm_client
 from municipality.rag_observability import (
     audit_sample_rate,
@@ -55,7 +57,7 @@ from municipality.rag_observability import (
     should_sample_audit,
 )
 from municipality.rag_retrieval import RagContextChunk, RagRetrievalResult, RagRetrievalService
-from municipality.search import SearchService, search_thresholds_snapshot
+from municipality.search import search_thresholds_snapshot
 from municipality.semantic_canonicalization import SemanticCanonicalizer
 
 
@@ -157,71 +159,121 @@ class AskRequest(BaseModel):
 
 
 def _active_embedding_cache_summary(*, db) -> dict[str, Any]:
-    embedding_service = ChunkEmbeddingService(db)
+    embedding_service = build_embedding_backend(session=db)
     model_client = embedding_service.model_client
     model_provider = model_client.provider_name
     model_name = model_client.model_name
     dimensions = model_client.dimensions
 
-    total_chunks = int(db.execute(select(func.count(TextChunk.id))).scalar_one() or 0)
-    embedded_chunks = int(
-        db.execute(
-            select(func.count(func.distinct(ChunkEmbedding.chunk_id))).where(
-                ChunkEmbedding.model_provider == model_provider,
-                ChunkEmbedding.model_name == model_name,
-                ChunkEmbedding.dimensions == dimensions,
-            )
-        ).scalar_one()
-        or 0
-    )
+    arch_config = RagArchitectureConfig.from_env()
+    use_artifacts = arch_config.uses_v2 and embedding_service.__class__.__name__ == "ArtifactEmbeddingService"
 
-    by_source_rows = db.execute(
-        select(
-            TextChunk.source_kind,
-            func.count(func.distinct(TextChunk.chunk_id)),
-            func.count(func.distinct(ChunkEmbedding.chunk_id)),
+    if use_artifacts:
+        from municipality.models import RetrievalArtifact, RetrievalArtifactEmbedding
+
+        total_chunks = int(db.execute(select(func.count(RetrievalArtifact.id))).scalar_one() or 0)
+        embedded_chunks = int(
+            db.execute(
+                select(func.count(func.distinct(RetrievalArtifactEmbedding.artifact_id))).where(
+                    RetrievalArtifactEmbedding.model_provider == model_provider,
+                    RetrievalArtifactEmbedding.model_name == model_name,
+                    RetrievalArtifactEmbedding.dimensions == dimensions,
+                )
+            ).scalar_one()
+            or 0
         )
-        .select_from(TextChunk)
-        .outerjoin(
-            ChunkEmbedding,
-            and_(
-                ChunkEmbedding.chunk_id == TextChunk.chunk_id,
-                ChunkEmbedding.model_provider == model_provider,
-                ChunkEmbedding.model_name == model_name,
-                ChunkEmbedding.dimensions == dimensions,
-            ),
+
+        by_source_rows = db.execute(
+            select(
+                RetrievalArtifact.source_kind,
+                func.count(func.distinct(RetrievalArtifact.artifact_id)),
+                func.count(func.distinct(RetrievalArtifactEmbedding.artifact_id)),
+            )
+            .select_from(RetrievalArtifact)
+            .outerjoin(
+                RetrievalArtifactEmbedding,
+                and_(
+                    RetrievalArtifactEmbedding.artifact_id == RetrievalArtifact.artifact_id,
+                    RetrievalArtifactEmbedding.model_provider == model_provider,
+                    RetrievalArtifactEmbedding.model_name == model_name,
+                    RetrievalArtifactEmbedding.dimensions == dimensions,
+                ),
+            )
+            .group_by(RetrievalArtifact.source_kind)
+            .order_by(RetrievalArtifact.source_kind.asc())
+        ).all()
+        count_label = "total_artifacts"
+        embedded_label = "embedded_artifacts"
+        missing_label = "missing_artifacts"
+    else:
+        total_chunks = int(db.execute(select(func.count(TextChunk.id))).scalar_one() or 0)
+        embedded_chunks = int(
+            db.execute(
+                select(func.count(func.distinct(ChunkEmbedding.chunk_id))).where(
+                    ChunkEmbedding.model_provider == model_provider,
+                    ChunkEmbedding.model_name == model_name,
+                    ChunkEmbedding.dimensions == dimensions,
+                )
+            ).scalar_one()
+            or 0
         )
-        .group_by(TextChunk.source_kind)
-        .order_by(TextChunk.source_kind.asc())
-    ).all()
+
+        by_source_rows = db.execute(
+            select(
+                TextChunk.source_kind,
+                func.count(func.distinct(TextChunk.chunk_id)),
+                func.count(func.distinct(ChunkEmbedding.chunk_id)),
+            )
+            .select_from(TextChunk)
+            .outerjoin(
+                ChunkEmbedding,
+                and_(
+                    ChunkEmbedding.chunk_id == TextChunk.chunk_id,
+                    ChunkEmbedding.model_provider == model_provider,
+                    ChunkEmbedding.model_name == model_name,
+                    ChunkEmbedding.dimensions == dimensions,
+                ),
+            )
+            .group_by(TextChunk.source_kind)
+            .order_by(TextChunk.source_kind.asc())
+        ).all()
+        count_label = "total_chunks"
+        embedded_label = "embedded_chunks"
+        missing_label = "missing_chunks"
 
     by_source_kind = []
     for source_kind, source_total, source_embedded in by_source_rows:
         total_value = int(source_total or 0)
         embedded_value = int(source_embedded or 0)
         missing_value = max(0, total_value - embedded_value)
-        by_source_kind.append(
-            {
-                "source_type": str(source_kind or "unknown"),
-                "total_chunks": total_value,
-                "embedded_chunks": embedded_value,
-                "missing_chunks": missing_value,
-                "coverage_rate": round((embedded_value / total_value), 4) if total_value else 0.0,
-            }
-        )
+        row_payload = {
+            "source_type": str(source_kind or "unknown"),
+            count_label: total_value,
+            embedded_label: embedded_value,
+            missing_label: missing_value,
+            "coverage_rate": round((embedded_value / total_value), 4) if total_value else 0.0,
+        }
+        by_source_kind.append(row_payload)
 
     missing_chunks = max(0, total_chunks - embedded_chunks)
-    return {
+    payload = {
         "enabled": embedding_service.is_enabled(),
+        "architecture_version": arch_config.version,
+        "index_kind": "artifact" if use_artifacts else "chunk",
         "provider": model_provider,
         "model": model_name,
         "dimensions": dimensions,
-        "total_chunks": total_chunks,
-        "embedded_chunks": embedded_chunks,
-        "missing_chunks": missing_chunks,
+        count_label: total_chunks,
+        embedded_label: embedded_chunks,
+        missing_label: missing_chunks,
         "coverage_rate": round((embedded_chunks / total_chunks), 4) if total_chunks else 0.0,
         "by_source_type": by_source_kind,
     }
+    if use_artifacts:
+        payload.setdefault("total_chunks", 0)
+        payload.setdefault("embedded_chunks", 0)
+        payload.setdefault("missing_chunks", 0)
+    return payload
 
 
 def _rerank_debug_summary(*, retrieval_result: RagRetrievalResult) -> dict[str, Any]:
@@ -381,6 +433,7 @@ def _answer_result_to_cache_payload(answer_result: RagAnswerResult) -> dict[str,
                 "start_page": citation.start_page,
                 "end_page": citation.end_page,
                 "score": citation.score,
+                "header_path": list(citation.section_path),
             }
             for citation in answer_result.citations
         ],
@@ -415,6 +468,7 @@ def _answer_result_from_cache_payload(payload: dict[str, Any]) -> RagAnswerResul
                 start_page=_as_optional_int(row.get("start_page")),
                 end_page=_as_optional_int(row.get("end_page")),
                 score=float(row.get("score") or 0.0),
+                section_path=[str(item).strip() for item in list(row.get("header_path") or []) if str(item).strip()],
             )
         )
     return RagAnswerResult(
@@ -488,26 +542,6 @@ def _normalized_answering_trace(scoring: dict | None) -> dict:
     if not isinstance(timing_payload, dict):
         trace["timing_ms"] = {}
     return trace
-
-
-def _persist_decision_summary_cache(
-    *,
-    db,
-    question_hash: str,
-    answer_sections: list[dict],
-    protocol_title_by_chunk_id: dict[str, str] | None,
-    provider: str | None,
-    model: str | None,
-) -> None:
-    if not answer_sections:
-        return
-    log_rag_event(
-        "rag.ask.summary_cache.retired",
-        question_hash=question_hash,
-        section_count=len(answer_sections),
-        provider=provider,
-        model=model,
-    )
 
 
 def _as_int_in_range(value: Any, *, min_value: int, max_value: int) -> int | None:
@@ -2705,64 +2739,6 @@ def _decision_request_context_payload(*, db, decision_id: int) -> dict[str, Any]
     }
 
 
-def _load_cached_topic_tree(
-    *,
-    db,
-    protocol_document_ids: list[int],
-) -> dict[str, list[str]]:
-    normalized_ids = sorted(
-        {
-            int(document_id)
-            for document_id in protocol_document_ids
-            if isinstance(document_id, int) and int(document_id) > 0
-        }
-    )
-    if not normalized_ids:
-        return {}
-    rows = db.execute(
-        select(
-            Document.title_he,
-            SemanticNode.pref_label_he,
-            SemanticNode.depth,
-            ChunkSemanticLink.confidence,
-        )
-        .join(TextChunk, TextChunk.document_id == Document.id)
-        .join(ChunkSemanticLink, ChunkSemanticLink.chunk_id == TextChunk.chunk_id)
-        .join(SemanticNode, SemanticNode.id == ChunkSemanticLink.semantic_node_id)
-        .where(Document.id.in_(normalized_ids))
-        .where(TextChunk.source_kind == "protocol")
-        .where(SemanticNode.node_kind == "topic")
-        .where(SemanticNode.status == "active")
-    ).all()
-    scored_children_by_title: dict[str, dict[str, float]] = {}
-    for protocol_title, label_he, depth, confidence in rows:
-        protocol_key = str(protocol_title or "").strip()
-        child_label = _sanitize_topic_label(str(label_he or ""), min_tokens=2, max_tokens=6)
-        if not protocol_key or not child_label:
-            continue
-        child_norm = normalize_for_search(child_label)
-        if child_norm in {
-            normalize_for_search("נושא כללי"),
-            normalize_for_search("החלטה כללית"),
-            normalize_for_search(protocol_key),
-        }:
-            continue
-        weight = max(0.0, min(1.0, float(confidence or 0.0))) + (0.06 * max(0, int(depth or 0)))
-        bucket = scored_children_by_title.setdefault(protocol_key, {})
-        bucket[child_label] = bucket.get(child_label, 0.0) + weight
-
-    out: dict[str, list[str]] = {}
-    for protocol_title, child_scores in scored_children_by_title.items():
-        ordered_children = [
-            child
-            for child, _score in sorted(child_scores.items(), key=lambda row: row[1], reverse=True)
-            if child
-        ]
-        if ordered_children:
-            out[protocol_title] = ordered_children[:12]
-    return out
-
-
 def _load_topic_leaf_chunk_metadata(
     *,
     db,
@@ -3467,6 +3443,7 @@ def _run_ask(
     request_started = time.perf_counter()
     ask_request_id = new_ask_request_id()
     question_hash = hash_text(request.question)
+    arch_config = RagArchitectureConfig.from_env()
     log_rag_event(
         "rag.ask.request",
         ask_request_id=ask_request_id,
@@ -3482,9 +3459,9 @@ def _run_ask(
         semantic_mode=request.semantic_mode,
     )
 
-    embedding_service = ChunkEmbeddingService(db)
+    embedding_service = build_embedding_backend(session=db, arch_config=arch_config)
     retrieval_service = RagRetrievalService(
-        search_service=SearchService(db),
+        search_service=build_search_backend(session=db, arch_config=arch_config),
         reranker=EmbeddingReranker(embedding_service),
     )
     retrieval_started = time.perf_counter()
@@ -3502,9 +3479,13 @@ def _run_ask(
     )
     retrieval_ms = round((time.perf_counter() - retrieval_started) * 1000.0, 3)
 
-    answering_contexts = _augment_protocol_neighbor_contexts(
-        db=db,
-        contexts=list(retrieval_result.contexts),
+    answering_contexts = (
+        list(retrieval_result.contexts)
+        if arch_config.uses_v2
+        else _augment_protocol_neighbor_contexts(
+            db=db,
+            contexts=list(retrieval_result.contexts),
+        )
     )
     answering_contexts, context_dedupe_stats = _collapse_duplicate_answering_contexts(
         embedding_service=embedding_service,
@@ -3526,10 +3507,6 @@ def _run_ask(
         for context in retrieval_for_answering.contexts
         if context.source_kind == "protocol"
     ]
-    cached_topic_tree = _load_cached_topic_tree(
-        db=db,
-        protocol_document_ids=protocol_document_ids,
-    )
     protocol_subject_anchors = _load_protocol_subject_anchors(
         db=db,
         protocol_document_ids=protocol_document_ids,
@@ -3589,7 +3566,6 @@ def _run_ask(
                 question=request.question,
                 retrieval=retrieval_for_answering,
                 required_source_kinds=request.required_source_types,
-                cached_topic_tree=cached_topic_tree,
                 protocol_subject_anchors=protocol_subject_anchors,
                 protocol_semantic_topic_labels=protocol_semantic_topic_labels,
                 decision_request_context_by_chunk=decision_request_context_by_chunk,
@@ -3605,11 +3581,6 @@ def _run_ask(
         limitations.append("הראיות חלקיות ומבוססות על סוג מקור אחד בלבד.")
 
     if answer_result.status == "answer":
-        protocol_title_by_chunk_id = {
-            str(context.chunk_id): str(context.document_title)
-            for context in retrieval_for_answering.contexts
-            if context.source_kind == "protocol" and context.chunk_id and context.document_title
-        }
         if not bool(answer_result.scoring.get("semantic_answer_cache_hit")):
             answer_cache_service.store(
                 query=request.question,
@@ -3619,14 +3590,6 @@ def _run_ask(
                 answer_model=answer_result.model,
                 answer_payload=_answer_result_to_cache_payload(answer_result),
             )
-        _persist_decision_summary_cache(
-            db=db,
-            question_hash=question_hash,
-            answer_sections=answer_result.answer_sections,
-            protocol_title_by_chunk_id=protocol_title_by_chunk_id,
-            provider=answer_result.provider,
-            model=answer_result.model,
-        )
         db.commit()
 
     citations_payload = [
@@ -3636,6 +3599,7 @@ def _run_ask(
             "citation": citation.citation_label,
             "start_page": citation.start_page,
             "end_page": citation.end_page,
+            "header_path": list(citation.section_path),
             "document": {
                 "id": citation.document_id,
                 "title": citation.document_title,
@@ -3874,7 +3838,7 @@ def search(
     limit: int = 20,
     db=Depends(get_db),
 ) -> dict:
-    service = SearchService(db)
+    service = build_search_backend(session=db)
     hits = service.search(
         query=q,
         municipality_slug=muni,
@@ -3893,6 +3857,8 @@ def search(
             "snippet": hit.snippet,
             "citation": hit.citation,
             "source_type": hit.source_type,
+            "artifact_kind": hit.artifact_kind,
+            "header_path": list(hit.section_path),
             "document": {
                 "id": hit.document_id,
                 "title": hit.document_title,
@@ -3937,9 +3903,10 @@ def ask(request: AskRequest, db=Depends(get_db)) -> dict:
 @app.post("/ask/debug/retrieval")
 def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
     started = time.perf_counter()
+    arch_config = RagArchitectureConfig.from_env()
     retrieval_service = RagRetrievalService(
-        search_service=SearchService(db),
-        reranker=EmbeddingReranker(ChunkEmbeddingService(db)),
+        search_service=build_search_backend(session=db, arch_config=arch_config),
+        reranker=EmbeddingReranker(build_embedding_backend(session=db, arch_config=arch_config)),
     )
     retrieval_result = retrieval_service.retrieve(
         query=request.question,

@@ -180,6 +180,8 @@ class SearchHit:
     semantic_boost: float = 0.0
     semantic_nodes: list[SemanticDebugNode] = field(default_factory=list)
     chunk_text: str = ""
+    section_path: list[str] = field(default_factory=list)
+    artifact_kind: str | None = None
 
 
 class SearchService:

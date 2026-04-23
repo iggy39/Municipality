@@ -17,7 +17,9 @@ RAG_CALL_VERIFY = "verify"
 RAG_CALL_REFUSE = "refuse"
 
 RAG_PROVIDER_BYTEZ = "bytez"
+RAG_PROVIDER_AI21 = "ai21"
 RAG_PROVIDER_MOCK = "mock"
+DEFAULT_AI21_API_URL = "https://api.ai21.com/studio/v1/chat/completions"
 
 RAG_ANSWER_PREFIX_DEFAULT = "answer question from provided hebrew municipal evidence with citations only"
 RAG_VERIFY_PREFIX_DEFAULT = "verify every claim against provided hebrew evidence and citations only"
@@ -53,6 +55,7 @@ class RagLlmConfig:
     provider: str = RAG_PROVIDER_BYTEZ
     model: str = BYTEZ_MODEL
     bytez_endpoint: str = DEFAULT_BYTEZ_API_URL
+    ai21_endpoint: str = DEFAULT_AI21_API_URL
     timeout_seconds: float = 60.0
     prompt_prefixes: RagPromptPrefixConfig = field(default_factory=RagPromptPrefixConfig)
 
@@ -62,6 +65,7 @@ class RagLlmConfig:
         provider = _normalize_provider(source.get("RAG_LLM_PROVIDER"))
         model = (source.get("RAG_LLM_MODEL") or BYTEZ_MODEL).strip() or BYTEZ_MODEL
         endpoint = (source.get("BYTEZ_API_URL") or DEFAULT_BYTEZ_API_URL).strip() or DEFAULT_BYTEZ_API_URL
+        ai21_endpoint = (source.get("AI21_API_URL") or DEFAULT_AI21_API_URL).strip() or DEFAULT_AI21_API_URL
         timeout_raw = source.get("RAG_LLM_TIMEOUT_SECONDS")
 
         timeout_seconds = 60.0
@@ -84,6 +88,7 @@ class RagLlmConfig:
             provider=provider,
             model=model,
             bytez_endpoint=endpoint,
+            ai21_endpoint=ai21_endpoint,
             timeout_seconds=timeout_seconds,
             prompt_prefixes=prefixes,
         )
@@ -211,6 +216,104 @@ class BytezRagProvider:
                 raw_payload=payload if isinstance(payload, dict) else None,
             )
 
+        return RagLlmResult(
+            provider=self.provider_name,
+            model=self.model_name,
+            text=content,
+            request_tokens=request_tokens,
+            response_tokens=response_tokens,
+            error_code=None,
+            error_text=None,
+            raw_payload=payload if isinstance(payload, dict) else None,
+        )
+
+
+class AI21RagProvider:
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        endpoint: str | None = None,
+        model_name: str,
+        timeout_seconds: float = 60.0,
+        transport: httpx.BaseTransport | None = None,
+    ):
+        self.api_key = api_key if api_key is not None else os.getenv("AI21_API_KEY")
+        self.endpoint = endpoint or os.getenv("AI21_API_URL", DEFAULT_AI21_API_URL)
+        self._model_name = model_name
+        self.timeout_seconds = timeout_seconds
+        self.transport = transport
+
+    @property
+    def provider_name(self) -> str:
+        return RAG_PROVIDER_AI21
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    def is_configured(self) -> bool:
+        return bool(self.api_key)
+
+    def generate(
+        self,
+        *,
+        call_type: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.0,
+    ) -> RagLlmResult:
+        _normalize_call_type(call_type)
+        if not self.api_key:
+            return RagLlmResult(
+                provider=self.provider_name,
+                model=self.model_name,
+                text=None,
+                request_tokens=None,
+                response_tokens=None,
+                error_code="MODEL_NOT_CONFIGURED",
+                error_text="AI21_API_KEY is not configured",
+            )
+
+        body = {
+            "model": self.model_name,
+            "temperature": temperature,
+            "messages": messages,
+        }
+        try:
+            with httpx.Client(timeout=self.timeout_seconds, transport=self.transport) as client:
+                response = client.post(
+                    self.endpoint,
+                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                    json=body,
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except Exception as exc:
+            return RagLlmResult(
+                provider=self.provider_name,
+                model=self.model_name,
+                text=None,
+                request_tokens=None,
+                response_tokens=None,
+                error_code="MODEL_REQUEST_FAILED",
+                error_text=f"{exc.__class__.__name__}:{exc}",
+            )
+
+        usage = payload.get("usage") if isinstance(payload, dict) else {}
+        request_tokens = _as_int(usage.get("prompt_tokens")) if isinstance(usage, dict) else None
+        response_tokens = _as_int(usage.get("completion_tokens")) if isinstance(usage, dict) else None
+        content = _extract_response_content(payload if isinstance(payload, dict) else {})
+        if content is None:
+            return RagLlmResult(
+                provider=self.provider_name,
+                model=self.model_name,
+                text=None,
+                request_tokens=request_tokens,
+                response_tokens=response_tokens,
+                error_code="MODEL_EMPTY_RESPONSE",
+                error_text="missing model response content",
+                raw_payload=payload if isinstance(payload, dict) else None,
+            )
         return RagLlmResult(
             provider=self.provider_name,
             model=self.model_name,
@@ -377,6 +480,12 @@ def build_rag_provider(*, config: RagLlmConfig | None = None) -> RagLlmProvider:
             endpoint=resolved_config.bytez_endpoint,
             timeout_seconds=resolved_config.timeout_seconds,
         )
+    if provider_key == RAG_PROVIDER_AI21:
+        return AI21RagProvider(
+            model_name=resolved_config.model,
+            endpoint=resolved_config.ai21_endpoint,
+            timeout_seconds=resolved_config.timeout_seconds,
+        )
     if provider_key == RAG_PROVIDER_MOCK:
         return MockRagProvider(model_name=resolved_config.model)
     raise ValueError(f"unsupported rag llm provider: {resolved_config.provider}")
@@ -391,7 +500,7 @@ def _normalize_call_type(call_type: str) -> str:
 
 def _normalize_provider(provider: str | None) -> str:
     normalized = (provider or RAG_PROVIDER_BYTEZ).strip().casefold()
-    if normalized in {RAG_PROVIDER_BYTEZ, RAG_PROVIDER_MOCK}:
+    if normalized in {RAG_PROVIDER_BYTEZ, RAG_PROVIDER_AI21, RAG_PROVIDER_MOCK}:
         return normalized
     return RAG_PROVIDER_BYTEZ
 

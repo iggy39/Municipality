@@ -468,6 +468,7 @@ class RagCitation:
     start_page: int | None
     end_page: int | None
     score: float
+    section_path: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -580,7 +581,6 @@ class RagAnsweringService:
         question: str,
         retrieval: RagRetrievalResult,
         required_source_kinds: list[str] | None = None,
-        cached_topic_tree: dict[str, list[str]] | None = None,
         protocol_subject_anchors: dict[int, list[str]] | None = None,
         protocol_semantic_topic_labels: dict[int, list[str]] | None = None,
         decision_request_context_by_chunk: dict[str, dict[str, Any]] | None = None,
@@ -1050,7 +1050,6 @@ class RagAnsweringService:
             summary_items=summary_items,
             context_by_chunk=context_by_chunk,
             fallback_topic=_default_topic_name(question),
-            cached_topic_tree=cached_topic_tree,
             protocol_subject_anchors=protocol_subject_anchors,
         )
         (
@@ -1089,8 +1088,6 @@ class RagAnsweringService:
             _as_float_0_1(section.get("topic_score"))
             for section in answer_sections
         ]
-        scoring_payload["topic_tree_cached_protocol_count"] = len(cached_topic_tree or {})
-        scoring_payload["topic_tree_cached_child_count"] = sum(len(children) for children in (cached_topic_tree or {}).values())
         scoring_payload["topic_subject_anchor_document_count"] = len(protocol_subject_anchors or {})
         scoring_payload["decision_request_context_chunk_count"] = len(decision_request_context_by_chunk or {})
         scoring_payload["broad_query_protocol_split_applied"] = broad_protocol_split_applied
@@ -1207,6 +1204,8 @@ def _answer_payload(
                 "citation": context.citation,
                 "document_id": context.document_id,
                 "document_title": context.document_title,
+                "header_path": list(context.section_path),
+                "artifact_kind": context.artifact_kind,
                 "snippet": context.snippet,
             }
             for context in retrieval.contexts
@@ -1267,6 +1266,8 @@ def _verification_payload(
                 "source_kind": context.source_kind,
                 "citation": context.citation,
                 "document_title": context.document_title,
+                "header_path": list(context.section_path),
+                "artifact_kind": context.artifact_kind,
                 "snippet": context.snippet,
             }
             for context in retrieval.contexts
@@ -1918,6 +1919,7 @@ def _build_citations(contexts: list[RagContextChunk], used_chunk_ids: list[str])
                 start_page=context.start_page,
                 end_page=context.end_page,
                 score=context.score,
+                section_path=list(context.section_path),
             )
         )
     return citations
@@ -2083,7 +2085,9 @@ def _topic_mismatch_chunk_ids(
         context = context_by_chunk.get(chunk_id)
         if context is None:
             continue
-        haystack = normalize_for_search(f"{context.document_title} {context.snippet}")
+        haystack = normalize_for_search(
+            f"{context.document_title} {' '.join(context.section_path)} {context.snippet}"
+        )
         if not any(token in haystack for token in topic_tokens):
             mismatched.append(chunk_id)
     return mismatched
@@ -2936,7 +2940,6 @@ def _build_answer_sections(
     summary_items: list[dict[str, Any]],
     context_by_chunk: dict[str, RagContextChunk],
     fallback_topic: str,
-    cached_topic_tree: dict[str, list[str]] | None = None,
     protocol_subject_anchors: dict[int, list[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     concise_sections: list[dict[str, Any]] = []
@@ -2946,7 +2949,6 @@ def _build_answer_sections(
         summary_items=summary_items,
         context_by_chunk=context_by_chunk,
         fallback_topic=fallback_topic,
-        cached_topic_tree=cached_topic_tree,
     )
 
     for item in summary_items:
@@ -4174,7 +4176,6 @@ def _build_protocol_topic_trees(
     summary_items: list[dict[str, Any]],
     context_by_chunk: dict[str, RagContextChunk],
     fallback_topic: str,
-    cached_topic_tree: dict[str, list[str]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     trees: dict[str, dict[str, Any]] = {}
 
@@ -4194,25 +4195,6 @@ def _build_protocol_topic_trees(
                 "child_keys": set(),
             }
             trees[protocol_title] = tree
-
-        if cached_topic_tree:
-            child_keys: set[str] = tree["child_keys"]
-            children: list[str] = tree["children"]
-            root_topic = _as_optional_str(tree.get("root_topic")) or fallback_topic
-            for cached_child in cached_topic_tree.get(protocol_title, []):
-                candidate = _clean_topic_candidate(cached_child, max_tokens=5, min_tokens=2)
-                if not candidate:
-                    continue
-                subtopic = _topic_subtopic_from_candidate(root_topic=root_topic, candidate=candidate) or candidate
-                if not subtopic:
-                    continue
-                key = normalize_for_search(subtopic)
-                if not key or key in child_keys:
-                    continue
-                child_keys.add(key)
-                children.append(subtopic)
-                if len(children) >= TOPIC_TREE_MAX_CHILDREN:
-                    break
 
         root_topic = _as_optional_str(tree.get("root_topic")) or fallback_topic
         child_candidates = _protocol_child_candidates_for_item(

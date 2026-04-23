@@ -7,6 +7,7 @@ from typing import Any
 from municipality.chunking import normalize_for_search
 from municipality.decision_embeddings import DecisionEmbeddingService
 from municipality.embeddings import EmbeddingReranker
+from municipality.rag_arch import RagArchitectureConfig
 from municipality.rag_observability import build_retrieval_set_id, hash_text, log_rag_event
 
 
@@ -49,7 +50,7 @@ BOILERPLATE_DECISION_PATTERNS = [
     re.compile(r"רח\s*['\"]"),
     re.compile(r"ת\s*\.?\s*ד\s*\.?"),
 ]
-RETRIEVAL_VERSION = "hierarchy_hebrew_rag_v1"
+RETRIEVAL_VERSION = f"hierarchy_hebrew_rag_{RagArchitectureConfig.from_env().version}"
 
 
 @dataclass(slots=True)
@@ -71,6 +72,8 @@ class RagContextChunk:
     chunk_index: int | None = None
     chunk_text: str = ""
     semantic_topic_labels: list[str] = field(default_factory=list)
+    section_path: list[str] = field(default_factory=list)
+    artifact_kind: str | None = None
 
 
 @dataclass(slots=True)
@@ -92,6 +95,7 @@ class RagRetrievalService:
     def __init__(self, *, search_service, reranker: EmbeddingReranker | None = None):
         self.search_service = search_service
         self.reranker = reranker
+        self.uses_v2 = hasattr(search_service, "replace_document_artifacts")
 
     def retrieve(
         self,
@@ -176,13 +180,15 @@ class RagRetrievalService:
             initial_limit = max(self.reranker.initial_candidate_limit(top_k=effective_top_k), effective_top_k * 3)
         else:
             initial_limit = max(effective_top_k * 3, effective_top_k)
-        decision_matches = self._match_decisions(
-            query=query,
-            municipality_slug=municipality_slug,
-            year=year,
-            topic=topic,
-            requested_source_kinds=requested_source_kinds,
-        )
+        decision_matches = []
+        if not self.uses_v2:
+            decision_matches = self._match_decisions(
+                query=query,
+                municipality_slug=municipality_slug,
+                year=year,
+                topic=topic,
+                requested_source_kinds=requested_source_kinds,
+            )
         hits = self.search_service.search(
             query=query,
             municipality_slug=municipality_slug,
@@ -223,7 +229,7 @@ class RagRetrievalService:
             selected_hits = _dedupe_hits(selected_hits)
 
         broad_decision_query = _is_broad_decision_query(normalized_query)
-        if broad_decision_query:
+        if broad_decision_query and not self.uses_v2:
             selected_hits = _augment_protocol_decision_hits(
                 selected_hits=selected_hits,
                 search_service=self.search_service,
@@ -247,7 +253,7 @@ class RagRetrievalService:
             )
 
         selected_hits.sort(key=lambda row: row.score, reverse=True)
-        if broad_decision_query:
+        if broad_decision_query and not self.uses_v2:
             selected_hits = _prioritize_protocol_document_coverage(selected_hits, limit=effective_top_k)
         contexts = [_to_context(row) for row in selected_hits[:effective_top_k]]
         retrieval_set_id = build_retrieval_set_id(
@@ -434,6 +440,8 @@ def _to_context(hit) -> RagContextChunk:
         chunk_index=getattr(hit, "chunk_index", None),
         chunk_text=getattr(hit, "chunk_text", "") or hit.snippet,
         semantic_topic_labels=semantic_topic_labels,
+        section_path=list(getattr(hit, "section_path", []) or []),
+        artifact_kind=getattr(hit, "artifact_kind", None),
     )
 
 

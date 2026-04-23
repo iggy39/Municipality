@@ -166,6 +166,76 @@ class TextChunk(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class DocumentSection(Base):
+    __tablename__ = "document_section"
+    __table_args__ = (
+        UniqueConstraint("section_id", name="uq_document_section_section_id"),
+        Index("ix_document_section_docver_id", "document_version_id"),
+        Index("ix_document_section_document_id", "document_id"),
+        Index("ix_document_section_parent_id", "parent_section_id"),
+        Index("ix_document_section_node_type", "node_type"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    section_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
+    document_version_id: Mapped[int] = mapped_column(ForeignKey("document_version.id"), nullable=False)
+    extracted_document_id: Mapped[int] = mapped_column(ForeignKey("extracted_document.id"), nullable=False)
+    parent_section_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    node_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    header_text: Mapped[str] = mapped_column(Text, nullable=False)
+    header_text_norm: Mapped[str] = mapped_column(Text, nullable=False)
+    header_level: Mapped[int] = mapped_column(Integer, nullable=False)
+    section_path_json: Mapped[str] = mapped_column(Text, nullable=False)
+    body_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    start_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class RetrievalArtifact(Base):
+    __tablename__ = "retrieval_artifact"
+    __table_args__ = (
+        UniqueConstraint("artifact_id", name="uq_retrieval_artifact_artifact_id"),
+        Index("ix_retrieval_artifact_docver_id", "document_version_id"),
+        Index("ix_retrieval_artifact_document_id", "document_id"),
+        Index("ix_retrieval_artifact_section_id", "section_id"),
+        Index("ix_retrieval_artifact_source_kind", "source_kind"),
+        Index("ix_retrieval_artifact_kind", "artifact_kind"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    artifact_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
+    document_version_id: Mapped[int] = mapped_column(ForeignKey("document_version.id"), nullable=False)
+    extracted_document_id: Mapped[int] = mapped_column(ForeignKey("extracted_document.id"), nullable=False)
+    section_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    artifact_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    title_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    committee_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meeting_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    header_path_json: Mapped[str] = mapped_column(Text, nullable=False)
+    body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    retrieval_text: Mapped[str] = mapped_column(Text, nullable=False)
+    retrieval_text_norm: Mapped[str] = mapped_column(Text, nullable=False)
+    start_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_offset: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    citation_label: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    trigram_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class ChunkEmbedding(Base):
     __tablename__ = "chunk_embedding"
     __table_args__ = (
@@ -176,6 +246,35 @@ class ChunkEmbedding(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     chunk_id: Mapped[str] = mapped_column(String(64), ForeignKey("text_chunk.chunk_id"), nullable=False)
+    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class RetrievalArtifactEmbedding(Base):
+    __tablename__ = "retrieval_artifact_embedding"
+    __table_args__ = (
+        UniqueConstraint(
+            "artifact_id",
+            "model_provider",
+            "model_name",
+            "dimensions",
+            name="uq_retrieval_artifact_embedding_model",
+        ),
+        Index(
+            "ix_retrieval_artifact_embedding_artifact_id",
+            "artifact_id",
+            "model_provider",
+            "model_name",
+            "dimensions",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    artifact_id: Mapped[str] = mapped_column(String(64), nullable=False)
     model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
     dimensions: Mapped[int] = mapped_column(Integer, nullable=False)

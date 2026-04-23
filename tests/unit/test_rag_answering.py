@@ -934,8 +934,8 @@ def test_topic_resolution_uses_sibling_fallback_before_general_topic() -> None:
         summary_items=summary_items,
         context_by_chunk=context_by_chunk,
         fallback_topic="מה הוחלט בעיר",
-        cached_topic_tree={
-            protocol_title: ["הכשרת עמיתים", "שיתוף פעולה קופות החולים"],
+        protocol_subject_anchors={
+            30: ["הכשרת עמיתים", "שיתוף פעולה קופות החולים"],
         },
     )
 
@@ -943,9 +943,9 @@ def test_topic_resolution_uses_sibling_fallback_before_general_topic() -> None:
     topic_name = answer_sections[0]["topic_name"]
     assert topic_name != "מאבק נגע הסמים המסוכנים > החלטה כללית"
     assert answer_sections[0]["topic_route"] in {
-        "protocol_tree_child",
-        "protocol_tree_sibling_fallback",
-        "protocol_tree_sibling_default",
+        "protocol_subject_anchor",
+        "protocol_subject_anchor_default",
+        "local_subject_fallback",
     }
 
 

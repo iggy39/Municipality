@@ -15,9 +15,11 @@ from municipality.decisions import DecisionExtractionService
 from municipality.embeddings import ChunkEmbeddingService
 from municipality.extraction import PdfTextExtractor
 from municipality.models import Document, DocumentVersion, ExtractedDocument, PipelineRun, PipelineRunStep, SourceSite
+from municipality.rag_arch import RagArchitectureConfig
 from municipality.search import SearchService
 from municipality.semantic_service import SemanticService
 from municipality.storage import RawStorage
+from municipality.structured_indexing import StructuredIndexingService
 
 
 @dataclass(slots=True)
@@ -88,6 +90,8 @@ class ProcessingService:
         self.chunk_embedding_service = chunk_embedding_service or ChunkEmbeddingService(session)
         self.semantic_service = semantic_service or SemanticService(session)
         self.semantic_policy = semantic_policy or SemanticEnrichmentPolicy.from_env()
+        self.rag_arch = RagArchitectureConfig.from_env()
+        self.structured_indexing = StructuredIndexingService(session) if self.rag_arch.v2_index_build_enabled else None
 
     def run(self, doc_id: int | None = None, municipality_slug: str | None = None) -> int:
         run = PipelineRun(
@@ -183,8 +187,37 @@ class ProcessingService:
                             f"created={embedding_result.created}; cached={embedding_result.cached}; total={embedding_result.total}"
                         )
                 except Exception as exc:
-                    embedding_step.status = "failed"
-                    embedding_step.detail = f"UNEXPECTED_ERROR:{exc.__class__.__name__}"
+                        embedding_step.status = "failed"
+                        embedding_step.detail = f"UNEXPECTED_ERROR:{exc.__class__.__name__}"
+
+                if self.structured_indexing is not None:
+                    structure_step = PipelineRunStep(
+                        run_id=run.id,
+                        step_name="structure_artifact_index",
+                        status="running",
+                        item_ref=document.canonical_url,
+                    )
+                    self.session.add(structure_step)
+                    self.session.flush()
+                    try:
+                        structure_result = self.structured_indexing.replace_document_structure(
+                            document_id=document.id,
+                            document_version_id=document_version.id,
+                            extracted_document_id=extracted_row.id,
+                            document_title=document.title_he,
+                            text=extraction.full_text,
+                            citation_map=extraction.citation_map,
+                            source_kind=source_kind,
+                        )
+                        structure_step.status = "completed"
+                        structure_step.detail = (
+                            f"sections={structure_result.section_count}; artifacts={structure_result.artifact_count}; "
+                            f"embed_created={structure_result.embedding_created}; embed_cached={structure_result.embedding_cached}; "
+                            f"embed_enabled={structure_result.embedding_enabled}; embed_error={structure_result.embedding_error_text or 'NONE'}"
+                        )
+                    except Exception as exc:
+                        structure_step.status = "failed"
+                        structure_step.detail = f"UNEXPECTED_ERROR:{exc.__class__.__name__}"
 
                 semantic_step = PipelineRunStep(
                     run_id=run.id,
