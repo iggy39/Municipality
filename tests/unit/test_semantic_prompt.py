@@ -18,6 +18,7 @@ def test_evidence_packet_uses_soft_category_hints_for_non_decision_lines() -> No
     line = next(item for item in packet.evidence_lines if "הרחבת תוכנית תחבורה" in item.text)
     assert "plan_program" in (line.category_hints or [])
     assert line.regex_boost > 0.0
+    assert packet.artifact_evidence == []
 
 
 def test_evidence_packet_caps_regex_boost() -> None:
@@ -47,5 +48,33 @@ def test_model_request_includes_multicategory_detection_instruction() -> None:
 
     rules = request_payload["rules"]
     assert any("Do not rely only on explicit decision wording" in rule for rule in rules)
+    assert any("artifact_evidence" in rule for rule in rules)
     assert request_payload["selection_strategy"]["category_hint_policy"] == "soft_boost_only"
     assert "category_hint_lexicon" in request_payload["input_packet"]
+
+
+def test_evidence_packet_can_include_artifact_evidence() -> None:
+    text_value = "הוחלט לבצע הרחבת חניה ליד בית הספר"
+    citation_map = [{"start": 0, "end": len(text_value), "page": 1}]
+
+    packet = build_semantic_evidence_packet(
+        extracted_text=text_value,
+        citation_map=citation_map,
+        artifact_records=[
+            {
+                "artifact_id": "art-1",
+                "artifact_kind": "decision_unit",
+                "header_path": ["פרוטוקול ועדת בטיחות", "הרחבת חניה ליד בית הספר"],
+                "body_text": text_value,
+                "start_offset": 0,
+                "end_offset": len(text_value),
+                "start_page": 1,
+                "end_page": 1,
+                "primary_topic": "תחבורה ובטיחות > הרחבת חניה ליד בית הספר",
+                "section_summary": "הרחבת חניה ליד בית הספר",
+            }
+        ],
+    )
+
+    assert packet.artifact_evidence
+    assert packet.artifact_evidence[0]["artifact_kind"] == "decision_unit"

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from municipality.semantic_canonicalization import CanonicalizationReport, SemanticCanonicalizer
 from municipality.models import (
+    ArtifactTopicAnnotation,
     ArtifactSemanticLink,
     Decision,
     DecisionSemanticLink,
@@ -194,6 +195,7 @@ class SemanticService:
         evidence_packet = build_semantic_evidence_packet(
             extracted_text=extracted_text,
             citation_map=citation_map,
+            artifact_records=_artifact_records_for_semantic_prompt(self.session, document_version_id=document_version_id),
         )
         request_payload = build_semantic_model_request(
             document_version_id=document_version_id,
@@ -276,10 +278,16 @@ class SemanticService:
         *,
         extracted_text: str,
         citation_map: list[dict[str, int]],
+        document_version_id: int | None = None,
     ) -> SemanticEvidencePacket:
         return build_semantic_evidence_packet(
             extracted_text=extracted_text,
             citation_map=citation_map,
+            artifact_records=(
+                _artifact_records_for_semantic_prompt(self.session, document_version_id=document_version_id)
+                if document_version_id is not None
+                else None
+            ),
         )
 
     def _persist_run_artifacts(
@@ -962,6 +970,44 @@ def _canonicalization_report_to_dict(report: CanonicalizationReport) -> dict:
         ],
         "warnings": report.warnings,
     }
+
+
+def _artifact_records_for_semantic_prompt(session: Session, *, document_version_id: int) -> list[dict[str, Any]]:
+    rows = session.execute(
+        select(RetrievalArtifact, ArtifactTopicAnnotation)
+        .outerjoin(ArtifactTopicAnnotation, ArtifactTopicAnnotation.artifact_id == RetrievalArtifact.artifact_id)
+        .where(RetrievalArtifact.document_version_id == document_version_id)
+        .order_by(RetrievalArtifact.ordinal.asc())
+    ).all()
+    out: list[dict[str, Any]] = []
+    for artifact, topic_annotation in rows:
+        out.append(
+            {
+                "artifact_id": str(artifact.artifact_id),
+                "artifact_kind": str(artifact.artifact_kind),
+                "header_path": _loads_json_list(artifact.header_path_json),
+                "body_text": str(artifact.body_text or artifact.retrieval_text or ""),
+                "start_offset": int(artifact.start_offset),
+                "end_offset": int(artifact.end_offset),
+                "start_page": int(artifact.start_page) if artifact.start_page is not None else None,
+                "end_page": int(artifact.end_page) if artifact.end_page is not None else None,
+                "primary_topic": str(topic_annotation.primary_topic_he or "").strip() if topic_annotation is not None else None,
+                "section_summary": str(topic_annotation.section_summary or "").strip() if topic_annotation is not None else None,
+            }
+        )
+    return out
+
+
+def _loads_json_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item).strip() for item in parsed if str(item).strip()]
 
 
 def _resolve_mention_confidence(

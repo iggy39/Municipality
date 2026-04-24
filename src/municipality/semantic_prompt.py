@@ -77,6 +77,7 @@ class SemanticEvidencePacket:
     extracted_text_length: int
     headings: list[PacketSpan]
     evidence_lines: list[HintPacketSpan]
+    artifact_evidence: list[dict[str, Any]]
     entity_hints: list[str]
     citation_map: list[dict[str, int]]
 
@@ -96,6 +97,7 @@ def build_semantic_evidence_packet(
     *,
     extracted_text: str,
     citation_map: list[dict[str, int]],
+    artifact_records: list[dict[str, Any]] | None = None,
     max_chars: int = 12000,
     max_entity_hints: int = 80,
 ) -> SemanticEvidencePacket:
@@ -150,11 +152,13 @@ def build_semantic_evidence_packet(
     )
 
     hints = _extract_entity_hints(extracted_text, max_items=max_entity_hints)
+    artifact_evidence = _select_artifact_evidence(artifact_records or [], max_items=40, max_chars=max_chars)
 
     return SemanticEvidencePacket(
         extracted_text_length=len(extracted_text),
         headings=headings,
         evidence_lines=evidence_lines,
+        artifact_evidence=artifact_evidence,
         entity_hints=hints,
         citation_map=citation_map,
     )
@@ -192,6 +196,7 @@ def build_semantic_model_request(
         "input_packet": {
             "headings": [asdict(span) for span in evidence_packet.headings],
             "evidence_lines": [asdict(span) for span in evidence_packet.evidence_lines],
+            "artifact_evidence": evidence_packet.artifact_evidence,
             "entity_hints": evidence_packet.entity_hints,
             "citation_map": evidence_packet.citation_map,
             "category_hint_lexicon": category_hint_lexicon,
@@ -208,6 +213,7 @@ def build_semantic_model_request(
             "All evidence_spans must include span_id, category, start_offset, end_offset, text",
             "Every accepted node must have at least one mention",
             "Every accepted node should include evidence_span_ids from evidence_spans",
+            "Use artifact_evidence header_path, artifact_kind, and primary_topic as structural priors when helpful",
             "Populate confidence fields for nodes and mentions when possible using values between 0 and 1",
             "Do not rely only on explicit decision wording; infer category from context",
             "When uncertain, emit reject records or refusal text instead of speculative nodes",
@@ -366,3 +372,36 @@ def _extract_entity_hints(text_value: str, *, max_items: int) -> list[str]:
 
     ordered = sorted(scores.items(), key=lambda item: (-item[1], -len(item[0]), item[0]))
     return [item[0] for item in ordered[:max_items]]
+
+
+def _select_artifact_evidence(records: list[dict[str, Any]], *, max_items: int, max_chars: int) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    used_chars = 0
+    for record in records:
+        artifact_kind = str(record.get("artifact_kind") or "").strip()
+        if artifact_kind not in {"header_plus_opening", "decision_unit", "section_unit", "section_summary", "header_anchor"}:
+            continue
+        body_text = " ".join(str(record.get("body_text") or "").split()).strip()
+        header_path = [str(item).strip() for item in record.get("header_path") or [] if str(item).strip()]
+        payload = {
+            "artifact_id": str(record.get("artifact_id") or "").strip(),
+            "artifact_kind": artifact_kind,
+            "header_path": header_path,
+            "body_excerpt": body_text[:360].strip(),
+            "start_offset": int(record.get("start_offset") or 0),
+            "end_offset": int(record.get("end_offset") or 0),
+            "start_page": record.get("start_page"),
+            "end_page": record.get("end_page"),
+            "primary_topic": str(record.get("primary_topic") or "").strip() or None,
+            "section_summary": str(record.get("section_summary") or "").strip() or None,
+        }
+        if not payload["body_excerpt"] and not payload["header_path"]:
+            continue
+        payload_chars = len(json.dumps(payload, ensure_ascii=False))
+        if used_chars + payload_chars > max_chars:
+            continue
+        selected.append(payload)
+        used_chars += payload_chars
+        if len(selected) >= max_items:
+            break
+    return selected

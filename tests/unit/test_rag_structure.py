@@ -59,4 +59,6 @@ def test_build_structured_document_emits_document_profile_and_header_anchor() ->
 
     assert "document_profile" in kinds
     assert "header_anchor" in kinds
+    assert "header_plus_opening" in kinds
+    assert "context_window" in kinds
     assert kinds.intersection({"section_unit", "decision_unit"})

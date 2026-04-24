@@ -15,6 +15,8 @@ LEXICAL_FTS_WEIGHT = 0.72
 LEXICAL_TRIGRAM_WEIGHT = 0.28
 SEMANTIC_OVERLAP_WEIGHT = 0.25
 SEMANTIC_SPECIFICITY_WEIGHT = 0.10
+TOPIC_TEXT_WEIGHT = 0.18
+ARTIFACT_KIND_PRIORITY_WEIGHT = 0.08
 
 FTS_TOKEN_LIMIT = 8
 SEARCH_FTS_CANDIDATE_LIMIT = 250
@@ -51,6 +53,8 @@ class SearchHit:
     semantic_node_ids: list[int] = field(default_factory=list)
     semantic_boost: float = 0.0
     semantic_nodes: list[SemanticDebugNode] = field(default_factory=list)
+    primary_topic: str | None = None
+    secondary_topics: list[str] = field(default_factory=list)
     chunk_text: str = ""
     section_path: list[str] = field(default_factory=list)
     artifact_kind: str | None = None
@@ -69,6 +73,8 @@ def search_thresholds_snapshot() -> dict[str, Any]:
             "lexical_trigram_weight": LEXICAL_TRIGRAM_WEIGHT,
             "semantic_overlap_weight": SEMANTIC_OVERLAP_WEIGHT,
             "semantic_specificity_weight": SEMANTIC_SPECIFICITY_WEIGHT,
+            "topic_text_weight": TOPIC_TEXT_WEIGHT,
+            "artifact_kind_priority_weight": ARTIFACT_KIND_PRIORITY_WEIGHT,
         },
         "candidate_limits": {
             "fts_token_limit": FTS_TOKEN_LIMIT,

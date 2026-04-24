@@ -16,6 +16,9 @@ This repository now runs the hierarchy-aware Hebrew municipal RAG redesign as th
 - Added v2 embedding backend in `src/municipality/artifact_embeddings.py`.
 - Added artifact-native semantic links in `migrations/013_m13_rag_v2_semantic_links.sql`.
 - Added legacy-schema removal and artifact-native decision-context migration in `migrations/014_m14_remove_legacy_chunk_rag.sql`.
+- Added artifact topic annotations in `migrations/015_m15_artifact_topic_annotation.sql`.
+- Added layout-aware parsing hooks via `src/municipality/layout_parser.py` and `src/municipality/heading_detection.py`.
+- Added AI21-backed query rewrite and topic classification hooks in `src/municipality/query_rewrite.py` and `src/municipality/topic_classifier.py`.
 - Added AI21 answer-provider support in `src/municipality/rag_llm.py`.
 - Added AI21 semantic-extraction support in `src/municipality/semantic_extractor.py`.
 
@@ -28,8 +31,11 @@ This repository now runs the hierarchy-aware Hebrew municipal RAG redesign as th
 ## Current Shape
 
 - Processing writes `document_section` and `retrieval_artifact` only for RAG retrieval.
+- Processing now also persists `artifact_topic_annotation` for artifact-level structural/body topic labels.
 - `/ask`, `/search`, and `/ask/debug/retrieval` read artifact-backed retrieval only.
+- Retrieval now supports query rewrite, artifact-kind routing, topic-annotation boost, and context-window expansion.
 - Semantic search/filtering is artifact-native through `artifact_semantic_link`.
+- Semantic prompt packets now include artifact-aware evidence with header paths and topic priors.
 - Decision-context provenance is stored as `source_artifact_ids_json`.
 - V2 citations carry `header_path` in addition to page references.
 - Retrieval-set IDs remain versioned through the retrieval version string.

@@ -4,11 +4,12 @@ from dataclasses import dataclass
 import json
 from typing import Any
 
-from sqlalchemy import and_, select, text
+from sqlalchemy import and_, inspect, select, text
 from sqlalchemy.orm import Session
 
 from municipality.chunking import build_trigrams, normalize_for_search
 from municipality.models import (
+    ArtifactTopicAnnotation,
     ArtifactSemanticLink,
     AssetManifest,
     Document,
@@ -26,6 +27,8 @@ from municipality.search_common import (
     SEARCH_TRIGRAM_CANDIDATE_LIMIT,
     SEMANTIC_OVERLAP_WEIGHT,
     SEMANTIC_SPECIFICITY_WEIGHT,
+    TOPIC_TEXT_WEIGHT,
+    ARTIFACT_KIND_PRIORITY_WEIGHT,
     SearchHit,
     SemanticDebugNode,
     _build_snippet,
@@ -70,6 +73,10 @@ class ArtifactSearchService:
             self.session.query(ArtifactSemanticLink).filter(ArtifactSemanticLink.artifact_id.in_(existing_ids)).delete(
                 synchronize_session=False
             )
+            if self._topic_annotations_available():
+                self.session.query(ArtifactTopicAnnotation).filter(
+                    ArtifactTopicAnnotation.artifact_id.in_(existing_ids)
+                ).delete(synchronize_session=False)
             self.session.query(RetrievalArtifact).filter(RetrievalArtifact.document_version_id == document_version_id).delete()
             self.session.execute(text("DELETE FROM artifact_fts WHERE artifact_id = :artifact_id"), [{"artifact_id": artifact_id} for artifact_id in existing_ids])
             self.session.execute(
@@ -128,11 +135,15 @@ class ArtifactSearchService:
         semantic_node_id: int | None = None,
         semantic_label: str | None = None,
         semantic_mode: str = "off",
+        artifact_kinds: list[str] | None = None,
+        topic_terms: list[str] | None = None,
+        document_ids: list[int] | None = None,
         limit: int = 20,
     ) -> list[SearchHit]:
         normalized_query = normalize_for_search(query)
         if not normalized_query:
             return []
+        normalized_topic_terms = [normalize_for_search(term) for term in (topic_terms or []) if normalize_for_search(term)]
 
         normalized_semantic_label = normalize_for_search(semantic_label) if semantic_label else None
         semantic_mode_normalized = (semantic_mode or "off").strip().casefold()
@@ -143,7 +154,7 @@ class ArtifactSearchService:
             semantic_node_id is not None or bool(normalized_semantic_label)
         )
 
-        candidate_scores = self._collect_candidate_scores(normalized_query)
+        candidate_scores = self._collect_candidate_scores(normalized_query, normalized_topic_terms=normalized_topic_terms)
         if not candidate_scores:
             return []
 
@@ -158,6 +169,7 @@ class ArtifactSearchService:
                 explicit_semantic_filter=explicit_semantic_filter,
             )
 
+        topic_annotations_available = self._topic_annotations_available()
         stmt = (
             select(RetrievalArtifact, Document, SourceSite, AssetManifest)
             .join(Document, RetrievalArtifact.document_id == Document.id)
@@ -171,6 +183,11 @@ class ArtifactSearchService:
             )
             .where(RetrievalArtifact.artifact_id.in_(artifact_ids))
         )
+        if topic_annotations_available:
+            stmt = stmt.add_columns(ArtifactTopicAnnotation).outerjoin(
+                ArtifactTopicAnnotation,
+                ArtifactTopicAnnotation.artifact_id == RetrievalArtifact.artifact_id,
+            )
         if municipality_slug:
             stmt = stmt.where(SourceSite.municipality_slug == municipality_slug)
         if source_type:
@@ -179,18 +196,41 @@ class ArtifactSearchService:
             year_text = str(year)
             stmt = stmt.where((Document.title_he.contains(year_text)) | (Document.canonical_url.contains(year_text)))
         if topic:
-            stmt = stmt.where(
-                (Document.title_he.contains(topic))
-                | (Document.canonical_url.contains(topic))
-                | (RetrievalArtifact.retrieval_text.contains(topic))
-                | (AssetManifest.source_node_external_id.contains(topic))
-            )
+            if topic_annotations_available:
+                stmt = stmt.where(
+                    (Document.title_he.contains(topic))
+                    | (Document.canonical_url.contains(topic))
+                    | (RetrievalArtifact.retrieval_text.contains(topic))
+                    | (AssetManifest.source_node_external_id.contains(topic))
+                    | (ArtifactTopicAnnotation.primary_topic_he.contains(topic))
+                )
+            else:
+                stmt = stmt.where(
+                    (Document.title_he.contains(topic))
+                    | (Document.canonical_url.contains(topic))
+                    | (RetrievalArtifact.retrieval_text.contains(topic))
+                    | (AssetManifest.source_node_external_id.contains(topic))
+                )
+        if artifact_kinds:
+            normalized_kinds = [str(kind).strip() for kind in artifact_kinds if str(kind).strip()]
+            if normalized_kinds:
+                stmt = stmt.where(RetrievalArtifact.artifact_kind.in_(normalized_kinds))
+        if document_ids:
+            normalized_document_ids = [int(document_id) for document_id in document_ids if int(document_id) > 0]
+            if normalized_document_ids:
+                stmt = stmt.where(RetrievalArtifact.document_id.in_(normalized_document_ids))
 
         rows = self.session.execute(stmt).all()
         query_trigrams = build_trigrams(normalized_query)
         query_trigram_count = max(1, len(query_trigrams))
         hits: list[SearchHit] = []
-        for artifact, document, source_site, manifest in rows:
+        kind_priority = {kind: index for index, kind in enumerate(artifact_kinds or [])}
+        for row in rows:
+            if topic_annotations_available:
+                artifact, document, source_site, manifest, topic_annotation = row
+            else:
+                artifact, document, source_site, manifest = row
+                topic_annotation = None
             scores = candidate_scores.get(str(artifact.artifact_id), {})
             fts_score = _fts_rank_to_score(scores.get("fts_rank"))
             trigram_overlap = scores.get("trigram_overlap", 0.0)
@@ -202,7 +242,16 @@ class ArtifactSearchService:
                 continue
 
             semantic_boost = 0.0
-            score = lexical_score
+            topic_boost = self._topic_score(
+                annotation=topic_annotation,
+                normalized_query=normalized_query,
+                normalized_topic_terms=normalized_topic_terms,
+            )
+            kind_boost = 0.0
+            if kind_priority and artifact.artifact_kind in kind_priority:
+                denominator = max(1, len(kind_priority) - 1)
+                kind_boost = ARTIFACT_KIND_PRIORITY_WEIGHT * (1.0 - (kind_priority[artifact.artifact_kind] / max(denominator, 1)))
+            score = min(1.0, lexical_score + topic_boost + kind_boost)
             if semantic_scoring_enabled:
                 semantic_overlap_score = max(
                     (row.link_confidence * row.match_score for row in semantic_rows),
@@ -212,7 +261,7 @@ class ArtifactSearchService:
                 semantic_boost = (SEMANTIC_OVERLAP_WEIGHT * semantic_overlap_score) + (
                     SEMANTIC_SPECIFICITY_WEIGHT * specificity_prior
                 )
-                score = min(1.0, lexical_score + semantic_boost)
+                score = min(1.0, score + semantic_boost)
 
             semantic_nodes = [
                 SemanticDebugNode(
@@ -244,6 +293,8 @@ class ArtifactSearchService:
                     semantic_node_ids=[row.node_id for row in semantic_rows],
                     semantic_boost=round(semantic_boost, 6),
                     semantic_nodes=semantic_nodes,
+                    primary_topic=_annotation_primary_topic(topic_annotation),
+                    secondary_topics=_annotation_secondary_topics(topic_annotation),
                     chunk_text=artifact.retrieval_text,
                     section_path=_loads_json_list(artifact.header_path_json),
                     artifact_kind=artifact.artifact_kind,
@@ -256,6 +307,7 @@ class ArtifactSearchService:
         normalized_ids = [str(chunk_id or "").strip() for chunk_id in chunk_ids if str(chunk_id or "").strip()]
         if not normalized_ids:
             return []
+        topic_annotations_available = self._topic_annotations_available()
         stmt = (
             select(RetrievalArtifact, Document, SourceSite, AssetManifest)
             .join(Document, RetrievalArtifact.document_id == Document.id)
@@ -269,9 +321,19 @@ class ArtifactSearchService:
             )
             .where(RetrievalArtifact.artifact_id.in_(normalized_ids))
         )
+        if topic_annotations_available:
+            stmt = stmt.add_columns(ArtifactTopicAnnotation).outerjoin(
+                ArtifactTopicAnnotation,
+                ArtifactTopicAnnotation.artifact_id == RetrievalArtifact.artifact_id,
+            )
         rows = self.session.execute(stmt).all()
         by_id: dict[str, SearchHit] = {}
-        for artifact, document, source_site, manifest in rows:
+        for row in rows:
+            if topic_annotations_available:
+                artifact, document, source_site, manifest, topic_annotation = row
+            else:
+                artifact, document, source_site, manifest = row
+                topic_annotation = None
             artifact_id = str(artifact.artifact_id)
             by_id[artifact_id] = SearchHit(
                 chunk_id=artifact_id,
@@ -288,13 +350,15 @@ class ArtifactSearchService:
                 end_offset=artifact.end_offset,
                 start_page=artifact.start_page,
                 end_page=artifact.end_page,
+                primary_topic=_annotation_primary_topic(topic_annotation),
+                secondary_topics=_annotation_secondary_topics(topic_annotation),
                 chunk_text=artifact.retrieval_text,
                 section_path=_loads_json_list(artifact.header_path_json),
                 artifact_kind=artifact.artifact_kind,
             )
         return [by_id[artifact_id] for artifact_id in normalized_ids if artifact_id in by_id]
 
-    def _collect_candidate_scores(self, normalized_query: str) -> dict[str, dict[str, float]]:
+    def _collect_candidate_scores(self, normalized_query: str, *, normalized_topic_terms: list[str]) -> dict[str, dict[str, float]]:
         candidate_scores: dict[str, dict[str, float]] = {}
         tokens = [token for token in normalized_query.split(" ") if token]
         fts_query = " OR ".join(tokens[:FTS_TOKEN_LIMIT])
@@ -326,6 +390,20 @@ class ArtifactSearchService:
             ).mappings().all()
             for row in rows:
                 candidate_scores.setdefault(str(row["artifact_id"]), {})["trigram_overlap"] = float(row["overlap"])
+
+        if self._topic_annotations_available():
+            for topic_term in [normalized_query, *normalized_topic_terms]:
+                if not topic_term:
+                    continue
+                topic_rows = self.session.execute(
+                    select(ArtifactTopicAnnotation.artifact_id, ArtifactTopicAnnotation.primary_topic_norm)
+                    .where(ArtifactTopicAnnotation.primary_topic_norm.is_not(None))
+                    .where(ArtifactTopicAnnotation.primary_topic_norm.contains(topic_term))
+                    .limit(SEARCH_FALLBACK_CONTAINS_LIMIT)
+                ).all()
+                for artifact_id, _primary_topic_norm in topic_rows:
+                    entry = candidate_scores.setdefault(str(artifact_id), {})
+                    entry["topic_match"] = max(float(entry.get("topic_match") or 0.0), 1.0)
 
         if candidate_scores:
             return candidate_scores
@@ -456,11 +534,62 @@ class ArtifactSearchService:
             )
             for artifact_id, node_rows in scored_by_artifact.items()
         }
+
+    def _topic_annotations_available(self) -> bool:
+        try:
+            return bool(inspect(self.session.get_bind()).has_table("artifact_topic_annotation"))
+        except Exception:  # noqa: BLE001
+            self.session.rollback()
+            return False
+
+    def _topic_score(
+        self,
+        *,
+        annotation: ArtifactTopicAnnotation | None,
+        normalized_query: str,
+        normalized_topic_terms: list[str],
+    ) -> float:
+        if annotation is None:
+            return 0.0
+        labels = []
+        primary = _annotation_primary_topic(annotation)
+        if primary:
+            labels.append(normalize_for_search(primary))
+        labels.extend(normalize_for_search(label) for label in _annotation_secondary_topics(annotation) if normalize_for_search(label))
+        labels = [label for label in labels if label]
+        if not labels:
+            return 0.0
+
+        best = _semantic_text_match_score(normalized_query, labels)
+        for term in normalized_topic_terms:
+            best = max(best, _semantic_text_match_score(term, labels))
+        return round(TOPIC_TEXT_WEIGHT * best, 6)
+
+
 def _loads_json_list(value: str | None) -> list[str]:
     if not value:
         return []
     try:
         parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item).strip() for item in parsed if str(item).strip()]
+
+
+def _annotation_primary_topic(annotation: ArtifactTopicAnnotation | None) -> str | None:
+    if annotation is None:
+        return None
+    value = str(annotation.primary_topic_he or "").strip()
+    return value or None
+
+
+def _annotation_secondary_topics(annotation: ArtifactTopicAnnotation | None) -> list[str]:
+    if annotation is None or not annotation.secondary_topics_json:
+        return []
+    try:
+        parsed = json.loads(annotation.secondary_topics_json)
     except json.JSONDecodeError:
         return []
     if not isinstance(parsed, list):

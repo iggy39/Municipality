@@ -70,6 +70,10 @@ def test_migrations_apply_and_reapply_cleanly(tmp_path: Path) -> None:
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='artifact_semantic_link'")
         )
         assert artifact_semantic_link.first() is not None
+        artifact_topic_annotation = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='artifact_topic_annotation'")
+        )
+        assert artifact_topic_annotation.first() is not None
         chunk_semantic_link = conn.execute(
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_semantic_link'")
         )

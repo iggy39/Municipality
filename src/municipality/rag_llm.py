@@ -15,6 +15,8 @@ from municipality.rag_observability import log_rag_event
 RAG_CALL_ANSWER = "answer"
 RAG_CALL_VERIFY = "verify"
 RAG_CALL_REFUSE = "refuse"
+RAG_CALL_REWRITE = "rewrite"
+RAG_CALL_CLASSIFY = "classify"
 
 RAG_PROVIDER_BYTEZ = "bytez"
 RAG_PROVIDER_AI21 = "ai21"
@@ -24,6 +26,8 @@ DEFAULT_AI21_API_URL = "https://api.ai21.com/studio/v1/chat/completions"
 RAG_ANSWER_PREFIX_DEFAULT = "answer question from provided hebrew municipal evidence with citations only"
 RAG_VERIFY_PREFIX_DEFAULT = "verify every claim against provided hebrew evidence and citations only"
 RAG_REFUSE_PREFIX_DEFAULT = "if evidence is insufficient, refuse in hebrew and explain missing evidence"
+RAG_REWRITE_PREFIX_DEFAULT = "rewrite hebrew municipal queries into grounded retrieval intents and terms only"
+RAG_CLASSIFY_PREFIX_DEFAULT = "classify hebrew municipal sections into grounded topics using visible structure and text only"
 
 
 @dataclass(slots=True)
@@ -31,6 +35,8 @@ class RagPromptPrefixConfig:
     answer: str = RAG_ANSWER_PREFIX_DEFAULT
     verify: str = RAG_VERIFY_PREFIX_DEFAULT
     refuse: str = RAG_REFUSE_PREFIX_DEFAULT
+    rewrite: str = RAG_REWRITE_PREFIX_DEFAULT
+    classify: str = RAG_CLASSIFY_PREFIX_DEFAULT
 
     def for_call_type(self, call_type: str) -> str:
         normalized = _normalize_call_type(call_type)
@@ -47,6 +53,8 @@ class RagPromptPrefixConfig:
             RAG_CALL_ANSWER: self.answer,
             RAG_CALL_VERIFY: self.verify,
             RAG_CALL_REFUSE: self.refuse,
+            RAG_CALL_REWRITE: self.rewrite,
+            RAG_CALL_CLASSIFY: self.classify,
         }
 
 
@@ -82,6 +90,10 @@ class RagLlmConfig:
             or RAG_VERIFY_PREFIX_DEFAULT,
             refuse=(source.get("RAG_PROMPT_PREFIX_REFUSE") or RAG_REFUSE_PREFIX_DEFAULT).strip()
             or RAG_REFUSE_PREFIX_DEFAULT,
+            rewrite=(source.get("RAG_PROMPT_PREFIX_REWRITE") or RAG_REWRITE_PREFIX_DEFAULT).strip()
+            or RAG_REWRITE_PREFIX_DEFAULT,
+            classify=(source.get("RAG_PROMPT_PREFIX_CLASSIFY") or RAG_CLASSIFY_PREFIX_DEFAULT).strip()
+            or RAG_CLASSIFY_PREFIX_DEFAULT,
         )
 
         return cls(
@@ -493,7 +505,7 @@ def build_rag_provider(*, config: RagLlmConfig | None = None) -> RagLlmProvider:
 
 def _normalize_call_type(call_type: str) -> str:
     normalized = (call_type or "").strip().casefold()
-    if normalized not in {RAG_CALL_ANSWER, RAG_CALL_VERIFY, RAG_CALL_REFUSE}:
+    if normalized not in {RAG_CALL_ANSWER, RAG_CALL_VERIFY, RAG_CALL_REFUSE, RAG_CALL_REWRITE, RAG_CALL_CLASSIFY}:
         raise ValueError(f"unsupported rag call type: {call_type}")
     return normalized
 

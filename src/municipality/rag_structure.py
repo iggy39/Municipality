@@ -8,6 +8,7 @@ from typing import Any
 
 from municipality.chunking import build_trigrams, normalize_for_search
 from municipality.extraction import resolve_pages_for_span
+from municipality.heading_detection import classify_heading_block, infer_section_summary
 
 
 TITLE_PREFIX_RE = re.compile(r"^(פרוטוקול|ישיבה|ישיבת)")
@@ -54,6 +55,7 @@ class StructuredSection:
     body_lines: list[str] = field(default_factory=list)
     start_page: int | None = None
     end_page: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def body_text(self) -> str:
@@ -124,51 +126,61 @@ def _build_sections(
         ordinal=0,
         confidence=1.0,
     )
-    sections: list[StructuredSection] = [root]
-    stack: list[StructuredSection] = [root]
-    ordinal = 1
-    lines = _iter_lines_with_offsets(text, pages=pages)
-
-    for index, line in enumerate(lines):
-        compact = WHITESPACE_RE.sub(" ", line.text.strip()).strip()
-        if not compact:
-            continue
-        classification = _classify_heading(compact=compact, line_index=index)
-        if classification is None and _is_implicit_heading(compact=compact, line_index=index, lines=lines):
-            inferred_level = min(max(stack[-1].header_level + 1, 3), 4)
-            classification = (inferred_level, "implicit_subtopic", 0.61)
-        if classification is None:
-            stack[-1].body_lines.append(compact)
-            continue
-
-        level, node_type, confidence = classification
-        while stack and stack[-1].header_level >= level:
-            stack[-1].end_offset = line.start_offset
-            stack.pop()
-        parent = stack[-1] if stack else root
-        path = [*parent.section_path, compact]
-        section = StructuredSection(
-            section_id=_section_id(
-                document_version_id=document_version_id,
-                ordinal=ordinal,
-                start_offset=line.start_offset,
-                header_text=compact,
-            ),
-            parent_section_id=parent.section_id,
+    layout_blocks = _iter_layout_blocks(pages)
+    if layout_blocks:
+        sections = _build_sections_from_layout_blocks(
+            document_version_id=document_version_id,
             source_kind=source_kind,
-            node_type=node_type,
-            header_text=compact,
-            header_text_norm=normalize_for_search(compact),
-            header_level=level,
-            section_path=path,
-            start_offset=line.start_offset,
-            end_offset=len(text),
-            ordinal=ordinal,
-            confidence=confidence,
+            root=root,
+            text=text,
+            layout_blocks=layout_blocks,
         )
-        sections.append(section)
-        stack.append(section)
-        ordinal += 1
+    else:
+        sections = [root]
+        stack: list[StructuredSection] = [root]
+        ordinal = 1
+        lines = _iter_lines_with_offsets(text, pages=None)
+
+        for index, line in enumerate(lines):
+            compact = WHITESPACE_RE.sub(" ", line.text.strip()).strip()
+            if not compact:
+                continue
+            classification = _classify_heading(compact=compact, line_index=index)
+            if classification is None and _is_implicit_heading(compact=compact, line_index=index, lines=lines):
+                inferred_level = min(max(stack[-1].header_level + 1, 3), 4)
+                classification = (inferred_level, "implicit_subtopic", 0.61)
+            if classification is None:
+                stack[-1].body_lines.append(compact)
+                continue
+
+            level, node_type, confidence = classification
+            while stack and stack[-1].header_level >= level:
+                stack[-1].end_offset = line.start_offset
+                stack.pop()
+            parent = stack[-1] if stack else root
+            path = [*parent.section_path, compact]
+            section = StructuredSection(
+                section_id=_section_id(
+                    document_version_id=document_version_id,
+                    ordinal=ordinal,
+                    start_offset=line.start_offset,
+                    header_text=compact,
+                ),
+                parent_section_id=parent.section_id,
+                source_kind=source_kind,
+                node_type=node_type,
+                header_text=compact,
+                header_text_norm=normalize_for_search(compact),
+                header_level=level,
+                section_path=path,
+                start_offset=line.start_offset,
+                end_offset=len(text),
+                ordinal=ordinal,
+                confidence=confidence,
+            )
+            sections.append(section)
+            stack.append(section)
+            ordinal += 1
 
     for section in sections:
         pages = resolve_pages_for_span(citation_map, section.start_offset, section.end_offset)
@@ -187,6 +199,13 @@ def _build_artifacts(
     citation_map: list[dict[str, int]],
 ) -> list[dict[str, Any]]:
     artifacts: list[dict[str, Any]] = []
+    sections_by_parent: dict[str | None, list[StructuredSection]] = {}
+    for section in sections[1:]:
+        sections_by_parent.setdefault(section.parent_section_id, []).append(section)
+
+    document_profile_text = "\n".join(section.header_text for section in sections[1:12]).strip()
+    if not document_profile_text:
+        document_profile_text = sections[0].body_text or title
     doc_pages = resolve_pages_for_span(citation_map, 0, max((section.end_offset for section in sections), default=0))
     doc_start_page = doc_pages[0] if doc_pages else None
     doc_end_page = doc_pages[-1] if doc_pages else None
@@ -200,13 +219,13 @@ def _build_artifacts(
             committee_name=metadata.get("committee_name"),
             meeting_date=metadata.get("meeting_date"),
             header_path=[title],
-            body_text="\n".join(section.header_text for section in sections[1:12]),
+            body_text=document_profile_text,
             retrieval_text=_build_retrieval_text(
                 title=title,
                 committee_name=metadata.get("committee_name"),
                 meeting_date=metadata.get("meeting_date"),
                 header_path=[title],
-                body_text="\n".join(section.header_text for section in sections[1:12]),
+                body_text=document_profile_text,
             ),
             start_offset=0,
             end_offset=max((section.end_offset for section in sections), default=0),
@@ -221,6 +240,10 @@ def _build_artifacts(
     artifact_ordinal = 1
     for section in sections[1:]:
         header_path = list(section.section_path)
+        opening_text = _opening_excerpt(section.body_text)
+        section_summary = infer_section_summary(header_text=section.header_text, body_text=section.body_text)
+        prev_header, next_header = _section_neighbor_headers(section=section, sections_by_parent=sections_by_parent)
+
         artifacts.append(
             _artifact_row(
                 artifact_id=_artifact_id(
@@ -249,11 +272,81 @@ def _build_artifacts(
                 start_page=section.start_page,
                 end_page=section.end_page,
                 citation_label=_citation_label(section.start_page, section.end_page),
-                metadata={"node_type": section.node_type, "header_level": section.header_level},
+                metadata={"node_type": section.node_type, "header_level": section.header_level, **dict(section.metadata)},
                 section_id=section.section_id,
             )
         )
         artifact_ordinal += 1
+
+        if opening_text and opening_text != section.header_text:
+            artifacts.append(
+                _artifact_row(
+                    artifact_id=_artifact_id(
+                        document_version_id=document_version_id,
+                        ordinal=artifact_ordinal,
+                        kind="header_plus_opening",
+                        section_id=section.section_id,
+                    ),
+                    source_kind=source_kind,
+                    artifact_kind="header_plus_opening",
+                    ordinal=artifact_ordinal,
+                    title_he=title,
+                    committee_name=metadata.get("committee_name"),
+                    meeting_date=metadata.get("meeting_date"),
+                    header_path=header_path,
+                    body_text=opening_text,
+                    retrieval_text=_build_retrieval_text(
+                        title=title,
+                        committee_name=metadata.get("committee_name"),
+                        meeting_date=metadata.get("meeting_date"),
+                        header_path=header_path,
+                        body_text=opening_text,
+                    ),
+                    start_offset=section.start_offset,
+                    end_offset=section.end_offset,
+                    start_page=section.start_page,
+                    end_page=section.end_page,
+                    citation_label=_citation_label(section.start_page, section.end_page),
+                    metadata={"node_type": section.node_type, "header_level": section.header_level, "opening_only": True},
+                    section_id=section.section_id,
+                )
+            )
+            artifact_ordinal += 1
+
+        if section_summary and section_summary not in {opening_text, section.header_text}:
+            artifacts.append(
+                _artifact_row(
+                    artifact_id=_artifact_id(
+                        document_version_id=document_version_id,
+                        ordinal=artifact_ordinal,
+                        kind="section_summary",
+                        section_id=section.section_id,
+                    ),
+                    source_kind=source_kind,
+                    artifact_kind="section_summary",
+                    ordinal=artifact_ordinal,
+                    title_he=title,
+                    committee_name=metadata.get("committee_name"),
+                    meeting_date=metadata.get("meeting_date"),
+                    header_path=header_path,
+                    body_text=section_summary,
+                    retrieval_text=_build_retrieval_text(
+                        title=title,
+                        committee_name=metadata.get("committee_name"),
+                        meeting_date=metadata.get("meeting_date"),
+                        header_path=header_path,
+                        body_text=section_summary,
+                    ),
+                    start_offset=section.start_offset,
+                    end_offset=section.end_offset,
+                    start_page=section.start_page,
+                    end_page=section.end_page,
+                    citation_label=_citation_label(section.start_page, section.end_page),
+                    metadata={"node_type": section.node_type, "header_level": section.header_level, "summary_only": True},
+                    section_id=section.section_id,
+                )
+            )
+            artifact_ordinal += 1
 
         body_text = section.body_text
         if not body_text:
@@ -287,11 +380,61 @@ def _build_artifacts(
                 start_page=section.start_page,
                 end_page=section.end_page,
                 citation_label=_citation_label(section.start_page, section.end_page),
-                metadata={"node_type": section.node_type, "header_level": section.header_level},
+                metadata={
+                    "node_type": section.node_type,
+                    "header_level": section.header_level,
+                    "section_summary": section_summary,
+                    "opening_text": opening_text,
+                },
                 section_id=section.section_id,
             )
         )
         artifact_ordinal += 1
+
+        context_window_text = _build_context_window_text(
+            title=title,
+            committee_name=metadata.get("committee_name"),
+            meeting_date=metadata.get("meeting_date"),
+            header_path=header_path,
+            opening_text=opening_text,
+            body_text=body_text,
+            prev_header=prev_header,
+            next_header=next_header,
+        )
+        if context_window_text and context_window_text != body_text:
+            artifacts.append(
+                _artifact_row(
+                    artifact_id=_artifact_id(
+                        document_version_id=document_version_id,
+                        ordinal=artifact_ordinal,
+                        kind="context_window",
+                        section_id=section.section_id,
+                    ),
+                    source_kind=source_kind,
+                    artifact_kind="context_window",
+                    ordinal=artifact_ordinal,
+                    title_he=title,
+                    committee_name=metadata.get("committee_name"),
+                    meeting_date=metadata.get("meeting_date"),
+                    header_path=header_path,
+                    body_text=context_window_text,
+                    retrieval_text=context_window_text,
+                    start_offset=section.start_offset,
+                    end_offset=section.end_offset,
+                    start_page=section.start_page,
+                    end_page=section.end_page,
+                    citation_label=_citation_label(section.start_page, section.end_page),
+                    metadata={
+                        "node_type": section.node_type,
+                        "header_level": section.header_level,
+                        "prev_header": prev_header,
+                        "next_header": next_header,
+                    },
+                    section_id=section.section_id,
+                )
+            )
+            artifact_ordinal += 1
+
     return artifacts
 
 
@@ -354,6 +497,65 @@ def _build_retrieval_text(
     return "\n".join(part for part in parts if str(part).strip()).strip()
 
 
+def _opening_excerpt(value: str, *, max_sentences: int = 2, max_chars: int = 320) -> str:
+    compact = " ".join(str(value or "").split()).strip()
+    if not compact:
+        return ""
+    sentences = [segment.strip() for segment in re.split(r"(?<=[.!?])\s+", compact) if segment.strip()]
+    if not sentences:
+        return compact[:max_chars].rstrip()
+    excerpt = " ".join(sentences[:max_sentences]).strip()
+    if len(excerpt) > max_chars:
+        excerpt = f"{excerpt[: max_chars - 3].rstrip()}..."
+    return excerpt
+
+
+def _section_neighbor_headers(
+    *,
+    section: StructuredSection,
+    sections_by_parent: dict[str | None, list[StructuredSection]],
+) -> tuple[str | None, str | None]:
+    siblings = sections_by_parent.get(section.parent_section_id, [])
+    if not siblings:
+        return None, None
+    try:
+        index = next(idx for idx, row in enumerate(siblings) if row.section_id == section.section_id)
+    except StopIteration:
+        return None, None
+    prev_header = siblings[index - 1].header_text if index > 0 else None
+    next_header = siblings[index + 1].header_text if index + 1 < len(siblings) else None
+    return prev_header, next_header
+
+
+def _build_context_window_text(
+    *,
+    title: str,
+    committee_name: str | None,
+    meeting_date: str | None,
+    header_path: list[str],
+    opening_text: str,
+    body_text: str,
+    prev_header: str | None,
+    next_header: str | None,
+) -> str:
+    parts = [f"כותרת מסמך: {title}"]
+    if committee_name:
+        parts.append(f"ועדה: {committee_name}")
+    if meeting_date:
+        parts.append(f"תאריך: {meeting_date}")
+    if header_path:
+        parts.append(f"מסלול כותרות: {' > '.join(header_path)}")
+    if prev_header:
+        parts.append(f"כותרת קודמת: {prev_header}")
+    if next_header:
+        parts.append(f"כותרת הבאה: {next_header}")
+    if opening_text:
+        parts.append(f"פתיח: {opening_text}")
+    parts.append("טקסט:")
+    parts.append(body_text)
+    return "\n".join(part for part in parts if str(part).strip()).strip()
+
+
 def _artifact_row(
     *,
     artifact_id: str,
@@ -400,6 +602,7 @@ def _artifact_row(
 
 
 def _section_row(section: StructuredSection) -> dict[str, Any]:
+    metadata = {"line_count": len(section.body_lines), **dict(section.metadata)}
     return {
         "section_id": section.section_id,
         "parent_section_id": section.parent_section_id,
@@ -416,8 +619,68 @@ def _section_row(section: StructuredSection) -> dict[str, Any]:
         "end_page": section.end_page,
         "ordinal": section.ordinal,
         "confidence": section.confidence,
-        "metadata_json": json.dumps({"line_count": len(section.body_lines)}, ensure_ascii=False),
-    }
+        "metadata_json": json.dumps(metadata, ensure_ascii=False),
+}
+
+
+def _build_sections_from_layout_blocks(
+    *,
+    document_version_id: int,
+    source_kind: str,
+    root: StructuredSection,
+    text: str,
+    layout_blocks: list[dict[str, Any]],
+) -> list[StructuredSection]:
+    sections: list[StructuredSection] = [root]
+    stack: list[StructuredSection] = [root]
+    ordinal = 1
+    counts_by_page: dict[int, int] = {}
+    for block in layout_blocks:
+        page_number = int(block.get("page") or 0)
+        counts_by_page[page_number] = counts_by_page.get(page_number, 0) + 1
+
+    for block_index, block in enumerate(layout_blocks):
+        compact = WHITESPACE_RE.sub(" ", str(block.get("text") or "").strip()).strip()
+        if not compact:
+            continue
+        classification = classify_heading_block(
+            block=block,
+            block_index=block_index,
+            page_block_count=counts_by_page.get(int(block.get("page") or 0), 0),
+        )
+        if classification is None:
+            stack[-1].body_lines.append(compact)
+            continue
+
+        while stack and stack[-1].header_level >= classification.header_level:
+            stack[-1].end_offset = classification.start_offset
+            stack.pop()
+        parent = stack[-1] if stack else root
+        path = [*parent.section_path, classification.text]
+        section = StructuredSection(
+            section_id=_section_id(
+                document_version_id=document_version_id,
+                ordinal=ordinal,
+                start_offset=classification.start_offset,
+                header_text=classification.text,
+            ),
+            parent_section_id=parent.section_id,
+            source_kind=source_kind,
+            node_type=classification.node_type,
+            header_text=classification.text,
+            header_text_norm=normalize_for_search(classification.text),
+            header_level=classification.header_level,
+            section_path=path,
+            start_offset=classification.start_offset,
+            end_offset=len(text),
+            ordinal=ordinal,
+            confidence=classification.confidence,
+            metadata=dict(classification.metadata),
+        )
+        sections.append(section)
+        stack.append(section)
+        ordinal += 1
+    return sections
 
 
 @dataclass(slots=True)
@@ -442,24 +705,19 @@ def _iter_lines_with_offsets(text: str, *, pages: list[Any] | None = None) -> li
     return lines
 
 
-def _iter_layout_lines(pages: list[Any] | None) -> list[_Line]:
+def _iter_layout_blocks(pages: list[Any] | None) -> list[dict[str, Any]]:
     if not pages:
         return []
 
-    collected: list[_Line] = []
+    collected: list[dict[str, Any]] = []
     seen: set[tuple[int, int, str]] = set()
     for raw_page in pages:
-        blocks = None
-        if isinstance(raw_page, dict):
-            blocks = raw_page.get("layout_blocks")
-        else:
-            blocks = getattr(raw_page, "layout_blocks", None)
+        page_number = int(raw_page.get("page") or 0) if isinstance(raw_page, dict) else int(getattr(raw_page, "page", 0) or 0)
+        blocks = raw_page.get("layout_blocks") if isinstance(raw_page, dict) else getattr(raw_page, "layout_blocks", None)
         if not isinstance(blocks, list):
             continue
         for raw_block in blocks:
             if not isinstance(raw_block, dict):
-                continue
-            if str(raw_block.get("kind") or "").strip() != "line":
                 continue
             text = str(raw_block.get("text") or "").strip()
             if not text:
@@ -470,7 +728,23 @@ def _iter_layout_lines(pages: list[Any] | None) -> list[_Line]:
             if key in seen:
                 continue
             seen.add(key)
-            collected.append(_Line(text=text, start_offset=start_offset, end_offset=end_offset))
+            collected.append({**raw_block, "page": page_number, "start_offset": start_offset, "end_offset": end_offset, "text": text})
+    collected.sort(key=lambda row: (int(row.get("start_offset") or 0), int(row.get("end_offset") or 0)))
+    return collected
+
+
+def _iter_layout_lines(pages: list[Any] | None) -> list[_Line]:
+    collected: list[_Line] = []
+    for raw_block in _iter_layout_blocks(pages):
+        if str(raw_block.get("kind") or "").strip() != "line":
+            continue
+        collected.append(
+            _Line(
+                text=str(raw_block.get("text") or ""),
+                start_offset=int(raw_block.get("start_offset") or 0),
+                end_offset=int(raw_block.get("end_offset") or 0),
+            )
+        )
     collected.sort(key=lambda row: (row.start_offset, row.end_offset))
     return collected
 

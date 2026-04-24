@@ -106,6 +106,8 @@ def test_rag_retrieval_forwards_semantic_selector_params_to_search() -> None:
     assert first_call["semantic_mode"] == "filter"
     assert first_call["semantic_node_id"] == 77
     assert first_call["semantic_label"] == "תחבורה עירונית"
+    assert "artifact_kinds" in first_call
+    assert result.debug_info["query_rewrite"]["retrieval_strategy"] in {"segments", "headers", "neighbors", "full_doc"}
 
 
 def test_rag_retrieval_keeps_direct_artifact_ranking_for_broad_decision_queries() -> None:
@@ -188,6 +190,20 @@ def test_rag_retrieval_exposes_topic_semantic_labels_in_context() -> None:
 
     assert len(result.contexts) == 1
     assert result.contexts[0].semantic_topic_labels == ["בטיחות בדרכים"]
+
+
+def test_rag_retrieval_preserves_primary_topics_from_hits() -> None:
+    hit = _hit(chunk_id="p-1", source_type="protocol", score=0.95, citation="p.1")
+    hit.primary_topic = "תחבורה ובטיחות > הרחבת חניה ליד בית הספר"
+    hit.secondary_topics = ["הרחבת חניה ליד בית הספר"]
+
+    search = StubSearchService({"all": [hit]})
+    retrieval = RagRetrievalService(search_service=search)
+
+    result = retrieval.retrieve(query="חניה ליד בית הספר", source_kinds=["protocol"], top_k=3, semantic_mode="off")
+
+    assert result.contexts[0].primary_topic == "תחבורה ובטיחות > הרחבת חניה ליד בית הספר"
+    assert result.contexts[0].secondary_topics == ["הרחבת חניה ליד בית הספר"]
 
 
 def test_rag_retrieval_applies_optional_reranker_before_limiting_results() -> None:

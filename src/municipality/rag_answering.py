@@ -2983,18 +2983,23 @@ def _build_answer_sections(
 
         first_chunk = context_by_chunk.get(normalized_chunk_ids[0])
         protocol_title = first_chunk.document_title if first_chunk else "פרוטוקול ללא כותרת"
-        protocol_tree = protocol_topic_trees.get(protocol_title) or {
-            "root_topic": _protocol_root_topic(protocol_title=protocol_title, fallback_topic=fallback_topic),
-            "children": [],
-        }
-        topic_name, topic_route, topic_score = _resolve_topic_for_summary_item(
-            item=item,
-            protocol_tree=protocol_tree,
-            fallback_topic=fallback_topic,
-            context_by_chunk=context_by_chunk,
-            document_id=first_chunk.document_id if first_chunk else None,
-            protocol_subject_anchors=protocol_subject_anchors,
-        )
+        if first_chunk is not None and _as_optional_str(first_chunk.primary_topic):
+            topic_name = _as_optional_str(first_chunk.primary_topic) or fallback_topic
+            topic_route = "artifact_topic_annotation"
+            topic_score = 0.92
+        else:
+            protocol_tree = protocol_topic_trees.get(protocol_title) or {
+                "root_topic": _protocol_root_topic(protocol_title=protocol_title, fallback_topic=fallback_topic),
+                "children": [],
+            }
+            topic_name, topic_route, topic_score = _resolve_topic_for_summary_item(
+                item=item,
+                protocol_tree=protocol_tree,
+                fallback_topic=fallback_topic,
+                context_by_chunk=context_by_chunk,
+                document_id=first_chunk.document_id if first_chunk else None,
+                protocol_subject_anchors=protocol_subject_anchors,
+            )
 
         concise_sections.append(
             {
@@ -3304,6 +3309,21 @@ def _section_semantic_topic_label(
             continue
         if context.document_id not in document_ids:
             document_ids.append(context.document_id)
+        primary_topic = _sanitize_semantic_topic_label(context.primary_topic or "")
+        if primary_topic:
+            key = normalize_for_search(primary_topic)
+            if key and key not in seen:
+                seen.add(key)
+                candidates.append(primary_topic)
+        for label in context.secondary_topics:
+            candidate = _sanitize_semantic_topic_label(label)
+            if not candidate:
+                continue
+            key = normalize_for_search(candidate)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            candidates.append(candidate)
         for label in context.semantic_topic_labels:
             candidate = _sanitize_semantic_topic_label(label)
             if not candidate:

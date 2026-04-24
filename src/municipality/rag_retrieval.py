@@ -6,6 +6,7 @@ from typing import Any
 
 from municipality.chunking import normalize_for_search
 from municipality.embeddings import EmbeddingReranker
+from municipality.query_rewrite import QueryRewriteResult, QueryRewriteService
 from municipality.rag_arch import RagArchitectureConfig
 from municipality.rag_observability import build_retrieval_set_id, hash_text, log_rag_event
 
@@ -52,6 +53,12 @@ class RagContextChunk:
     chunk_index: int | None = None
     chunk_text: str = ""
     semantic_topic_labels: list[str] = field(default_factory=list)
+    semantic_match_count: int = 0
+    semantic_boost: float = 0.0
+    semantic_node_ids: list[int] = field(default_factory=list)
+    semantic_nodes: list[Any] = field(default_factory=list)
+    primary_topic: str | None = None
+    secondary_topics: list[str] = field(default_factory=list)
     section_path: list[str] = field(default_factory=list)
     artifact_kind: str | None = None
 
@@ -72,9 +79,10 @@ class RagRetrievalResult:
 
 
 class RagRetrievalService:
-    def __init__(self, *, search_service, reranker: EmbeddingReranker | None = None):
+    def __init__(self, *, search_service, reranker: EmbeddingReranker | None = None, query_rewriter: QueryRewriteService | None = None):
         self.search_service = search_service
         self.reranker = reranker
+        self.query_rewriter = query_rewriter or QueryRewriteService()
 
     def retrieve(
         self,
@@ -88,6 +96,7 @@ class RagRetrievalService:
         semantic_node_id: int | None = None,
         semantic_label: str | None = None,
         semantic_mode: str = "off",
+        retrieval_strategy: str | None = None,
         ask_request_id: str | None = None,
     ) -> RagRetrievalResult:
         normalized_query = normalize_for_search(query)
@@ -155,20 +164,27 @@ class RagRetrievalService:
             )
             return result
 
+        rewrite_result = self.query_rewriter.rewrite_for_retrieval(query=query)
+        effective_strategy = _effective_retrieval_strategy(retrieval_strategy, rewrite_result)
+        topic_terms = [*rewrite_result.semantic_terms, *rewrite_result.header_terms]
+
         if self.reranker is not None:
             initial_limit = max(self.reranker.initial_candidate_limit(top_k=effective_top_k), effective_top_k * 3)
         else:
             initial_limit = max(effective_top_k * 3, effective_top_k)
-        hits = self.search_service.search(
-            query=query,
+        hits = _run_retrieval_plan(
+            search_service=self.search_service,
+            query=rewrite_result.rewritten_query or query,
             municipality_slug=municipality_slug,
-            source_type=None,
             year=year,
             topic=topic,
             semantic_node_id=semantic_node_id,
             semantic_label=semantic_label,
             semantic_mode=semantic_mode,
-            limit=initial_limit,
+            initial_limit=initial_limit,
+            rewrite_result=rewrite_result,
+            retrieval_strategy=effective_strategy,
+            topic_terms=topic_terms,
         )
 
         selected_hits = _dedupe_hits(hits)
@@ -178,7 +194,7 @@ class RagRetrievalService:
         missing_source_kinds = set(requested_source_kinds) - {hit.source_type for hit in selected_hits}
         for source_kind in sorted(missing_source_kinds):
             source_hits = self.search_service.search(
-                query=query,
+                query=rewrite_result.rewritten_query or query,
                 municipality_slug=municipality_slug,
                 source_type=source_kind,
                 year=year,
@@ -186,6 +202,8 @@ class RagRetrievalService:
                 semantic_node_id=semantic_node_id,
                 semantic_label=semantic_label,
                 semantic_mode=semantic_mode,
+                artifact_kinds=_artifact_kind_plans(rewrite_result=rewrite_result, retrieval_strategy=effective_strategy)[0],
+                topic_terms=topic_terms,
                 limit=max(effective_top_k, min(initial_limit, effective_top_k * 6)),
             )
             selected_hits.extend(source_hits)
@@ -229,6 +247,18 @@ class RagRetrievalService:
             debug_info={
                 "candidate_limit": initial_limit,
                 "broad_decision_query": broad_decision_query,
+                "query_rewrite": {
+                    "rewritten_query": rewrite_result.rewritten_query,
+                    "lexical_terms": list(rewrite_result.lexical_terms),
+                    "semantic_terms": list(rewrite_result.semantic_terms),
+                    "header_terms": list(rewrite_result.header_terms),
+                    "artifact_kind_priority": list(rewrite_result.artifact_kind_priority),
+                    "retrieval_strategy": effective_strategy,
+                    "use_neighbors": rewrite_result.use_neighbors,
+                    "route_reason": rewrite_result.route_reason,
+                    "provider": rewrite_result.provider,
+                    "model": rewrite_result.model,
+                },
                 "lexical_top_k_chunk_ids": lexical_top_k_chunk_ids,
                 "reranked_top_k_chunk_ids": [str(row.chunk_id) for row in contexts],
                 "embedding_rerank": dict(rerank_stats),
@@ -253,6 +283,98 @@ class RagRetrievalService:
             embedding_rerank=rerank_stats,
         )
         return result
+
+
+def _effective_retrieval_strategy(requested_strategy: str | None, rewrite_result: QueryRewriteResult) -> str:
+    normalized = str(requested_strategy or "auto").strip().casefold()
+    if normalized in {"headers", "segments", "neighbors", "full_doc"}:
+        return normalized
+    if rewrite_result.retrieval_strategy in {"headers", "segments", "neighbors", "full_doc"}:
+        return rewrite_result.retrieval_strategy
+    return "segments"
+
+
+def _run_retrieval_plan(
+    *,
+    search_service,
+    query: str,
+    municipality_slug: str | None,
+    year: int | None,
+    topic: str | None,
+    semantic_node_id: int | None,
+    semantic_label: str | None,
+    semantic_mode: str,
+    initial_limit: int,
+    rewrite_result: QueryRewriteResult,
+    retrieval_strategy: str,
+    topic_terms: list[str],
+) -> list[Any]:
+    plans = _artifact_kind_plans(rewrite_result=rewrite_result, retrieval_strategy=retrieval_strategy)
+    selected_hits: list[Any] = []
+    selected_hits.extend(
+        search_service.search(
+            query=query,
+            municipality_slug=municipality_slug,
+            source_type=None,
+            year=year,
+            topic=topic,
+            semantic_node_id=semantic_node_id,
+            semantic_label=semantic_label,
+            semantic_mode=semantic_mode,
+            artifact_kinds=plans[0],
+            topic_terms=topic_terms,
+            limit=initial_limit,
+        )
+    )
+    selected_hits = _dedupe_hits(selected_hits)
+
+    for plan_index, artifact_kinds in enumerate(plans[1:], start=1):
+        document_ids = []
+        if plan_index == 1 and rewrite_result.use_neighbors:
+            document_ids = [hit.document_id for hit in selected_hits[: max(1, min(8, len(selected_hits)))] if getattr(hit, "document_id", None)]
+        selected_hits.extend(
+            search_service.search(
+                query=query,
+                municipality_slug=municipality_slug,
+                source_type=None,
+                year=year,
+                topic=topic,
+                semantic_node_id=semantic_node_id,
+                semantic_label=semantic_label,
+                semantic_mode=semantic_mode,
+                artifact_kinds=artifact_kinds,
+                topic_terms=topic_terms,
+                document_ids=document_ids,
+                limit=max(1, initial_limit // 2),
+            )
+        )
+        selected_hits = _dedupe_hits(selected_hits)
+    return selected_hits
+
+
+def _artifact_kind_plans(*, rewrite_result: QueryRewriteResult, retrieval_strategy: str) -> list[list[str]]:
+    priority = [kind for kind in rewrite_result.artifact_kind_priority if kind]
+    if not priority:
+        priority = ["decision_unit", "section_unit", "header_plus_opening", "context_window", "header_anchor", "document_profile"]
+    if retrieval_strategy == "headers":
+        return [
+            [kind for kind in priority if kind in {"document_profile", "header_anchor", "header_plus_opening", "section_summary"}] or ["header_anchor", "document_profile"],
+            ["section_unit", "decision_unit"],
+            ["context_window"],
+        ]
+    if retrieval_strategy == "neighbors":
+        return [
+            [kind for kind in priority if kind in {"decision_unit", "section_unit", "context_window", "header_plus_opening"}] or ["decision_unit", "section_unit", "context_window"],
+            ["context_window"],
+            ["header_anchor", "document_profile"],
+        ]
+    if retrieval_strategy == "full_doc":
+        return [["document_profile"], ["header_anchor", "section_summary"], ["decision_unit", "section_unit"]]
+    return [
+        [kind for kind in priority if kind in {"decision_unit", "section_unit", "header_plus_opening"}] or ["decision_unit", "section_unit", "header_plus_opening"],
+        ["context_window"],
+        ["header_anchor", "document_profile"],
+    ]
 
 
 def _normalize_source_kinds(source_kinds: list[str] | None) -> list[str]:
@@ -331,6 +453,12 @@ def _to_context(hit) -> RagContextChunk:
         chunk_index=getattr(hit, "chunk_index", None),
         chunk_text=getattr(hit, "chunk_text", "") or hit.snippet,
         semantic_topic_labels=semantic_topic_labels,
+        semantic_match_count=int(getattr(hit, "semantic_match_count", 0) or 0),
+        semantic_boost=float(getattr(hit, "semantic_boost", 0.0) or 0.0),
+        semantic_node_ids=list(getattr(hit, "semantic_node_ids", []) or []),
+        semantic_nodes=list(getattr(hit, "semantic_nodes", []) or []),
+        primary_topic=getattr(hit, "primary_topic", None),
+        secondary_topics=list(getattr(hit, "secondary_topics", []) or []),
         section_path=list(getattr(hit, "section_path", []) or []),
         artifact_kind=getattr(hit, "artifact_kind", None),
     )

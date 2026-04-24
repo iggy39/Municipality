@@ -154,6 +154,7 @@ class AskRequest(BaseModel):
     semantic_node_id: int | None = None
     semantic_label: str | None = None
     semantic_mode: str = "off"
+    retrieval_strategy: str = "auto"
     debug_mode: bool = False
 
 
@@ -2898,6 +2899,7 @@ def _run_ask(
         semantic_node_id=request.semantic_node_id,
         semantic_label=request.semantic_label,
         semantic_mode=request.semantic_mode,
+        retrieval_strategy=request.retrieval_strategy,
     )
 
     embedding_service = build_embedding_backend(session=db, arch_config=arch_config)
@@ -2916,6 +2918,7 @@ def _run_ask(
         semantic_node_id=request.semantic_node_id,
         semantic_label=request.semantic_label,
         semantic_mode=request.semantic_mode,
+        retrieval_strategy=request.retrieval_strategy,
         ask_request_id=ask_request_id,
     )
     retrieval_ms = round((time.perf_counter() - retrieval_started) * 1000.0, 3)
@@ -3268,29 +3271,36 @@ def search(
     semantic_node_id: int | None = None,
     semantic_label: str | None = None,
     semantic_mode: str = "boost",
+    retrieval_strategy: str = "auto",
     include_semantic_debug: bool = False,
     limit: int = 20,
     db=Depends(get_db),
 ) -> dict:
     service = build_search_backend(session=db)
-    hits = service.search(
+    retrieval_service = RagRetrievalService(
+        search_service=service,
+        reranker=EmbeddingReranker(build_embedding_backend(session=db)),
+    )
+    retrieval_result = retrieval_service.retrieve(
         query=q,
+        top_k=max(1, min(limit, 50)),
         municipality_slug=muni,
-        source_type=source_type,
+        source_kinds=[source_type] if source_type else None,
         year=year,
         topic=topic,
         semantic_node_id=semantic_node_id,
         semantic_label=semantic_label,
         semantic_mode=semantic_mode,
-        limit=max(1, min(limit, 50)),
+        retrieval_strategy=retrieval_strategy,
     )
+    hits = retrieval_result.contexts
     results = [
         {
             "chunk_id": hit.chunk_id,
             "score": hit.score,
             "snippet": hit.snippet,
             "citation": hit.citation,
-            "source_type": hit.source_type,
+            "source_type": hit.source_kind,
             "artifact_kind": hit.artifact_kind,
             "header_path": list(hit.section_path),
             "document": {
@@ -3303,7 +3313,9 @@ def search(
             "start_page": hit.start_page,
             "end_page": hit.end_page,
             "semantic_match_count": hit.semantic_match_count,
-            "semantic_boost": hit.semantic_boost,
+            "semantic_boost": hit.semantic_boost if hasattr(hit, "semantic_boost") else 0.0,
+            "primary_topic": getattr(hit, "primary_topic", None),
+            "secondary_topics": list(getattr(hit, "secondary_topics", []) or []),
         }
         for hit in hits
     ]
@@ -3324,6 +3336,7 @@ def search(
 
     return {
         "query": q,
+        "retrieval_strategy": retrieval_strategy,
         "count": len(hits),
         "results": results,
     }
@@ -3352,6 +3365,7 @@ def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
         semantic_node_id=request.semantic_node_id,
         semantic_label=request.semantic_label,
         semantic_mode=request.semantic_mode,
+        retrieval_strategy=request.retrieval_strategy,
     )
     retrieval_ms = round((time.perf_counter() - started) * 1000.0, 3)
     rerank_summary = _rerank_debug_summary(retrieval_result=retrieval_result)
@@ -3366,12 +3380,14 @@ def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
             "semantic_mode": request.semantic_mode,
             "semantic_node_id": request.semantic_node_id,
             "semantic_label": request.semantic_label,
+            "retrieval_strategy": request.retrieval_strategy,
         },
         "embedding_cache": _active_embedding_cache_summary(db=db),
         "rerank": rerank_summary,
         "timing_ms": {
             "retrieval": retrieval_ms,
         },
+        "query_rewrite": dict(retrieval_result.debug_info.get("query_rewrite") or {}),
         "results": [
             {
                 "chunk_id": context.chunk_id,
@@ -3384,6 +3400,8 @@ def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
                     "url": context.document_url,
                 },
                 "semantic_topic_labels": list(context.semantic_topic_labels),
+                "primary_topic": context.primary_topic,
+                "secondary_topics": list(context.secondary_topics),
             }
             for context in retrieval_result.contexts
         ],

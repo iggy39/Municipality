@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from municipality.models import DocumentSection, RetrievalArtifact
 from municipality.rag_structure import build_structured_document
+from municipality.topic_classifier import ArtifactTopicClassifier
 
 
 @dataclass(slots=True)
@@ -23,6 +24,7 @@ class StructuredIndexingResult:
     embedding_cached: int = 0
     embedding_enabled: bool = False
     embedding_error_text: str | None = None
+    topic_annotations: int = 0
 
 
 class StructuredIndexingService:
@@ -32,10 +34,12 @@ class StructuredIndexingService:
         *,
         search_service: ArtifactSearchService | None = None,
         embedding_service: ChunkEmbeddingService | None = None,
+        topic_classifier: ArtifactTopicClassifier | None = None,
     ):
         self.session = session
         self.search_service = search_service or ArtifactSearchService(session)
         self.embedding_service = embedding_service or ArtifactEmbeddingService(session)
+        self.topic_classifier = topic_classifier or ArtifactTopicClassifier(session)
 
     def replace_document_structure(
         self,
@@ -106,6 +110,7 @@ class StructuredIndexingService:
                 for artifact in build_result.artifacts
             ]
         )
+        topic_annotations = self.topic_classifier.annotate_document_version(document_version_id=document_version_id)
         return StructuredIndexingResult(
             section_count=len(build_result.sections),
             artifact_count=len(build_result.artifacts),
@@ -114,4 +119,5 @@ class StructuredIndexingService:
             embedding_cached=embedding_result.cached,
             embedding_enabled=embedding_result.enabled,
             embedding_error_text=embedding_result.error_text,
+            topic_annotations=topic_annotations,
         )

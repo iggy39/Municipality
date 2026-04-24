@@ -7,6 +7,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from municipality.layout_parser import parse_pdf_layout
+
 
 HEBREW_CHAR_RE = re.compile(r"[\u0590-\u05FF]")
 BIDI_CONTROL_RE = re.compile(r"[\u200E\u200F\u202A-\u202E]")
@@ -20,7 +22,7 @@ class ExtractedPage:
     start_offset: int
     end_offset: int
     reading_direction: str | None = None
-    layout_blocks: list[dict[str, int | str]] = field(default_factory=list)
+    layout_blocks: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -44,6 +46,24 @@ class PdfTextExtractor:
         self.timeout_seconds = timeout_seconds
 
     def extract(self, pdf_bytes: bytes) -> PdfExtractionResult:
+        layout_result = parse_pdf_layout(pdf_bytes)
+        if layout_result is not None and layout_result.full_text.strip():
+            pages = _pages_from_layout_result(layout_result)
+            quality_score, quality_flags, quality_summary = score_extraction_quality(layout_result.full_text, pages)
+            return PdfExtractionResult(
+                ok=True,
+                parser_name=layout_result.backend_name,
+                parser_version=None,
+                full_text=layout_result.full_text,
+                pages=pages,
+                citation_map=layout_result.citation_map,
+                quality_score=quality_score,
+                quality_flags=quality_flags,
+                quality_summary=quality_summary,
+                error_code=None,
+                warning_text=None,
+            )
+
         if not self.pdftotext_path:
             return PdfExtractionResult(
                 ok=False,
@@ -167,8 +187,8 @@ def normalize_pdf_text(value: str) -> str:
     return "\n".join(line for line in normalized_lines if line)
 
 
-def _layout_blocks_for_page(value: str, *, page_start_offset: int) -> list[dict[str, int | str]]:
-    blocks: list[dict[str, int | str]] = []
+def _layout_blocks_for_page(value: str, *, page_start_offset: int) -> list[dict[str, object]]:
+    blocks: list[dict[str, object]] = []
     cursor = page_start_offset
     for line_index, raw_line in enumerate(value.split("\n")):
         line = str(raw_line or "")
@@ -189,6 +209,32 @@ def _layout_blocks_for_page(value: str, *, page_start_offset: int) -> list[dict[
             }
         )
     return blocks
+
+
+def _pages_from_layout_result(layout_result) -> list[ExtractedPage]:
+    pages: list[ExtractedPage] = []
+    for page in layout_result.pages:
+        page_text = str(page.text or "")
+        page_start = None
+        page_end = None
+        if page.blocks:
+            page_start = min(int(block.get("start_offset") or 0) for block in page.blocks)
+            page_end = max(int(block.get("end_offset") or 0) for block in page.blocks)
+        if page_start is None:
+            page_start = 0
+        if page_end is None:
+            page_end = page_start + len(page_text)
+        pages.append(
+            ExtractedPage(
+                page=page.page,
+                text=page_text,
+                start_offset=page_start,
+                end_offset=page_end,
+                reading_direction=_reading_direction(page_text),
+                layout_blocks=[dict(block) for block in page.blocks],
+            )
+        )
+    return pages
 
 
 def _reading_direction(value: str) -> str | None:

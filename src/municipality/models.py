@@ -205,6 +205,31 @@ class RetrievalArtifact(Base):
     trigram_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ArtifactTopicAnnotation(Base):
+    __tablename__ = "artifact_topic_annotation"
+    __table_args__ = (
+        UniqueConstraint("artifact_id", name="uq_artifact_topic_annotation_artifact_id"),
+        Index("ix_artifact_topic_annotation_primary_norm", "primary_topic_norm"),
+        Index("ix_artifact_topic_annotation_route", "classifier_route"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    artifact_id: Mapped[str] = mapped_column(String(64), ForeignKey("retrieval_artifact.artifact_id"), nullable=False)
+    structural_topic_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    structural_topic_norm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    primary_topic_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    primary_topic_norm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    secondary_topics_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    section_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    classifier_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    classifier_route: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
 class RetrievalArtifactEmbedding(Base):
     __tablename__ = "retrieval_artifact_embedding"
     __table_args__ = (

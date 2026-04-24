@@ -11,6 +11,7 @@ from municipality.artifact_search import ArtifactSearchService
 from municipality.chunking import build_trigrams, normalize_for_search
 from municipality.migrations import apply_all
 from municipality.models import (
+    ArtifactTopicAnnotation,
     ArtifactSemanticLink,
     Document,
     DocumentVersion,
@@ -74,6 +75,43 @@ def test_artifact_search_supports_semantic_boost_and_filter(tmp_path: Path) -> N
         assert lexical_only_hits
         assert all(hit.semantic_boost == 0.0 for hit in lexical_only_hits)
         assert all(hit.semantic_match_count == 0 for hit in lexical_only_hits)
+
+
+def test_artifact_search_uses_topic_annotations_for_topic_terms(tmp_path: Path) -> None:
+    db_path = tmp_path / "artifact_search_topic.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    apply_all(engine, Path("migrations"))
+
+    with Session(engine) as session:
+        service = ArtifactSearchService(session)
+        _transport_node_id, transport_doc_id = _seed_artifact_search_fixture(session, service)
+        session.add(
+            ArtifactTopicAnnotation(
+                artifact_id="artifact-transport",
+                structural_topic_he="תחבורה ובטיחות > תחבורה עירונית",
+                structural_topic_norm="תחבורה ובטיחות תחבורה עירונית",
+                primary_topic_he="תחבורה ובטיחות > תחבורה עירונית",
+                primary_topic_norm="תחבורה ובטיחות תחבורה עירונית",
+                secondary_topics_json=json.dumps(["תחבורה עירונית"], ensure_ascii=False),
+                section_summary="קידום פרויקט תחבורה עירונית",
+                classifier_confidence=0.88,
+                classifier_route="deterministic_structural_refine",
+                provider_name=None,
+                model_name=None,
+            )
+        )
+        session.commit()
+
+        hits = service.search(
+            query="חניה",
+            topic_terms=["תחבורה עירונית"],
+            artifact_kinds=["section_unit"],
+            limit=10,
+        )
+
+        assert hits
+        assert hits[0].document_id == transport_doc_id
+        assert hits[0].primary_topic == "תחבורה ובטיחות > תחבורה עירונית"
 
 
 def _seed_artifact_search_fixture(session: Session, service: ArtifactSearchService) -> tuple[int, int]:

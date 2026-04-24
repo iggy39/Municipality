@@ -175,6 +175,7 @@ class ProcessingService:
                         structure_artifact_count = structure_result.artifact_count
                         structure_step.detail = (
                             f"sections={structure_result.section_count}; artifacts={structure_result.artifact_count}; "
+                            f"topic_annotations={structure_result.topic_annotations}; "
                             f"embed_created={structure_result.embedding_created}; embed_cached={structure_result.embedding_cached}; "
                             f"embed_enabled={structure_result.embedding_enabled}; embed_error={structure_result.embedding_error_text or 'NONE'}"
                         )
