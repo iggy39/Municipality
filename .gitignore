@@ -14,3 +14,5 @@ node_modules/
 Thumbs.db
 npm-debug.log
 yarn-error.log
+tmp_uvicorn_*.log
+rebuild_rag_redesign.log
