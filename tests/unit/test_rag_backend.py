@@ -12,9 +12,6 @@ from municipality.migrations import apply_all
 from municipality.models import Document, DocumentVersion, ExtractedDocument, RetrievalArtifact, SourceSite
 from municipality.rag_arch import RagArchitectureConfig
 from municipality.rag_backend import build_embedding_backend, build_search_backend
-from municipality.search import SearchService
-
-
 def test_rag_arch_defaults_to_v2() -> None:
     config = RagArchitectureConfig.from_env({})
 
@@ -23,13 +20,13 @@ def test_rag_arch_defaults_to_v2() -> None:
     assert config.v2_index_build_enabled is True
 
 
-def test_rag_backend_falls_back_to_legacy_until_v2_artifacts_exist(tmp_path: Path) -> None:
+def test_rag_backend_uses_artifact_services_immediately(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'rag-backend.db'}", future=True)
     apply_all(engine, Path("migrations"))
 
     with Session(engine) as session:
-        assert isinstance(build_search_backend(session=session), SearchService)
-        assert not isinstance(build_embedding_backend(session=session), ArtifactEmbeddingService)
+        assert isinstance(build_search_backend(session=session), ArtifactSearchService)
+        assert isinstance(build_embedding_backend(session=session), ArtifactEmbeddingService)
 
         site = SourceSite(municipality_slug="ashdod", name="Ashdod", root_url="https://example.local")
         session.add(site)

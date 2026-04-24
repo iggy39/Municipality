@@ -16,10 +16,11 @@ from sqlalchemy import and_, func, inspect, select
 
 from municipality.chunking import normalize_for_search
 from municipality.db import build_engine, build_session_factory
-from municipality.embeddings import EmbeddingReranker
+from municipality.embeddings import ChunkEmbeddingService, EmbeddingReranker
 from municipality.fetcher import AssetFetcher
 from municipality.migrations import apply_all
 from municipality.models import (
+    ArtifactSemanticLink,
     Decision,
     DecisionCitation,
     DecisionDocumentLink,
@@ -29,17 +30,15 @@ from municipality.models import (
     MeetingDocumentLink,
     PipelineRun,
     PipelineRunStep,
-    ChunkEmbedding,
     RagAnswerCache,
+    RetrievalArtifact,
     SemanticAlias,
     SemanticCandidateReject,
     SemanticDocumentRun,
     SemanticMention,
     SemanticNode,
-    ChunkSemanticLink,
     DecisionSemanticLink,
     SourceSite,
-    TextChunk,
     Vote,
 )
 from municipality.pipeline import PipelineService
@@ -165,81 +164,42 @@ def _active_embedding_cache_summary(*, db) -> dict[str, Any]:
     model_name = model_client.model_name
     dimensions = model_client.dimensions
 
-    arch_config = RagArchitectureConfig.from_env()
-    use_artifacts = arch_config.uses_v2 and embedding_service.__class__.__name__ == "ArtifactEmbeddingService"
+    from municipality.models import RetrievalArtifact, RetrievalArtifactEmbedding
 
-    if use_artifacts:
-        from municipality.models import RetrievalArtifact, RetrievalArtifactEmbedding
+    total_chunks = int(db.execute(select(func.count(RetrievalArtifact.id))).scalar_one() or 0)
+    embedded_chunks = int(
+        db.execute(
+            select(func.count(func.distinct(RetrievalArtifactEmbedding.artifact_id))).where(
+                RetrievalArtifactEmbedding.model_provider == model_provider,
+                RetrievalArtifactEmbedding.model_name == model_name,
+                RetrievalArtifactEmbedding.dimensions == dimensions,
+            )
+        ).scalar_one()
+        or 0
+    )
 
-        total_chunks = int(db.execute(select(func.count(RetrievalArtifact.id))).scalar_one() or 0)
-        embedded_chunks = int(
-            db.execute(
-                select(func.count(func.distinct(RetrievalArtifactEmbedding.artifact_id))).where(
-                    RetrievalArtifactEmbedding.model_provider == model_provider,
-                    RetrievalArtifactEmbedding.model_name == model_name,
-                    RetrievalArtifactEmbedding.dimensions == dimensions,
-                )
-            ).scalar_one()
-            or 0
+    by_source_rows = db.execute(
+        select(
+            RetrievalArtifact.source_kind,
+            func.count(func.distinct(RetrievalArtifact.artifact_id)),
+            func.count(func.distinct(RetrievalArtifactEmbedding.artifact_id)),
         )
-
-        by_source_rows = db.execute(
-            select(
-                RetrievalArtifact.source_kind,
-                func.count(func.distinct(RetrievalArtifact.artifact_id)),
-                func.count(func.distinct(RetrievalArtifactEmbedding.artifact_id)),
-            )
-            .select_from(RetrievalArtifact)
-            .outerjoin(
-                RetrievalArtifactEmbedding,
-                and_(
-                    RetrievalArtifactEmbedding.artifact_id == RetrievalArtifact.artifact_id,
-                    RetrievalArtifactEmbedding.model_provider == model_provider,
-                    RetrievalArtifactEmbedding.model_name == model_name,
-                    RetrievalArtifactEmbedding.dimensions == dimensions,
-                ),
-            )
-            .group_by(RetrievalArtifact.source_kind)
-            .order_by(RetrievalArtifact.source_kind.asc())
-        ).all()
-        count_label = "total_artifacts"
-        embedded_label = "embedded_artifacts"
-        missing_label = "missing_artifacts"
-    else:
-        total_chunks = int(db.execute(select(func.count(TextChunk.id))).scalar_one() or 0)
-        embedded_chunks = int(
-            db.execute(
-                select(func.count(func.distinct(ChunkEmbedding.chunk_id))).where(
-                    ChunkEmbedding.model_provider == model_provider,
-                    ChunkEmbedding.model_name == model_name,
-                    ChunkEmbedding.dimensions == dimensions,
-                )
-            ).scalar_one()
-            or 0
+        .select_from(RetrievalArtifact)
+        .outerjoin(
+            RetrievalArtifactEmbedding,
+            and_(
+                RetrievalArtifactEmbedding.artifact_id == RetrievalArtifact.artifact_id,
+                RetrievalArtifactEmbedding.model_provider == model_provider,
+                RetrievalArtifactEmbedding.model_name == model_name,
+                RetrievalArtifactEmbedding.dimensions == dimensions,
+            ),
         )
-
-        by_source_rows = db.execute(
-            select(
-                TextChunk.source_kind,
-                func.count(func.distinct(TextChunk.chunk_id)),
-                func.count(func.distinct(ChunkEmbedding.chunk_id)),
-            )
-            .select_from(TextChunk)
-            .outerjoin(
-                ChunkEmbedding,
-                and_(
-                    ChunkEmbedding.chunk_id == TextChunk.chunk_id,
-                    ChunkEmbedding.model_provider == model_provider,
-                    ChunkEmbedding.model_name == model_name,
-                    ChunkEmbedding.dimensions == dimensions,
-                ),
-            )
-            .group_by(TextChunk.source_kind)
-            .order_by(TextChunk.source_kind.asc())
-        ).all()
-        count_label = "total_chunks"
-        embedded_label = "embedded_chunks"
-        missing_label = "missing_chunks"
+        .group_by(RetrievalArtifact.source_kind)
+        .order_by(RetrievalArtifact.source_kind.asc())
+    ).all()
+    count_label = "total_artifacts"
+    embedded_label = "embedded_artifacts"
+    missing_label = "missing_artifacts"
 
     by_source_kind = []
     for source_kind, source_total, source_embedded in by_source_rows:
@@ -258,8 +218,8 @@ def _active_embedding_cache_summary(*, db) -> dict[str, Any]:
     missing_chunks = max(0, total_chunks - embedded_chunks)
     payload = {
         "enabled": embedding_service.is_enabled(),
-        "architecture_version": arch_config.version,
-        "index_kind": "artifact" if use_artifacts else "chunk",
+        "architecture_version": RagArchitectureConfig.from_env().version,
+        "index_kind": "artifact",
         "provider": model_provider,
         "model": model_name,
         "dimensions": dimensions,
@@ -269,10 +229,9 @@ def _active_embedding_cache_summary(*, db) -> dict[str, Any]:
         "coverage_rate": round((embedded_chunks / total_chunks), 4) if total_chunks else 0.0,
         "by_source_type": by_source_kind,
     }
-    if use_artifacts:
-        payload.setdefault("total_chunks", 0)
-        payload.setdefault("embedded_chunks", 0)
-        payload.setdefault("missing_chunks", 0)
+    payload.setdefault("total_chunks", 0)
+    payload.setdefault("embedded_chunks", 0)
+    payload.setdefault("missing_chunks", 0)
     return payload
 
 
@@ -2262,179 +2221,6 @@ TOPIC_CUE_TOKENS = {
     "רשות",
 }
 
-PROCEDURAL_ALLOCATION_NEIGHBOR_PATTERNS = [
-    re.compile(r"מאשרים\s+החלטת\s+הועדה\s+המקצועית\s+להקצאות\s+קרקע"),
-    re.compile(r"מאשרים\s+ביצוע\s+פרסום\s+(?:זמני|ראשון|שני)\s+בעיתונות"),
-    re.compile(r"פרסום\s+שני\s+בעיתונות"),
-]
-NEIGHBOR_METADATA_CUE_TOKENS = {
-    "מהות הבקשה",
-    "גוש",
-    "חלקה",
-    "מגרש",
-    "כתובת",
-    "שטח",
-    "שימושים",
-    "תאור",
-}
-PROTOCOL_NEIGHBOR_LOOKBACK_CHUNKS = 8
-PROTOCOL_NEIGHBOR_LOOKAHEAD_CHUNKS = 2
-PROTOCOL_NEIGHBOR_MAX_ADDED = 80
-
-
-def _context_is_procedural_allocation_target(context: RagContextChunk) -> bool:
-    if context.source_kind != "protocol":
-        return False
-    text = normalize_for_search(f"{context.chunk_text} {context.snippet}")
-    if not text or "הקצא" not in text:
-        return False
-    for pattern in PROCEDURAL_ALLOCATION_NEIGHBOR_PATTERNS:
-        if pattern.search(text):
-            return True
-    return False
-
-
-def _is_neighbor_metadata_candidate(text_value: str) -> bool:
-    normalized = normalize_for_search(text_value)
-    if not normalized:
-        return False
-    return any(token in normalized for token in NEIGHBOR_METADATA_CUE_TOKENS)
-
-
-def _augment_protocol_neighbor_contexts(
-    *,
-    db,
-    contexts: list[RagContextChunk],
-) -> list[RagContextChunk]:
-    if not contexts:
-        return contexts
-
-    existing_chunk_ids = {str(context.chunk_id) for context in contexts if context.chunk_id}
-    template_by_doc: dict[int, RagContextChunk] = {}
-    for context in contexts:
-        if context.source_kind != "protocol":
-            continue
-        template_by_doc.setdefault(int(context.document_id), context)
-
-    target_contexts = [context for context in contexts if _context_is_procedural_allocation_target(context)]
-    if not target_contexts:
-        return contexts
-
-    target_chunk_ids = [str(context.chunk_id) for context in target_contexts if context.chunk_id]
-    if not target_chunk_ids:
-        return contexts
-
-    target_rows = db.execute(
-        select(TextChunk.chunk_id, TextChunk.document_id, TextChunk.chunk_index)
-        .where(TextChunk.chunk_id.in_(target_chunk_ids))
-        .where(TextChunk.source_kind == "protocol")
-    ).all()
-    if not target_rows:
-        return contexts
-
-    added_rows: dict[str, Any] = {}
-    for chunk_id, document_id, chunk_index in target_rows:
-        if chunk_index is None:
-            continue
-        try:
-            index_value = int(chunk_index)
-        except (TypeError, ValueError):
-            continue
-
-        neighbor_rows = db.execute(
-            select(
-                TextChunk.chunk_id,
-                TextChunk.document_id,
-                TextChunk.chunk_index,
-                TextChunk.chunk_text,
-                TextChunk.start_page,
-                TextChunk.end_page,
-                TextChunk.citation_label,
-            )
-            .where(TextChunk.document_id == int(document_id))
-            .where(TextChunk.source_kind == "protocol")
-            .where(TextChunk.chunk_index >= index_value - PROTOCOL_NEIGHBOR_LOOKBACK_CHUNKS)
-            .where(TextChunk.chunk_index <= index_value + PROTOCOL_NEIGHBOR_LOOKAHEAD_CHUNKS)
-            .order_by(TextChunk.chunk_index.asc())
-        ).all()
-
-        for row in neighbor_rows:
-            neighbor_chunk_id = str(row[0])
-            if neighbor_chunk_id in existing_chunk_ids or neighbor_chunk_id in added_rows:
-                continue
-            neighbor_text = str(row[3] or "")
-            if not _is_neighbor_metadata_candidate(neighbor_text):
-                continue
-            added_rows[neighbor_chunk_id] = row
-            if len(added_rows) >= PROTOCOL_NEIGHBOR_MAX_ADDED:
-                break
-        if len(added_rows) >= PROTOCOL_NEIGHBOR_MAX_ADDED:
-            break
-
-    if not added_rows:
-        return contexts
-
-    semantic_labels_by_chunk: dict[str, list[str]] = {}
-    semantic_rows = db.execute(
-        select(ChunkSemanticLink.chunk_id, SemanticNode.pref_label_he)
-        .join(SemanticNode, SemanticNode.id == ChunkSemanticLink.semantic_node_id)
-        .where(ChunkSemanticLink.chunk_id.in_(list(added_rows.keys())))
-        .where(SemanticNode.node_kind == "topic")
-    ).all()
-    for chunk_id, label_he in semantic_rows:
-        key = str(chunk_id)
-        label = str(label_he or "").strip()
-        if not label:
-            continue
-        bucket = semantic_labels_by_chunk.setdefault(key, [])
-        normalized = normalize_for_search(label)
-        if normalized and normalized not in {normalize_for_search(existing) for existing in bucket}:
-            bucket.append(label)
-
-    added_contexts: list[RagContextChunk] = []
-    for row in added_rows.values():
-        neighbor_chunk_id = str(row[0])
-        document_id = int(row[1])
-        chunk_index = int(row[2]) if row[2] is not None else None
-        chunk_text = str(row[3] or "")
-        start_page = int(row[4]) if row[4] is not None else None
-        end_page = int(row[5]) if row[5] is not None else None
-        citation_label = str(row[6] or "").strip()
-
-        template = template_by_doc.get(document_id)
-        if template is None:
-            continue
-
-        compact = " ".join(chunk_text.split())
-        snippet = compact[:300]
-        if not citation_label:
-            citation_label = f"p.{start_page}" if start_page is not None else template.citation
-
-        added_contexts.append(
-            RagContextChunk(
-                chunk_id=neighbor_chunk_id,
-                score=max(0.05, float(template.score) * 0.62),
-                snippet=snippet,
-                citation=citation_label,
-                source_kind="protocol",
-                document_id=document_id,
-                document_title=template.document_title,
-                document_url=template.document_url,
-                municipality_slug=template.municipality_slug,
-                meeting_external_id=template.meeting_external_id,
-                start_page=start_page,
-                end_page=end_page,
-                chunk_index=chunk_index,
-                chunk_text=chunk_text,
-                semantic_topic_labels=semantic_labels_by_chunk.get(neighbor_chunk_id, []),
-            )
-        )
-
-    if not added_contexts:
-        return contexts
-    return [*contexts, *added_contexts]
-
-
 def _normalize_headline_text(value: str) -> str:
     cleaned = " ".join(str(value or "").split())
     cleaned = cleaned.replace('"', "").replace("׳", "'").replace("״", "")
@@ -2535,33 +2321,46 @@ def _load_protocol_subject_anchors(
     if not unique_document_ids:
         return {}
 
-    rows = db.execute(
-        select(TextChunk.document_id, TextChunk.chunk_index, TextChunk.chunk_text)
-        .where(TextChunk.document_id.in_(unique_document_ids))
-        .where(TextChunk.source_kind == "protocol")
-        .order_by(TextChunk.document_id.asc(), TextChunk.chunk_index.asc())
+    artifact_rows = db.execute(
+        select(
+            RetrievalArtifact.document_id,
+            RetrievalArtifact.ordinal,
+            RetrievalArtifact.header_path_json,
+            RetrievalArtifact.artifact_kind,
+        )
+        .where(RetrievalArtifact.document_id.in_(unique_document_ids))
+        .where(RetrievalArtifact.source_kind == "protocol")
+        .where(RetrievalArtifact.artifact_kind.in_(("header_anchor", "section_unit", "decision_unit")))
+        .order_by(RetrievalArtifact.document_id.asc(), RetrievalArtifact.ordinal.asc())
     ).all()
+    if artifact_rows:
+        scored: dict[int, dict[str, float]] = {}
+        for document_id, ordinal, header_path_json, artifact_kind in artifact_rows:
+            header_path = _loads_json(header_path_json)
+            if not isinstance(header_path, list):
+                continue
+            depth = len(header_path)
+            for reverse_index, raw_label in enumerate(reversed(header_path), start=1):
+                candidate = _normalize_headline_text(str(raw_label or ""))
+                if _is_ignored_headline(candidate):
+                    continue
+                position_score = 1.0 / max(1, int(ordinal or 0) + 1)
+                depth_bonus = min(0.45, max(0, depth - reverse_index) * 0.08)
+                kind_bonus = 0.18 if artifact_kind == "decision_unit" else 0.1 if artifact_kind == "section_unit" else 0.0
+                bucket = scored.setdefault(int(document_id), {})
+                bucket[candidate] = bucket.get(candidate, 0.0) + position_score + depth_bonus + kind_bonus
+                break
 
-    scored: dict[int, dict[str, float]] = {}
-    for document_id, chunk_index, chunk_text in rows:
-        candidates = _headline_candidates_from_chunk_text(str(chunk_text or ""))
-        if not candidates:
-            continue
-        index_value = int(chunk_index or 0)
-        position_score = 1.0 / max(1, index_value + 1)
-        bucket = scored.setdefault(int(document_id), {})
-        for candidate in candidates:
-            bucket[candidate] = bucket.get(candidate, 0.0) + position_score
-
-    out: dict[int, list[str]] = {}
-    for document_id, candidate_scores in scored.items():
-        ordered = [
-            candidate
-            for candidate, _ in sorted(candidate_scores.items(), key=lambda row: row[1], reverse=True)
-        ]
-        if ordered:
-            out[document_id] = ordered[:5]
-    return out
+        out: dict[int, list[str]] = {}
+        for document_id, candidate_scores in scored.items():
+            ordered = [
+                candidate
+                for candidate, _ in sorted(candidate_scores.items(), key=lambda row: row[1], reverse=True)
+            ]
+            if ordered:
+                out[document_id] = ordered[:5]
+        return out
+    return {}
 
 
 def _load_protocol_semantic_topic_labels(
@@ -2582,36 +2381,37 @@ def _load_protocol_semantic_topic_labels(
     if not unique_document_ids:
         return {}
 
-    rows = db.execute(
-        select(TextChunk.document_id, SemanticNode.pref_label_he, ChunkSemanticLink.confidence)
-        .join(ChunkSemanticLink, ChunkSemanticLink.chunk_id == TextChunk.chunk_id)
-        .join(SemanticNode, SemanticNode.id == ChunkSemanticLink.semantic_node_id)
-        .where(TextChunk.document_id.in_(unique_document_ids))
-        .where(TextChunk.source_kind == "protocol")
+    artifact_rows = db.execute(
+        select(RetrievalArtifact.document_id, SemanticNode.pref_label_he, ArtifactSemanticLink.confidence)
+        .join(ArtifactSemanticLink, ArtifactSemanticLink.artifact_id == RetrievalArtifact.artifact_id)
+        .join(SemanticNode, SemanticNode.id == ArtifactSemanticLink.semantic_node_id)
+        .where(RetrievalArtifact.document_id.in_(unique_document_ids))
+        .where(RetrievalArtifact.source_kind == "protocol")
         .where(SemanticNode.node_kind == "topic")
     ).all()
+    if artifact_rows:
+        scored: dict[int, dict[str, float]] = {}
+        for document_id, label_he, confidence in artifact_rows:
+            label = _sanitize_topic_label(str(label_he or ""), min_tokens=2)
+            if not label:
+                continue
+            bucket = scored.setdefault(int(document_id), {})
+            bucket[label] = bucket.get(label, 0.0) + max(0.0, min(1.0, float(confidence or 0.0)))
 
-    scored: dict[int, dict[str, float]] = {}
-    for document_id, label_he, confidence in rows:
-        label = _sanitize_topic_label(str(label_he or ""), min_tokens=2)
-        if not label:
-            continue
-        bucket = scored.setdefault(int(document_id), {})
-        bucket[label] = bucket.get(label, 0.0) + max(0.0, min(1.0, float(confidence or 0.0)))
-
-    out: dict[int, list[str]] = {}
-    for document_id, label_scores in scored.items():
-        ordered = [
-            label
-            for label, _ in sorted(label_scores.items(), key=lambda row: row[1], reverse=True)
-            if label
-        ]
-        if ordered:
-            out[document_id] = ordered[:6]
-    return out
+        out: dict[int, list[str]] = {}
+        for document_id, label_scores in scored.items():
+            ordered = [
+                label
+                for label, _ in sorted(label_scores.items(), key=lambda row: row[1], reverse=True)
+                if label
+            ]
+            if ordered:
+                out[document_id] = ordered[:6]
+        return out
+    return {}
 
 
-def _load_decision_request_contexts_by_chunk(
+def _load_decision_request_contexts_by_context_id(
     *,
     db,
     contexts: list[RagContextChunk],
@@ -2641,7 +2441,8 @@ def _load_decision_request_contexts_by_chunk(
             DecisionRequestContext.gush,
             DecisionRequestContext.helka,
             DecisionRequestContext.migrash,
-            DecisionRequestContext.source_chunk_ids_json,
+            DecisionRequestContext.source_artifact_ids_json,
+            DecisionRequestContext.metadata_json,
             DecisionRequestContext.confidence,
             Decision.agenda_item,
             Decision.decision_text,
@@ -2657,7 +2458,15 @@ def _load_decision_request_contexts_by_chunk(
 
     contexts_by_document: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
-        source_chunk_ids = _loads_json(row[8])
+        source_artifact_ids = _loads_json(row[8])
+        metadata = _loads_json(row[9])
+        if not isinstance(source_artifact_ids, list):
+            source_artifact_ids = []
+        normalized_artifact_ids = [str(item).strip() for item in source_artifact_ids if str(item).strip()]
+        if not normalized_artifact_ids and isinstance(metadata, dict):
+            raw_artifact_ids = metadata.get("source_artifact_ids")
+            if isinstance(raw_artifact_ids, list):
+                normalized_artifact_ids = [str(item).strip() for item in raw_artifact_ids if str(item).strip()]
         contexts_by_document.setdefault(int(row[1]), []).append(
             {
                 "decision_id": int(row[0]),
@@ -2668,12 +2477,12 @@ def _load_decision_request_contexts_by_chunk(
                 "gush": row[5],
                 "helka": row[6],
                 "migrash": row[7],
-                "source_chunk_ids": source_chunk_ids if isinstance(source_chunk_ids, list) else [],
-                "confidence": float(row[9] or 0.0),
-                "agenda_item": row[10],
-                "decision_text": row[11],
-                "start_offset": int(row[12]) if row[12] is not None else None,
-                "end_offset": int(row[13]) if row[13] is not None else None,
+                "source_artifact_ids": normalized_artifact_ids,
+                "confidence": float(row[10] or 0.0),
+                "agenda_item": row[11],
+                "decision_text": row[12],
+                "start_offset": int(row[13]) if row[13] is not None else None,
+                "end_offset": int(row[14]) if row[14] is not None else None,
             }
         )
 
@@ -2687,7 +2496,7 @@ def _load_decision_request_contexts_by_chunk(
         best_score = float("-inf")
         for candidate in candidates:
             score = float(candidate.get("confidence") or 0.0)
-            if str(context.chunk_id) in {str(item) for item in candidate.get("source_chunk_ids") or []}:
+            if str(context.chunk_id) in {str(item) for item in candidate.get("source_artifact_ids") or []}:
                 score += 2.0
             start_offset = candidate.get("start_offset")
             end_offset = candidate.get("end_offset")
@@ -2726,7 +2535,13 @@ def _decision_request_context_payload(*, db, decision_id: int) -> dict[str, Any]
     if row is None:
         return None
 
-    source_chunk_ids = _loads_json(row.source_chunk_ids_json)
+    source_artifact_ids = _loads_json(row.source_artifact_ids_json)
+    metadata = _loads_json(row.metadata_json)
+    normalized_artifact_ids = [str(item).strip() for item in source_artifact_ids] if isinstance(source_artifact_ids, list) else []
+    if not normalized_artifact_ids and isinstance(metadata, dict):
+        raw_artifact_ids = metadata.get("source_artifact_ids")
+        if isinstance(raw_artifact_ids, list):
+            normalized_artifact_ids = [str(item).strip() for item in raw_artifact_ids if str(item).strip()]
     return {
         "request_subject_he": row.request_subject_he,
         "subject_topic_he": row.subject_topic_he,
@@ -2734,301 +2549,9 @@ def _decision_request_context_payload(*, db, decision_id: int) -> dict[str, Any]
         "gush": row.gush,
         "helka": row.helka,
         "migrash": row.migrash,
-        "source_chunk_ids": source_chunk_ids if isinstance(source_chunk_ids, list) else [],
+        "source_artifact_ids": normalized_artifact_ids,
         "confidence": row.confidence,
     }
-
-
-def _load_topic_leaf_chunk_metadata(
-    *,
-    db,
-    chunk_ids: list[str],
-) -> tuple[dict[str, dict[str, Any]], list[RagContextChunk]]:
-    normalized_chunk_ids = [str(chunk_id).strip() for chunk_id in chunk_ids if str(chunk_id).strip()]
-    if not normalized_chunk_ids:
-        return {}, []
-
-    rows = db.execute(
-        select(
-            TextChunk.chunk_id,
-            TextChunk.document_id,
-            TextChunk.chunk_text,
-            TextChunk.start_page,
-            TextChunk.end_page,
-            TextChunk.start_offset,
-            TextChunk.end_offset,
-            TextChunk.chunk_index,
-            TextChunk.citation_label,
-            Document.title_he,
-            Document.canonical_url,
-        )
-        .join(Document, Document.id == TextChunk.document_id)
-        .where(TextChunk.chunk_id.in_(normalized_chunk_ids))
-    ).all()
-
-    chunk_meta_by_id: dict[str, dict[str, Any]] = {}
-    contexts: list[RagContextChunk] = []
-    for chunk_id, document_id, chunk_text, start_page, end_page, start_offset, end_offset, chunk_index, citation_label, title_he, canonical_url in rows:
-        key = str(chunk_id or "").strip()
-        if not key:
-            continue
-        payload = {
-            "chunk_id": key,
-            "document_id": int(document_id),
-            "chunk_text": str(chunk_text or ""),
-            "start_page": int(start_page) if start_page is not None else None,
-            "end_page": int(end_page) if end_page is not None else None,
-            "start_offset": int(start_offset) if start_offset is not None else None,
-            "end_offset": int(end_offset) if end_offset is not None else None,
-            "chunk_index": int(chunk_index) if chunk_index is not None else None,
-            "citation_label": str(citation_label or "").strip() or None,
-            "document_title": str(title_he or "").strip(),
-            "document_url": str(canonical_url or "").strip(),
-        }
-        chunk_meta_by_id[key] = payload
-        contexts.append(
-            RagContextChunk(
-                chunk_id=key,
-                score=0.0,
-                snippet=payload["chunk_text"][:240],
-                citation=payload["citation_label"],
-                source_kind="protocol",
-                document_id=int(document_id),
-                document_title=payload["document_title"] or "פרוטוקול",
-                document_url=payload["document_url"],
-                municipality_slug="",
-                start_page=payload["start_page"],
-                end_page=payload["end_page"],
-                start_offset=payload["start_offset"],
-                end_offset=payload["end_offset"],
-                chunk_index=payload["chunk_index"],
-                chunk_text=payload["chunk_text"],
-            )
-        )
-    return chunk_meta_by_id, contexts
-
-
-def _load_topic_leaf_neighbor_fields(
-    *,
-    db,
-    chunk_meta_by_id: dict[str, dict[str, Any]],
-) -> dict[str, list[dict[str, Any]]]:
-    if not chunk_meta_by_id:
-        return {}
-
-    document_ids = sorted(
-        {
-            int(meta.get("document_id") or 0)
-            for meta in chunk_meta_by_id.values()
-            if int(meta.get("document_id") or 0) > 0
-        }
-    )
-    if not document_ids:
-        return {}
-
-    rows = db.execute(
-        select(TextChunk.document_id, TextChunk.chunk_id, TextChunk.chunk_index, TextChunk.chunk_text)
-        .where(TextChunk.document_id.in_(document_ids))
-        .where(TextChunk.source_kind == "protocol")
-        .order_by(TextChunk.document_id.asc(), TextChunk.chunk_index.asc())
-    ).all()
-
-    rows_by_document: dict[int, list[dict[str, Any]]] = {}
-    for document_id, neighbor_chunk_id, chunk_index, chunk_text in rows:
-        rows_by_document.setdefault(int(document_id), []).append(
-            {
-                "chunk_id": str(neighbor_chunk_id or "").strip(),
-                "chunk_index": int(chunk_index) if chunk_index is not None else None,
-                "chunk_text": str(chunk_text or ""),
-            }
-        )
-
-    out: dict[str, list[dict[str, Any]]] = {}
-    for chunk_id, meta in chunk_meta_by_id.items():
-        document_id = int(meta.get("document_id") or 0)
-        anchor_index = meta.get("chunk_index")
-        if document_id <= 0 or anchor_index is None:
-            continue
-
-        candidates: list[dict[str, Any]] = []
-        for row in rows_by_document.get(document_id, []):
-            row_index = row.get("chunk_index")
-            if row_index is None:
-                continue
-            if row_index < int(anchor_index) - TOPIC_LEAF_NEIGHBOR_LOOKBACK:
-                continue
-            if row_index > int(anchor_index) + TOPIC_LEAF_NEIGHBOR_LOOKAHEAD:
-                continue
-
-            distance = max(0, int(anchor_index) - int(row_index))
-            chunk_text = str(row.get("chunk_text") or "")
-            for label, value in _structured_topic_fields_from_chunk_text(chunk_text):
-                object_value = _clean_topic_object_value(value)
-                subject_value = _clean_topic_candidate_phrase(value) or object_value
-                score = _topic_object_field_score(label=label, value=value, distance=distance)
-                if score <= 0 or not subject_value:
-                    continue
-                candidates.append(
-                    {
-                        "label": label,
-                        "value": value,
-                        "subject": subject_value,
-                        "object": object_value,
-                        "kind": "structured",
-                        "score": score,
-                        "source_chunk_id": row.get("chunk_id"),
-                    }
-                )
-
-            for candidate in _extract_inline_topic_candidates(chunk_text):
-                if _looks_generic_topic_candidate(candidate):
-                    continue
-                candidates.append(
-                    {
-                        "label": "inline",
-                        "value": candidate,
-                        "subject": candidate,
-                        "object": _clean_topic_object_value(candidate),
-                        "kind": "local_subject",
-                        "score": 1.55 - (distance * 0.18),
-                        "source_chunk_id": row.get("chunk_id"),
-                    }
-                )
-
-        deduped: dict[str, dict[str, Any]] = {}
-        for candidate in sorted(candidates, key=lambda item: float(item.get("score") or 0.0), reverse=True):
-            key = normalize_for_search(str(candidate.get("subject") or candidate.get("object") or ""))
-            if not key or key in deduped:
-                continue
-            deduped[key] = candidate
-        if deduped:
-            out[chunk_id] = list(deduped.values())[:TOPIC_LOCAL_SUBJECT_MAX_CANDIDATES]
-    return out
-
-
-def _load_topic_leaf_local_semantic_candidates(
-    *,
-    db,
-    chunk_meta_by_id: dict[str, dict[str, Any]],
-) -> dict[str, list[dict[str, Any]]]:
-    if not chunk_meta_by_id:
-        return {}
-
-    document_ids = sorted(
-        {
-            int(meta.get("document_id") or 0)
-            for meta in chunk_meta_by_id.values()
-            if int(meta.get("document_id") or 0) > 0
-        }
-    )
-    if not document_ids:
-        return {}
-
-    rows = db.execute(
-        select(
-            TextChunk.document_id,
-            TextChunk.chunk_id,
-            TextChunk.chunk_index,
-            SemanticNode.pref_label_he,
-            ChunkSemanticLink.confidence,
-        )
-        .join(ChunkSemanticLink, ChunkSemanticLink.chunk_id == TextChunk.chunk_id)
-        .join(SemanticNode, SemanticNode.id == ChunkSemanticLink.semantic_node_id)
-        .where(TextChunk.document_id.in_(document_ids))
-        .where(TextChunk.source_kind == "protocol")
-        .where(SemanticNode.node_kind == "topic")
-        .order_by(TextChunk.document_id.asc(), TextChunk.chunk_index.asc())
-    ).all()
-
-    rows_by_document: dict[int, list[dict[str, Any]]] = {}
-    for document_id, neighbor_chunk_id, chunk_index, pref_label_he, confidence in rows:
-        object_value = _clean_topic_object_value(str(pref_label_he or ""))
-        rows_by_document.setdefault(int(document_id), []).append(
-            {
-                "chunk_id": str(neighbor_chunk_id or "").strip(),
-                "chunk_index": int(chunk_index) if chunk_index is not None else None,
-                "subject": _clean_topic_candidate_phrase(str(pref_label_he or "")) or object_value,
-                "object": object_value,
-                "score": float(confidence or 0.0),
-            }
-        )
-
-    out: dict[str, list[dict[str, Any]]] = {}
-    for chunk_id, meta in chunk_meta_by_id.items():
-        document_id = int(meta.get("document_id") or 0)
-        anchor_index = meta.get("chunk_index")
-        if document_id <= 0 or anchor_index is None:
-            continue
-
-        deduped: dict[str, dict[str, Any]] = {}
-        for row in rows_by_document.get(document_id, []):
-            row_index = row.get("chunk_index")
-            if row_index is None:
-                continue
-            if row_index < int(anchor_index) - TOPIC_LEAF_NEIGHBOR_LOOKBACK:
-                continue
-            if row_index > int(anchor_index) + TOPIC_LEAF_NEIGHBOR_LOOKAHEAD:
-                continue
-
-            subject = str(row.get("subject") or "")
-            if not subject or _looks_generic_topic_candidate(subject) or _is_procedural_topic_phrase(subject):
-                continue
-            distance = max(0, int(anchor_index) - int(row_index))
-            score = max(0.0, float(row.get("score") or 0.0)) + 1.5 - (distance * 0.15)
-            if str(row.get("chunk_id") or "") == chunk_id:
-                score += 0.6
-            key = normalize_for_search(subject)
-            existing = deduped.get(key)
-            payload = {
-                "label": "semantic_local",
-                "value": subject,
-                "subject": subject,
-                "object": str(row.get("object") or _clean_topic_object_value(subject) or ""),
-                "kind": "semantic_local",
-                "score": score,
-                "source_chunk_id": row.get("chunk_id"),
-            }
-            if existing is None or float(existing.get("score") or 0.0) < score:
-                deduped[key] = payload
-        if deduped:
-            ordered = sorted(deduped.values(), key=lambda item: float(item.get("score") or 0.0), reverse=True)
-            out[chunk_id] = ordered[:TOPIC_LOCAL_SUBJECT_MAX_CANDIDATES]
-    return out
-
-
-def _load_topic_leaf_support_documents(
-    *,
-    db,
-    decision_ids: list[int],
-) -> dict[int, list[dict[str, Any]]]:
-    normalized_decision_ids = sorted({int(decision_id) for decision_id in decision_ids if int(decision_id) > 0})
-    if not normalized_decision_ids:
-        return {}
-
-    rows = db.execute(
-        select(DecisionDocumentLink, Document)
-        .join(Document, Document.id == DecisionDocumentLink.document_id)
-        .where(DecisionDocumentLink.decision_id.in_(normalized_decision_ids))
-        .where(DecisionDocumentLink.source_type != "protocol")
-        .where(DecisionDocumentLink.provenance != "heuristic")
-        .order_by(DecisionDocumentLink.decision_id.asc(), Document.id.asc())
-    ).all()
-
-    out: dict[int, list[dict[str, Any]]] = {}
-    for link, document in rows:
-        decision_id = int(link.decision_id)
-        bucket = out.setdefault(decision_id, [])
-        bucket.append(
-            {
-                "id": int(document.id),
-                "title": str(document.title_he or "").strip() or "מסמך תומך",
-                "url": str(document.canonical_url or "").strip(),
-                "doc_kind": document.doc_kind,
-                "source_type": link.source_type,
-                "provenance": link.provenance,
-            }
-        )
-    return out
 
 
 def _load_semantic_topic_candidate_bank(*, db) -> list[dict[str, Any]]:
@@ -3053,88 +2576,6 @@ def _load_semantic_topic_candidate_bank(*, db) -> list[dict[str, Any]]:
                 "support_count": int(support_count or 0),
             }
     return list(deduped.values())
-
-
-def _decision_context_seed_topic(*, request_subject_he: str | None, subject_topic_he: str | None, agenda_item: str | None) -> str:
-    agenda_item_candidate = _sanitize_topic_label(str(agenda_item or ""), min_tokens=2, max_tokens=6)
-    subject_topic_candidate = _sanitize_topic_label(str(subject_topic_he or ""), min_tokens=2, max_tokens=6)
-    request_subject_candidate = _compact_request_subject_for_topic(str(request_subject_he or "")) or ""
-
-    if subject_topic_candidate and not _topic_leaf_is_low_quality(subject_topic_candidate):
-        return subject_topic_candidate
-    if agenda_item_candidate and not _topic_leaf_is_low_quality(agenda_item_candidate):
-        return agenda_item_candidate
-    if request_subject_candidate:
-        return request_subject_candidate
-    if agenda_item_candidate:
-        return agenda_item_candidate
-    if subject_topic_candidate:
-        return subject_topic_candidate
-    return "החלטה כללית"
-
-
-def _load_supplemental_topic_rows_from_decision_context(
-    *,
-    db,
-    existing_cache_chunk_ids: set[str],
-    existing_cache_decision_ids: set[int],
-) -> list[tuple[str, str, str, str, str, datetime | None]]:
-    if not inspect(db.get_bind()).has_table("decision_request_context"):
-        return []
-
-    rows = db.execute(
-        select(
-            DecisionRequestContext.decision_id,
-            DecisionRequestContext.source_document_id,
-            DecisionRequestContext.request_subject_he,
-            DecisionRequestContext.subject_topic_he,
-            DecisionRequestContext.source_chunk_ids_json,
-            DecisionRequestContext.updated_at,
-            Decision.agenda_item,
-            Decision.decision_text,
-            Document.title_he,
-        )
-        .join(Decision, Decision.id == DecisionRequestContext.decision_id)
-        .join(Document, Document.id == DecisionRequestContext.source_document_id)
-        .order_by(DecisionRequestContext.id.asc())
-    ).all()
-
-    out: list[tuple[str, str, str, str, str, datetime | None]] = []
-    for decision_id, _source_document_id, request_subject_he, subject_topic_he, source_chunk_ids_json, updated_at, agenda_item, decision_text, title_he in rows:
-        decision_id_int = int(decision_id)
-        if decision_id_int in existing_cache_decision_ids:
-            continue
-        parsed_chunk_ids = _loads_json(source_chunk_ids_json)
-        source_chunk_ids = [str(item).strip() for item in parsed_chunk_ids] if isinstance(parsed_chunk_ids, list) else []
-        source_chunk_ids = [chunk_id for chunk_id in source_chunk_ids if chunk_id]
-        if not source_chunk_ids:
-            continue
-        if any(chunk_id in existing_cache_chunk_ids for chunk_id in source_chunk_ids):
-            continue
-
-        seed_topic = _decision_context_seed_topic(
-            request_subject_he=str(request_subject_he or ""),
-            subject_topic_he=str(subject_topic_he or ""),
-            agenda_item=str(agenda_item or ""),
-        )
-        if not seed_topic:
-            continue
-
-        summary_he = str(decision_text or request_subject_he or agenda_item or "").strip()
-        if not summary_he:
-            continue
-
-        out.append(
-            (
-                f"decision-context:{decision_id_int}",
-                source_chunk_ids[0],
-                summary_he,
-                str(title_he or "").strip(),
-                seed_topic,
-                updated_at if isinstance(updated_at, datetime) else None,
-            )
-        )
-    return out
 
 
 def _is_procedural_topic_phrase(value: str) -> bool:
@@ -3479,14 +2920,7 @@ def _run_ask(
     )
     retrieval_ms = round((time.perf_counter() - retrieval_started) * 1000.0, 3)
 
-    answering_contexts = (
-        list(retrieval_result.contexts)
-        if arch_config.uses_v2
-        else _augment_protocol_neighbor_contexts(
-            db=db,
-            contexts=list(retrieval_result.contexts),
-        )
-    )
+    answering_contexts = list(retrieval_result.contexts)
     answering_contexts, context_dedupe_stats = _collapse_duplicate_answering_contexts(
         embedding_service=embedding_service,
         question=request.question,
@@ -3515,7 +2949,7 @@ def _run_ask(
         db=db,
         protocol_document_ids=protocol_document_ids,
     )
-    decision_request_context_by_chunk = _load_decision_request_contexts_by_chunk(
+    decision_request_context_by_context_id = _load_decision_request_contexts_by_context_id(
         db=db,
         contexts=retrieval_for_answering.contexts,
     )
@@ -3568,7 +3002,7 @@ def _run_ask(
                 required_source_kinds=request.required_source_types,
                 protocol_subject_anchors=protocol_subject_anchors,
                 protocol_semantic_topic_labels=protocol_semantic_topic_labels,
-                decision_request_context_by_chunk=decision_request_context_by_chunk,
+                decision_request_context_by_chunk=decision_request_context_by_context_id,
                 ask_request_id=ask_request_id,
             )
     if answer_result is None:
@@ -4940,12 +4374,12 @@ def semantic_node_detail(node_id: int, db=Depends(get_db)) -> dict:
         .order_by(Decision.id.asc())
     ).all()
 
-    chunk_rows = db.execute(
-        select(ChunkSemanticLink, TextChunk, Document)
-        .join(TextChunk, TextChunk.chunk_id == ChunkSemanticLink.chunk_id)
-        .join(Document, Document.id == TextChunk.document_id)
-        .where(ChunkSemanticLink.semantic_node_id == node.id)
-        .order_by(TextChunk.document_id.asc(), TextChunk.chunk_index.asc())
+    artifact_rows = db.execute(
+        select(ArtifactSemanticLink, RetrievalArtifact, Document)
+        .join(RetrievalArtifact, RetrievalArtifact.artifact_id == ArtifactSemanticLink.artifact_id)
+        .join(Document, Document.id == RetrievalArtifact.document_id)
+        .where(ArtifactSemanticLink.semantic_node_id == node.id)
+        .order_by(RetrievalArtifact.document_id.asc(), RetrievalArtifact.ordinal.asc())
     ).all()
 
     mention_rows = db.execute(
@@ -4988,23 +4422,25 @@ def semantic_node_detail(node_id: int, db=Depends(get_db)) -> dict:
             }
             for link, decision, document, meeting in decision_rows
         ],
-        "linked_chunks": [
+        "linked_artifacts": [
             {
-                "chunk_id": chunk.chunk_id,
+                "artifact_id": artifact.artifact_id,
                 "confidence": link.confidence,
                 "source_mention_id": link.source_mention_id,
-                "source_type": chunk.source_kind,
-                "citation": chunk.citation_label,
-                "start_page": chunk.start_page,
-                "end_page": chunk.end_page,
+                "source_type": artifact.source_kind,
+                "artifact_kind": artifact.artifact_kind,
+                "header_path": _loads_json(artifact.header_path_json) or [],
+                "citation": artifact.citation_label,
+                "start_page": artifact.start_page,
+                "end_page": artifact.end_page,
                 "document": {
                     "id": document.id,
                     "title": document.title_he,
                     "url": document.canonical_url,
                 },
-                "snippet": chunk.chunk_text[:240],
+                "snippet": str(artifact.body_text or artifact.retrieval_text or "")[:240],
             }
-            for link, chunk, document in chunk_rows
+            for link, artifact, document in artifact_rows
         ],
         "mentions": [
             {

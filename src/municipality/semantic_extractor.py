@@ -21,6 +21,11 @@ from municipality.semantic_contract import (
 )
 
 
+SEMANTIC_PROVIDER_BYTEZ = "bytez"
+SEMANTIC_PROVIDER_AI21 = "ai21"
+DEFAULT_AI21_API_URL = "https://api.ai21.com/studio/v1/chat/completions"
+
+
 @dataclass(slots=True)
 class SemanticModelResponse:
     payload: dict[str, Any] | None
@@ -168,6 +173,155 @@ class BytezSemanticClient:
         )
 
 
+class AI21SemanticClient:
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        endpoint: str | None = None,
+        timeout_seconds: float = 60.0,
+        model_name: str = "jamba-mini",
+        max_attempts: int = 3,
+        retry_backoff_seconds: float = 0.75,
+    ):
+        self.api_key = api_key if api_key is not None else os.getenv("AI21_API_KEY")
+        self.endpoint = endpoint or os.getenv("AI21_API_URL", DEFAULT_AI21_API_URL)
+        self.timeout_seconds = timeout_seconds
+        self._model_name = model_name
+        self.max_attempts = max(1, int(max_attempts))
+        self.retry_backoff_seconds = max(0.0, float(retry_backoff_seconds))
+
+    @property
+    def provider_name(self) -> str:
+        return SEMANTIC_PROVIDER_AI21
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    def is_configured(self) -> bool:
+        return bool(self.api_key)
+
+    def extract_semantic(self, *, request_payload: dict[str, Any]) -> SemanticModelResponse:
+        if not self.api_key:
+            return SemanticModelResponse(
+                payload=None,
+                request_tokens=None,
+                response_tokens=None,
+                error_code="MODEL_NOT_CONFIGURED",
+                error_text="AI21_API_KEY is not configured",
+            )
+
+        body = {
+            "model": self.model_name,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": request_payload.get("system_instruction", "")},
+                {
+                    "role": "user",
+                    "content": json.dumps(request_payload, ensure_ascii=False),
+                },
+            ],
+        }
+
+        payload: dict[str, Any] | None = None
+        last_exception: Exception | None = None
+        for attempt_index in range(1, self.max_attempts + 1):
+            try:
+                with httpx.Client(timeout=self.timeout_seconds) as client:
+                    response = client.post(
+                        self.endpoint,
+                        headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                        json=body,
+                    )
+                    response.raise_for_status()
+                    parsed_payload = response.json()
+                if isinstance(parsed_payload, dict):
+                    payload = parsed_payload
+                    last_exception = None
+                    break
+                last_exception = ValueError("response JSON root is not an object")
+            except Exception as exc:  # noqa: BLE001
+                last_exception = exc
+
+            if attempt_index < self.max_attempts and self.retry_backoff_seconds > 0.0:
+                time.sleep(self.retry_backoff_seconds * attempt_index)
+
+        if payload is None:
+            error_suffix = f"; attempts={self.max_attempts}" if self.max_attempts > 1 else ""
+            if last_exception is None:
+                error_text = f"model response payload missing{error_suffix}"
+            else:
+                error_text = f"{last_exception.__class__.__name__}:{last_exception}{error_suffix}"
+            return SemanticModelResponse(
+                payload=None,
+                request_tokens=None,
+                response_tokens=None,
+                error_code="MODEL_REQUEST_FAILED",
+                error_text=error_text,
+            )
+
+        usage = payload.get("usage") if isinstance(payload, dict) else {}
+        request_tokens = _as_int(usage.get("prompt_tokens")) if isinstance(usage, dict) else None
+        response_tokens = _as_int(usage.get("completion_tokens")) if isinstance(usage, dict) else None
+
+        content = _extract_response_content(payload)
+        if content is None:
+            return SemanticModelResponse(
+                payload=None,
+                request_tokens=request_tokens,
+                response_tokens=response_tokens,
+                error_code="MODEL_EMPTY_RESPONSE",
+                error_text="missing model response content",
+            )
+
+        parsed = _parse_json_content(content)
+        if not isinstance(parsed, dict):
+            return SemanticModelResponse(
+                payload=None,
+                request_tokens=request_tokens,
+                response_tokens=response_tokens,
+                error_code="MODEL_INVALID_JSON",
+                error_text=_invalid_json_error_text(content),
+            )
+
+        return SemanticModelResponse(
+            payload=parsed,
+            request_tokens=request_tokens,
+            response_tokens=response_tokens,
+            error_code=None,
+            error_text=None,
+        )
+
+
+def build_semantic_model_client() -> SemanticModelClient:
+    provider = (os.getenv("SEMANTIC_MODEL_PROVIDER") or SEMANTIC_PROVIDER_BYTEZ).strip().casefold()
+    default_model_name = "jamba-mini" if provider == SEMANTIC_PROVIDER_AI21 else BYTEZ_MODEL
+    model_name = (os.getenv("SEMANTIC_MODEL") or default_model_name).strip() or default_model_name
+    timeout_seconds = _env_float(os.getenv("SEMANTIC_MODEL_TIMEOUT_SECONDS"), default=60.0)
+    max_attempts = _env_int(os.getenv("SEMANTIC_MODEL_MAX_ATTEMPTS"), default=3)
+    retry_backoff_seconds = _env_float(os.getenv("SEMANTIC_MODEL_RETRY_BACKOFF_SECONDS"), default=0.75)
+
+    if provider == SEMANTIC_PROVIDER_AI21:
+        ai21_model = model_name if model_name else "jamba-mini"
+        return AI21SemanticClient(
+            model_name=ai21_model,
+            endpoint=os.getenv("AI21_API_URL", DEFAULT_AI21_API_URL),
+            timeout_seconds=timeout_seconds,
+            max_attempts=max_attempts,
+            retry_backoff_seconds=retry_backoff_seconds,
+        )
+
+    return BytezSemanticClient(
+        model_name=model_name,
+        endpoint=os.getenv("BYTEZ_API_URL", DEFAULT_BYTEZ_API_URL),
+        timeout_seconds=timeout_seconds,
+        max_attempts=max_attempts,
+        retry_backoff_seconds=retry_backoff_seconds,
+    )
+
+
 @dataclass(slots=True)
 class SemanticExtractionRunResult:
     run: SemanticDocumentRun
@@ -179,7 +333,7 @@ class SemanticExtractionRunResult:
 class SemanticExtractor:
     def __init__(self, session: Session, *, model_client: SemanticModelClient | None = None):
         self.session = session
-        self.model_client = model_client or BytezSemanticClient()
+        self.model_client = model_client or build_semantic_model_client()
 
     def extract_once(
         self,
@@ -529,3 +683,21 @@ def _as_int(value: Any) -> int | None:
         if compact.isdigit():
             return int(compact)
     return None
+
+
+def _env_int(value: str | None, *, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return default
+
+
+def _env_float(value: str | None, *, default: float) -> float:
+    if value is None:
+        return default
+    try:
+        return max(1.0e-6, float(value))
+    except ValueError:
+        return default

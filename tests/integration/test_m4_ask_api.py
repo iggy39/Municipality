@@ -13,13 +13,13 @@ from municipality.chunking import build_chunks
 from municipality.extraction import parse_extracted_text
 from municipality.migrations import apply_all
 from municipality.models import (
-    ChunkSemanticLink,
+    ArtifactSemanticLink,
     Document,
     DocumentVersion,
     ExtractedDocument,
+    RetrievalArtifact,
     SemanticNode,
     SourceSite,
-    TextChunk,
 )
 from municipality.rag_llm import MockRagProvider, RagLlmConfig, build_rag_llm_client
 from municipality.search import SearchService
@@ -207,7 +207,7 @@ def test_m4_ask_api_semantic_filter_preserves_citation_first_refusal(tmp_path: P
         protocol_chunk_id, _attachment_chunk_id = _seed_mixed_source_chunks(session)
 
         protocol_chunk = session.execute(
-            select(TextChunk).where(TextChunk.chunk_id == protocol_chunk_id)
+            select(RetrievalArtifact).where(RetrievalArtifact.artifact_id == protocol_chunk_id)
         ).scalar_one()
         protocol_document = session.execute(
             select(Document).where(Document.id == protocol_chunk.document_id)
@@ -235,8 +235,8 @@ def test_m4_ask_api_semantic_filter_preserves_citation_first_refusal(tmp_path: P
         session.flush()
 
         session.add(
-            ChunkSemanticLink(
-                chunk_id=protocol_chunk_id,
+            ArtifactSemanticLink(
+                artifact_id=protocol_chunk_id,
                 semantic_node_id=semantic_node.id,
                 confidence=0.95,
                 source_mention_id=None,
@@ -354,14 +354,14 @@ def _seed_mixed_source_chunks(session: Session) -> tuple[str, str]:
     )
 
     protocol_chunk = session.execute(
-        select(TextChunk.chunk_id)
-        .where(TextChunk.document_version_id == protocol_ver.id)
-        .order_by(TextChunk.chunk_index.asc())
+        select(RetrievalArtifact.artifact_id)
+        .where(RetrievalArtifact.document_version_id == protocol_ver.id)
+        .order_by(RetrievalArtifact.ordinal.asc())
     ).scalars().first()
     attachment_chunk = session.execute(
-        select(TextChunk.chunk_id)
-        .where(TextChunk.document_version_id == attachment_ver.id)
-        .order_by(TextChunk.chunk_index.asc())
+        select(RetrievalArtifact.artifact_id)
+        .where(RetrievalArtifact.document_version_id == attachment_ver.id)
+        .order_by(RetrievalArtifact.ordinal.asc())
     ).scalars().first()
 
     if protocol_chunk is None or attachment_chunk is None:

@@ -108,7 +108,7 @@ def test_rag_retrieval_forwards_semantic_selector_params_to_search() -> None:
     assert first_call["semantic_label"] == "תחבורה עירונית"
 
 
-def test_rag_retrieval_broad_decision_query_augments_protocol_coverage() -> None:
+def test_rag_retrieval_keeps_direct_artifact_ranking_for_broad_decision_queries() -> None:
     search = StubSearchService(
         {
             "all": [
@@ -155,11 +155,11 @@ def test_rag_retrieval_broad_decision_query_augments_protocol_coverage() -> None
     assert len(result.contexts) == 3
     assert {context.document_id for context in result.contexts} == {10, 11, 12}
     assert {context.chunk_id for context in result.contexts} == {
-        "p-10-decision",
+        "p-10-generic",
         "p-11-decision",
-        "p-12-decision",
+        "p-12-generic",
     }
-    assert any(call.get("source_type") == "protocol" for call in search.calls)
+    assert all(call.get("source_type") in {None, "all"} for call in search.calls)
 
 
 def test_rag_retrieval_exposes_topic_semantic_labels_in_context() -> None:

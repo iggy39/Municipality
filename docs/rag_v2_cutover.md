@@ -1,10 +1,9 @@
 # RAG V2 Cutover
 
-This repository now includes the first buildable slice of the hierarchy-aware Hebrew municipal RAG redesign.
+This repository now runs the hierarchy-aware Hebrew municipal RAG redesign as the active architecture.
 
 ## What Changed
 
-- Added `RAG_ARCH_VERSION` with `v1`/`v2` in `src/municipality/rag_arch.py`.
 - Added structure-aware storage in `migrations/012_m12_rag_v2_structure.sql`:
   - `document_section`
   - `retrieval_artifact`
@@ -15,43 +14,45 @@ This repository now includes the first buildable slice of the hierarchy-aware He
 - Added artifact indexing in `src/municipality/structured_indexing.py`.
 - Added v2 lexical retrieval backend in `src/municipality/artifact_search.py`.
 - Added v2 embedding backend in `src/municipality/artifact_embeddings.py`.
-- Added runtime backend selection in `src/municipality/rag_backend.py`.
+- Added artifact-native semantic links in `migrations/013_m13_rag_v2_semantic_links.sql`.
+- Added legacy-schema removal and artifact-native decision-context migration in `migrations/014_m14_remove_legacy_chunk_rag.sql`.
 - Added AI21 answer-provider support in `src/municipality/rag_llm.py`.
+- Added AI21 semantic-extraction support in `src/municipality/semantic_extractor.py`.
 
 ## Runtime Flags
 
-- `RAG_ARCH_VERSION=v1|v2`
-  - `v1`: existing chunk-first read path.
-  - `v2`: retrieval prefers `retrieval_artifact` and falls back to legacy chunks until v2 artifacts exist.
 - `RAG_V2_INDEX_BUILD_ENABLED=true|false`
-  - Controls whether processing writes v2 sections/artifacts.
-  - Default: enabled when `RAG_ARCH_VERSION=v2`.
+  - Controls whether processing writes structure/artifact rows.
+  - Default: enabled.
 
-## Current Cutover Shape
+## Current Shape
 
-- Processing can keep writing legacy chunks while also writing v2 sections/artifacts.
-- `/ask`, `/search`, and `/ask/debug/retrieval` now prefer v2 automatically once `retrieval_artifact` rows exist.
-- V2 citations now carry `header_path` in addition to page references.
-- Retrieval-set IDs are versioned through the retrieval version string, preventing cache collisions across architectures.
+- Processing writes `document_section` and `retrieval_artifact` only for RAG retrieval.
+- `/ask`, `/search`, and `/ask/debug/retrieval` read artifact-backed retrieval only.
+- Semantic search/filtering is artifact-native through `artifact_semantic_link`.
+- Decision-context provenance is stored as `source_artifact_ids_json`.
+- V2 citations carry `header_path` in addition to page references.
+- Retrieval-set IDs remain versioned through the retrieval version string.
 
 ## Backfill Script
 
 - `python scripts/backfill_rag_v2_structure_from_extracted.py`
+- Full artifact/semantic/context rebuild from extracted docs:
+  - `python scripts/rebuild_rag_redesign_from_extracted.py`
 - Recommended local embedding mode for backfill without external API keys:
 
 ```bash
 RAG_EMBEDDING_PROVIDER=local_hash python scripts/backfill_rag_v2_structure_from_extracted.py
 ```
 
+The full rebuild script replays the latest completed recorded semantic run for each document version by default and avoids fresh semantic model calls unless `--allow-fresh-semantic-calls` is provided.
+
 ## Obsolete Logic Status
 
 - Legacy summary-cache persistence remains a retired no-op.
 - The retired `/topic/tree/cache` endpoint remains retired and points callers to `/semantic/tree`.
-- Old chunk-first infrastructure still exists because decision extraction and some semantic helpers still depend on it during the phased cutover.
+- Legacy chunk-first tables and runtime search/index paths have been removed from the active design.
 
-## Next Removal Targets
+## Architecture Notes
 
-1. Replace chunk-based decision-context derivation with section/artifact-aware context derivation.
-2. Move semantic chunk links to section/artifact links.
-3. Remove unused topic-tree fallback heuristics from `src/municipality/rag_answering.py` and `src/municipality/api.py`.
-4. Delete legacy chunk-first retrieval code after v2 evaluation/backfill signoff.
+- See `docs/rag_current_design.md` for the current end-to-end diagram and detailed explanation.

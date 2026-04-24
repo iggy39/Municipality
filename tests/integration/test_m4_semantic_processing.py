@@ -9,18 +9,18 @@ from sqlalchemy.orm import Session
 from municipality.extraction import PdfExtractionResult, parse_extracted_text, score_extraction_quality
 from municipality.migrations import apply_all
 from municipality.models import (
-    ChunkSemanticLink,
+    ArtifactSemanticLink,
     Document,
     DocumentVersion,
     ExtractedDocument,
     PipelineRunStep,
+    RetrievalArtifact,
     SemanticAlias,
     SemanticCandidateReject,
     SemanticDocumentRun,
     SemanticMention,
     SemanticNode,
     SourceSite,
-    TextChunk,
 )
 from municipality.processing import ProcessingService, SemanticEnrichmentPolicy
 from municipality.semantic_extractor import SemanticExtractor, SemanticModelResponse
@@ -173,19 +173,19 @@ def test_m4_processing_persists_semantic_artifacts_and_rerun_is_idempotent(tmp_p
         processor.run()
 
         extracted_rows = session.execute(select(ExtractedDocument)).scalars().all()
-        chunk_rows = session.execute(select(TextChunk)).scalars().all()
+        artifact_rows = session.execute(select(RetrievalArtifact)).scalars().all()
         semantic_runs = session.execute(select(SemanticDocumentRun)).scalars().all()
         semantic_nodes = session.execute(select(SemanticNode)).scalars().all()
         semantic_aliases = session.execute(select(SemanticAlias)).scalars().all()
         semantic_mentions = session.execute(select(SemanticMention)).scalars().all()
-        chunk_links = session.execute(select(ChunkSemanticLink)).scalars().all()
+        artifact_links = session.execute(select(ArtifactSemanticLink)).scalars().all()
         reject_rows = session.execute(select(SemanticCandidateReject)).scalars().all()
         semantic_steps = session.execute(
             select(PipelineRunStep).where(PipelineRunStep.step_name == "semantic_enrichment")
         ).scalars().all()
 
         assert len(extracted_rows) == 1
-        assert chunk_rows
+        assert artifact_rows
         assert len(semantic_runs) == 1
         assert semantic_runs[0].status == "completed"
         assert semantic_runs[0].api_call_count == 1
@@ -193,13 +193,13 @@ def test_m4_processing_persists_semantic_artifacts_and_rerun_is_idempotent(tmp_p
         assert len(semantic_nodes) == 1
         assert len(semantic_aliases) >= 1
         assert len(semantic_mentions) == 1
-        assert len(chunk_links) == 1
+        assert len(artifact_links) >= 1
         assert len(reject_rows) >= 1
         assert len(semantic_steps) == 2
         assert all(step.status == "completed" for step in semantic_steps)
 
 
-def test_m4_processing_keeps_extraction_and_chunks_when_semantic_fails(tmp_path: Path) -> None:
+def test_m4_processing_keeps_extraction_and_artifacts_when_semantic_fails(tmp_path: Path) -> None:
     db_path = tmp_path / "m4_semantic_failure.db"
     storage_root = tmp_path / "raw"
     storage_root.mkdir(parents=True, exist_ok=True)
@@ -254,17 +254,17 @@ def test_m4_processing_keeps_extraction_and_chunks_when_semantic_fails(tmp_path:
         processor.run()
 
         extracted_rows = session.execute(select(ExtractedDocument)).scalars().all()
-        chunk_rows = session.execute(select(TextChunk)).scalars().all()
+        artifact_rows = session.execute(select(RetrievalArtifact)).scalars().all()
         semantic_run = session.execute(select(SemanticDocumentRun)).scalar_one()
         extract_step = session.execute(
-            select(PipelineRunStep).where(PipelineRunStep.step_name == "extract_chunk_index")
+            select(PipelineRunStep).where(PipelineRunStep.step_name == "extract_document")
         ).scalar_one()
         semantic_step = session.execute(
             select(PipelineRunStep).where(PipelineRunStep.step_name == "semantic_enrichment")
         ).scalar_one()
 
         assert extracted_rows
-        assert chunk_rows
+        assert artifact_rows
         assert semantic_run.status == "failed"
         assert semantic_run.error_code == "MODEL_REQUEST_FAILED"
         assert failing_client.calls == 1

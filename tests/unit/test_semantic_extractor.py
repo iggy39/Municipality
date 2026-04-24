@@ -9,8 +9,10 @@ from sqlalchemy.orm import Session
 from municipality.migrations import apply_all
 from municipality.models import Document, DocumentVersion, SourceSite
 from municipality.semantic_extractor import (
+    AI21SemanticClient,
     SemanticExtractor,
     SemanticModelResponse,
+    build_semantic_model_client,
     _extract_response_content,
     _parse_json_content,
 )
@@ -138,6 +140,16 @@ def test_extract_response_content_handles_content_parts_array() -> None:
     assert isinstance(extracted, str)
     assert isinstance(parsed, dict)
     assert parsed.get("nodes") == []
+
+
+def test_build_semantic_model_client_can_switch_to_ai21(monkeypatch) -> None:
+    monkeypatch.setenv("SEMANTIC_MODEL_PROVIDER", "ai21")
+    monkeypatch.setenv("SEMANTIC_MODEL", "jamba-mini")
+
+    client = build_semantic_model_client()
+
+    assert isinstance(client, AI21SemanticClient)
+    assert client.model_name == "jamba-mini"
 
 
 def test_parse_json_content_coerces_single_evidence_span_object() -> None:

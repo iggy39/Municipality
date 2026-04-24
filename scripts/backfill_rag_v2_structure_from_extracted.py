@@ -69,6 +69,12 @@ def main() -> int:
                 citation_map = []
             if not isinstance(citation_map, list):
                 citation_map = []
+            try:
+                pages = json.loads(extracted.pages_json or "[]")
+            except json.JSONDecodeError:
+                pages = []
+            if not isinstance(pages, list):
+                pages = []
 
             result = service.replace_document_structure(
                 document_id=document.id,
@@ -78,6 +84,7 @@ def main() -> int:
                 text=extracted_text,
                 citation_map=citation_map,
                 source_kind=_source_kind_for_document(document.doc_kind),
+                pages=pages,
             )
             processed += 1
             total_sections += result.section_count

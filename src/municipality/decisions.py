@@ -11,7 +11,6 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from municipality.decision_embeddings import DecisionEmbeddingService
 from municipality.extraction import resolve_pages_for_span
 from municipality.fallback import BYTEZ_MODEL, BYTEZ_PROVIDER, BytezFallbackClient
 from municipality.models import (
@@ -259,9 +258,6 @@ class DecisionExtractionService:
             self._link_meeting_attachments_to_decision(meeting_id=meeting.id, decision_id=row.id, source_document_id=document.id)
             inserted_decision_ids.append(int(row.id))
             inserted += 1
-
-        if inserted_decision_ids:
-            DecisionEmbeddingService(self.session).index_document_decisions(document_id=document.id)
 
         return {
             "meeting_id": meeting.id,

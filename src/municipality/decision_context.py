@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Sequence
 
@@ -9,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from municipality.chunking import normalize_for_search
-from municipality.models import Decision, DecisionCitation, DecisionRequestContext, TextChunk
+from municipality.models import Decision, DecisionCitation, DecisionRequestContext, RetrievalArtifact
 
 
 REQUEST_SUBJECT_RE = re.compile(r"מהות\s+הבקשה\s*:\s*(.+)")
@@ -59,6 +60,18 @@ SUBJECT_NOISE_TOKENS = {
 }
 
 
+@dataclass(slots=True)
+class _ContextRow:
+    item_id: str
+    index: int
+    text: str
+    start_offset: int
+    end_offset: int
+    start_page: int | None
+    end_page: int | None
+    backend: str
+
+
 class DecisionContextService:
     def __init__(self, session: Session):
         self.session = session
@@ -94,16 +107,12 @@ class DecisionContextService:
         for citation in citations:
             citations_by_decision.setdefault(int(citation.decision_id), []).append(citation)
 
-        chunks = self.session.execute(
-            select(TextChunk)
-            .where(
-                TextChunk.document_id == source_document_id,
-                TextChunk.document_version_id == document_version_id,
-                TextChunk.source_kind == "protocol",
-            )
-            .order_by(TextChunk.chunk_index.asc())
-        ).scalars().all()
-        if not chunks:
+        context_rows = _load_context_rows(
+            session=self.session,
+            source_document_id=source_document_id,
+            document_version_id=document_version_id,
+        )
+        if not context_rows:
             return {"contexts": 0}
 
         existing_rows = self.session.execute(
@@ -119,7 +128,7 @@ class DecisionContextService:
             payload = _build_request_context_payload(
                 decision=decision,
                 citations=citations_by_decision.get(int(decision.id), []),
-                chunks=chunks,
+                context_rows=context_rows,
             )
             if payload is None:
                 continue
@@ -141,7 +150,7 @@ class DecisionContextService:
             row.gush = payload.get("gush")
             row.helka = payload.get("helka")
             row.migrash = payload.get("migrash")
-            row.source_chunk_ids_json = json.dumps(payload.get("source_chunk_ids") or [], ensure_ascii=False)
+            row.source_artifact_ids_json = json.dumps(payload.get("source_artifact_ids") or [], ensure_ascii=False)
             row.confidence = payload.get("confidence")
             row.metadata_json = json.dumps(payload.get("metadata") or {}, ensure_ascii=False)
             row.updated_at = now
@@ -154,13 +163,13 @@ def _build_request_context_payload(
     *,
     decision: Decision,
     citations: list[DecisionCitation],
-    chunks: Sequence[TextChunk],
+    context_rows: Sequence[_ContextRow],
 ) -> dict[str, Any] | None:
-    anchor_index = _anchor_chunk_index(citations=citations, chunks=chunks)
+    anchor_index = _anchor_chunk_index(citations=citations, chunks=context_rows)
     if anchor_index is None:
         return None
 
-    window_chunks = _window_chunks(chunks=chunks, anchor_index=anchor_index, lookback=10, lookahead=2)
+    window_chunks = _window_chunks(chunks=context_rows, anchor_index=anchor_index, lookback=10, lookahead=2)
     request_chunk, request_subject = _extract_request_subject(window_chunks)
     address = _extract_address(window_chunks)
     parcel = _extract_parcel(window_chunks)
@@ -169,7 +178,7 @@ def _build_request_context_payload(
         agenda_item=decision.agenda_item,
         decision_text=decision.decision_text,
     )
-    source_chunk_ids = _context_source_chunk_ids(
+    source_artifact_ids = _context_source_chunk_ids(
         citations=citations,
         request_chunk=request_chunk,
         window_chunks=window_chunks,
@@ -196,21 +205,57 @@ def _build_request_context_payload(
         "gush": parcel.get("gush"),
         "helka": parcel.get("helka"),
         "migrash": parcel.get("migrash"),
-        "source_chunk_ids": source_chunk_ids,
+        "source_artifact_ids": source_artifact_ids,
         "confidence": round(min(1.0, confidence), 4),
         "metadata": {
             "anchor_chunk_index": int(anchor_index),
-            "window_chunk_ids": [chunk.chunk_id for chunk in window_chunks],
-            "request_context_method": "deterministic_neighbor_linking",
+            "source_artifact_ids": source_artifact_ids,
+            "window_artifact_ids": [chunk.item_id for chunk in window_chunks],
+            "request_context_method": "deterministic_artifact_window",
         },
     }
 
 
-def _anchor_chunk_index(*, citations: list[DecisionCitation], chunks: Sequence[TextChunk]) -> int | None:
+def _load_context_rows(
+    *,
+    session: Session,
+    source_document_id: int,
+    document_version_id: int,
+) -> list[_ContextRow]:
+    artifact_rows = session.execute(
+        select(RetrievalArtifact)
+        .where(
+            RetrievalArtifact.document_id == source_document_id,
+            RetrievalArtifact.document_version_id == document_version_id,
+            RetrievalArtifact.source_kind == "protocol",
+            RetrievalArtifact.artifact_kind.in_(("section_unit", "decision_unit")),
+        )
+        .order_by(RetrievalArtifact.ordinal.asc())
+    ).scalars().all()
+    if artifact_rows:
+        return [
+            _ContextRow(
+                item_id=str(row.artifact_id),
+                index=int(row.ordinal),
+                text=str(row.body_text or ""),
+                start_offset=int(row.start_offset),
+                end_offset=int(row.end_offset),
+                start_page=int(row.start_page) if row.start_page is not None else None,
+                end_page=int(row.end_page) if row.end_page is not None else None,
+                backend="artifact",
+            )
+            for row in artifact_rows
+            if str(row.body_text or "").strip()
+        ]
+
+    return []
+
+
+def _anchor_chunk_index(*, citations: list[DecisionCitation], chunks: Sequence[_ContextRow]) -> int | None:
     if not chunks:
         return None
 
-    chunk_positions = {int(chunk.chunk_index): idx for idx, chunk in enumerate(chunks)}
+    chunk_positions = {int(chunk.index): idx for idx, chunk in enumerate(chunks)}
     best_index: int | None = None
     best_distance: int | None = None
     for citation in citations:
@@ -234,7 +279,7 @@ def _anchor_chunk_index(*, citations: list[DecisionCitation], chunks: Sequence[T
         anchor_label = normalize_for_search(citation.anchor_text or "")
         if anchor_label:
             for idx, chunk in enumerate(chunks):
-                if anchor_label and anchor_label[:80] in normalize_for_search(chunk.chunk_text):
+                if anchor_label and anchor_label[:80] in normalize_for_search(chunk.text):
                     return idx
 
     if best_index is not None:
@@ -242,25 +287,25 @@ def _anchor_chunk_index(*, citations: list[DecisionCitation], chunks: Sequence[T
     if citations:
         citation_page = int(citations[0].page_number)
         for chunk in chunks:
-            if chunk.start_page == citation_page and int(chunk.chunk_index) in chunk_positions:
-                return chunk_positions[int(chunk.chunk_index)]
+            if chunk.start_page == citation_page and int(chunk.index) in chunk_positions:
+                return chunk_positions[int(chunk.index)]
     return 0
 
 
-def _window_chunks(*, chunks: Sequence[TextChunk], anchor_index: int, lookback: int, lookahead: int) -> list[TextChunk]:
+def _window_chunks(*, chunks: Sequence[_ContextRow], anchor_index: int, lookback: int, lookahead: int) -> list[_ContextRow]:
     start = max(0, anchor_index - lookback)
     end = min(len(chunks), anchor_index + lookahead + 1)
     return list(chunks[start:end])
 
 
-def _extract_request_subject(window_chunks: list[TextChunk]) -> tuple[TextChunk | None, str | None]:
-    best_chunk: TextChunk | None = None
+def _extract_request_subject(window_chunks: list[_ContextRow]) -> tuple[_ContextRow | None, str | None]:
+    best_chunk: _ContextRow | None = None
     best_subject: str | None = None
     best_score = float("-inf")
     anchor_position = len(window_chunks) - 1
 
     for idx, chunk in enumerate(window_chunks):
-        text = " ".join(str(chunk.chunk_text or "").split())
+        text = " ".join(str(chunk.text or "").split())
         if not text:
             continue
 
@@ -335,9 +380,9 @@ def _trim_request_subject(value: str) -> str | None:
     return compact[:260].rstrip()
 
 
-def _extract_address(window_chunks: list[TextChunk]) -> str | None:
+def _extract_address(window_chunks: list[_ContextRow]) -> str | None:
     for chunk in window_chunks:
-        text = " ".join(str(chunk.chunk_text or "").split())
+        text = " ".join(str(chunk.text or "").split())
         if not text:
             continue
         match = ADDRESS_RE.search(text)
@@ -351,8 +396,8 @@ def _extract_address(window_chunks: list[TextChunk]) -> str | None:
     return None
 
 
-def _extract_parcel(window_chunks: list[TextChunk]) -> dict[str, str]:
-    text_blob = "\n".join(" ".join(str(chunk.chunk_text or "").split()) for chunk in window_chunks)
+def _extract_parcel(window_chunks: list[_ContextRow]) -> dict[str, str]:
+    text_blob = "\n".join(" ".join(str(chunk.text or "").split()) for chunk in window_chunks)
     if not text_blob:
         return {}
 
@@ -427,8 +472,8 @@ def _compact_subject_topic(value: str) -> str | None:
 def _context_source_chunk_ids(
     *,
     citations: list[DecisionCitation],
-    request_chunk: TextChunk | None,
-    window_chunks: list[TextChunk],
+    request_chunk: _ContextRow | None,
+    window_chunks: list[_ContextRow],
     address: str | None,
     parcel: dict[str, str],
 ) -> list[str]:
@@ -437,12 +482,12 @@ def _context_source_chunk_ids(
 
     candidate_ids: list[str] = []
     if request_chunk is not None:
-        candidate_ids.append(str(request_chunk.chunk_id))
+        candidate_ids.append(str(request_chunk.item_id))
     if address or parcel:
         for chunk in window_chunks:
-            text = normalize_for_search(chunk.chunk_text or "")
+            text = normalize_for_search(chunk.text or "")
             if any(token in text for token in {"כתובת", "גוש", "חלקה", "מגרש"}):
-                candidate_ids.append(str(chunk.chunk_id))
+                candidate_ids.append(str(chunk.item_id))
     for citation in citations:
         for chunk in window_chunks:
             if _spans_overlap(
@@ -451,7 +496,7 @@ def _context_source_chunk_ids(
                 int(chunk.start_offset),
                 int(chunk.end_offset),
             ):
-                candidate_ids.append(str(chunk.chunk_id))
+                candidate_ids.append(str(chunk.item_id))
 
     for chunk_id in candidate_ids:
         if not chunk_id or chunk_id in seen:

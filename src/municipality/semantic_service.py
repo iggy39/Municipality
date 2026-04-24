@@ -10,17 +10,19 @@ from sqlalchemy.orm import Session
 
 from municipality.semantic_canonicalization import CanonicalizationReport, SemanticCanonicalizer
 from municipality.models import (
-    ChunkSemanticLink,
+    ArtifactSemanticLink,
     Decision,
     DecisionSemanticLink,
+    RetrievalArtifact,
     SemanticAlias,
     SemanticCandidateReject,
+    SemanticDocumentRun,
     SemanticEdge,
     SemanticMention,
     SemanticNode,
-    TextChunk,
 )
 from municipality.semantic_contract import SemanticExtractionOutput, SemanticRejectReason, SemanticValidationReport
+from municipality.semantic_contract import parse_semantic_model_output
 from municipality.semantic_extractor import SemanticExtractor
 from municipality.semantic_prompt import (
     SemanticEvidencePacket,
@@ -45,7 +47,7 @@ class SemanticServiceResult:
     mentions: int = 0
     edges: int = 0
     decision_links: int = 0
-    chunk_links: int = 0
+    artifact_links: int = 0
     reject_rows: int = 0
 
 
@@ -55,7 +57,7 @@ class SemanticPersistenceStats:
     mentions: int = 0
     edges: int = 0
     decision_links: int = 0
-    chunk_links: int = 0
+    artifact_links: int = 0
     reject_rows: int = 0
 
 
@@ -88,6 +90,95 @@ class SemanticService:
             source_kind=source_kind,
             extracted_text=extracted_text,
             citation_map=citation_map,
+        )
+
+    def rebuild_from_recorded_run(
+        self,
+        *,
+        source_site_id: int,
+        document_id: int,
+        document_version_id: int,
+        source_kind: str,
+        extracted_text: str,
+        citation_map: list[dict[str, int]],
+    ) -> SemanticServiceResult | None:
+        run = self.session.execute(
+            select(SemanticDocumentRun)
+            .where(SemanticDocumentRun.document_version_id == document_version_id)
+            .where(SemanticDocumentRun.status == "completed")
+            .where(SemanticDocumentRun.extraction_payload_json.is_not(None))
+            .order_by(SemanticDocumentRun.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if run is None:
+            return None
+
+        try:
+            payload = json.loads(run.extraction_payload_json or "{}")
+        except json.JSONDecodeError:
+            payload = None
+        if not isinstance(payload, dict):
+            return None
+
+        output, validation_report = parse_semantic_model_output(payload)
+        canonical_report = CanonicalizationReport()
+        persistence_stats = SemanticPersistenceStats()
+        can_persist_nodes = bool(validation_report.is_valid)
+
+        if can_persist_nodes:
+            canonical_report = self.canonicalizer.canonicalize_candidates(
+                source_site_id=source_site_id,
+                nodes=output.nodes,
+                extracted_text=extracted_text,
+                citation_map=citation_map,
+                evidence_spans=output.evidence_spans,
+            )
+            persistence_stats = self._persist_run_artifacts(
+                run_id=run.id,
+                source_site_id=source_site_id,
+                document_id=document_id,
+                document_version_id=document_version_id,
+                source_kind=source_kind,
+                output=output,
+                canonical_report=canonical_report,
+                extracted_text=extracted_text,
+                citation_map=citation_map,
+                validation_report=validation_report,
+            )
+            run.canonicalization_report_json = json.dumps(
+                _canonicalization_report_to_dict(canonical_report),
+                ensure_ascii=False,
+            )
+            self.session.flush()
+        else:
+            persistence_stats.reject_rows = self._replace_reject_rows(
+                run_id=run.id,
+                canonical_report=canonical_report,
+                output=output,
+                validation_report=validation_report,
+            )
+            run.canonicalization_report_json = json.dumps(
+                _canonicalization_report_to_dict(canonical_report),
+                ensure_ascii=False,
+            )
+            self.session.flush()
+
+        return SemanticServiceResult(
+            run_id=run.id,
+            status=run.status,
+            from_cache=True,
+            api_call_count=0,
+            evidence_spans=len(output.evidence_spans),
+            node_candidates=len(output.nodes),
+            accepted_nodes=len(canonical_report.accepted_nodes),
+            rejected_nodes=len(canonical_report.rejected_nodes),
+            validation_issues=len(validation_report.issues),
+            aliases=persistence_stats.aliases,
+            mentions=persistence_stats.mentions,
+            edges=persistence_stats.edges,
+            decision_links=persistence_stats.decision_links,
+            artifact_links=persistence_stats.artifact_links,
+            reject_rows=persistence_stats.reject_rows,
         )
 
     def _run_external_document(
@@ -176,7 +267,7 @@ class SemanticService:
             mentions=persistence_stats.mentions,
             edges=persistence_stats.edges,
             decision_links=persistence_stats.decision_links,
-            chunk_links=persistence_stats.chunk_links,
+            artifact_links=persistence_stats.artifact_links,
             reject_rows=persistence_stats.reject_rows,
         )
 
@@ -248,12 +339,10 @@ class SemanticService:
             mention_index_map=mention_index_map,
         )
 
-        stats.chunk_links = self._upsert_chunk_links(
+        stats.artifact_links = self._upsert_artifact_links(
             run_id=run_id,
             document_version_id=document_version_id,
-            output=output,
             candidate_to_node=candidate_to_node,
-            mention_index_map=mention_index_map,
             mention_rows_by_candidate=mention_rows_by_candidate,
         )
 
@@ -645,42 +734,47 @@ class SemanticService:
 
         return len(touched)
 
-    def _upsert_chunk_links(
+    def _upsert_artifact_links(
         self,
         *,
         run_id: int,
         document_version_id: int,
-        output: SemanticExtractionOutput,
         candidate_to_node: dict[str, SemanticNode],
-        mention_index_map: dict[tuple[str, int], int],
         mention_rows_by_candidate: dict[str, list[SemanticMention]],
     ) -> int:
-        chunk_rows = self.session.execute(
-            select(TextChunk.chunk_id, TextChunk.start_offset, TextChunk.end_offset).where(
-                TextChunk.document_version_id == document_version_id
+        artifact_rows = self.session.execute(
+            select(
+                RetrievalArtifact.artifact_id,
+                RetrievalArtifact.start_offset,
+                RetrievalArtifact.end_offset,
+                RetrievalArtifact.artifact_kind,
+            ).where(
+                RetrievalArtifact.document_version_id == document_version_id,
+                RetrievalArtifact.artifact_kind.in_(("header_anchor", "section_unit", "decision_unit")),
             )
         ).all()
-        if not chunk_rows or not candidate_to_node:
+        if not artifact_rows or not candidate_to_node:
             return 0
 
-        chunks = [
+        artifacts = [
             {
-                "chunk_id": chunk_id,
+                "artifact_id": artifact_id,
                 "start_offset": start_offset,
                 "end_offset": end_offset,
+                "artifact_kind": artifact_kind,
             }
-            for chunk_id, start_offset, end_offset in chunk_rows
+            for artifact_id, start_offset, end_offset, artifact_kind in artifact_rows
         ]
-        chunk_ids = [item["chunk_id"] for item in chunks]
+        artifact_ids = [item["artifact_id"] for item in artifacts]
         node_ids = [row.id for row in candidate_to_node.values()]
 
         existing = self.session.execute(
-            select(ChunkSemanticLink).where(
-                ChunkSemanticLink.chunk_id.in_(chunk_ids),
-                ChunkSemanticLink.semantic_node_id.in_(node_ids),
+            select(ArtifactSemanticLink).where(
+                ArtifactSemanticLink.artifact_id.in_(artifact_ids),
+                ArtifactSemanticLink.semantic_node_id.in_(node_ids),
             )
         ).scalars().all()
-        existing_by_key = {(row.chunk_id, row.semantic_node_id): row for row in existing}
+        existing_by_key = {(row.artifact_id, row.semantic_node_id): row for row in existing}
         touched: set[tuple[str, int]] = set()
 
         for candidate_id, mention_rows in mention_rows_by_candidate.items():
@@ -688,20 +782,20 @@ class SemanticService:
             if node is None:
                 continue
             for mention in mention_rows:
-                for chunk in chunks:
+                for artifact in artifacts:
                     if not _spans_overlap(
                         mention.start_offset,
                         mention.end_offset,
-                        chunk["start_offset"],
-                        chunk["end_offset"],
+                        artifact["start_offset"],
+                        artifact["end_offset"],
                     ):
                         continue
-                    key = (chunk["chunk_id"], node.id)
+                    key = (artifact["artifact_id"], node.id)
                     row = existing_by_key.get(key)
                     mention_link_confidence = _clamp_score(mention.mention_confidence)
                     if row is None:
-                        row = ChunkSemanticLink(
-                            chunk_id=chunk["chunk_id"],
+                        row = ArtifactSemanticLink(
+                            artifact_id=artifact["artifact_id"],
                             semantic_node_id=node.id,
                             confidence=mention_link_confidence,
                             source_mention_id=mention.id,
@@ -719,66 +813,11 @@ class SemanticService:
                             "provenance": "mention_overlap",
                             "run_id": run_id,
                             "confidence_source": "mention_overlap",
+                            "artifact_kind": artifact["artifact_kind"],
                         },
                         ensure_ascii=False,
                     )
                     touched.add(key)
-
-        mention_confidence_by_id = {
-            mention.id: mention.mention_confidence
-            for mention_rows in mention_rows_by_candidate.values()
-            for mention in mention_rows
-            if mention.id is not None
-        }
-
-        chunk_id_set = set(chunk_ids)
-        for link in output.chunk_links:
-            node = candidate_to_node.get(link.node_candidate_id)
-            if node is None or link.chunk_id not in chunk_id_set:
-                continue
-
-            mention_id = None
-            if link.mention_index is not None:
-                mention_id = mention_index_map.get((link.node_candidate_id, link.mention_index))
-
-            mention_confidence = (
-                mention_confidence_by_id.get(mention_id)
-                if mention_id is not None
-                else None
-            )
-
-            link_confidence, link_confidence_source = _resolve_chunk_link_confidence(
-                model_confidence=link.confidence,
-                mention_confidence=mention_confidence,
-                node_confidence=node.confidence,
-            )
-
-            key = (link.chunk_id, node.id)
-            row = existing_by_key.get(key)
-            if row is None:
-                row = ChunkSemanticLink(
-                    chunk_id=link.chunk_id,
-                    semantic_node_id=node.id,
-                    confidence=link_confidence,
-                    source_mention_id=mention_id,
-                    metadata_json=None,
-                )
-                self.session.add(row)
-                existing_by_key[key] = row
-
-            row.confidence = max(row.confidence, link_confidence)
-            if mention_id is not None:
-                row.source_mention_id = mention_id
-            row.metadata_json = json.dumps(
-                {
-                    "candidate_id": link.node_candidate_id,
-                    "provenance": "model_chunk_link",
-                    "run_id": run_id,
-                    "confidence_source": link_confidence_source,
-                },
-                ensure_ascii=False,
-            )
-            touched.add(key)
 
         return len(touched)
 
@@ -942,26 +981,6 @@ def _resolve_mention_confidence(
     if page_resolved:
         base = min(1.0, base + 0.05)
     return _clamp_score(base), "derived_from_node"
-
-
-def _resolve_chunk_link_confidence(
-    *,
-    model_confidence: float | None,
-    mention_confidence: float | None,
-    node_confidence: float,
-) -> tuple[float, str]:
-    explicit = _normalize_optional_confidence(model_confidence)
-    if explicit is not None:
-        return explicit, "model_chunk_link"
-
-    mention_based = _normalize_optional_confidence(mention_confidence)
-    if mention_based is not None:
-        return _clamp_score(mention_based * 0.95), "derived_from_mention"
-
-    fallback = _clamp_score(max(0.25, min(0.75, node_confidence * 0.8)))
-    return fallback, "derived_from_node"
-
-
 def _spans_overlap(start_a: int, end_a: int, start_b: int, end_b: int) -> bool:
     return max(start_a, start_b) < min(end_a, end_b)
 

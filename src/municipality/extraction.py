@@ -4,7 +4,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -19,6 +19,8 @@ class ExtractedPage:
     text: str
     start_offset: int
     end_offset: int
+    reading_direction: str | None = None
+    layout_blocks: list[dict[str, int | str]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -134,7 +136,16 @@ def parse_extracted_text(raw_text: str) -> tuple[str, list[ExtractedPage], list[
         cleaned = normalize_pdf_text(raw_page)
         start = cursor
         end = start + len(cleaned)
-        pages.append(ExtractedPage(page=idx, text=cleaned, start_offset=start, end_offset=end))
+        pages.append(
+            ExtractedPage(
+                page=idx,
+                text=cleaned,
+                start_offset=start,
+                end_offset=end,
+                reading_direction=_reading_direction(cleaned),
+                layout_blocks=_layout_blocks_for_page(cleaned, page_start_offset=start),
+            )
+        )
         if cleaned:
             full_parts.append(cleaned)
             citation_map.append({"start": start, "end": end, "page": idx})
@@ -154,6 +165,42 @@ def normalize_pdf_text(value: str) -> str:
     without_cr = without_bidi.replace("\r", "")
     normalized_lines = [WHITESPACE_RE.sub(" ", line).strip() for line in without_cr.split("\n")]
     return "\n".join(line for line in normalized_lines if line)
+
+
+def _layout_blocks_for_page(value: str, *, page_start_offset: int) -> list[dict[str, int | str]]:
+    blocks: list[dict[str, int | str]] = []
+    cursor = page_start_offset
+    for line_index, raw_line in enumerate(value.split("\n")):
+        line = str(raw_line or "")
+        start_offset = cursor
+        end_offset = start_offset + len(line)
+        cursor = end_offset + 1
+        compact = line.strip()
+        if not compact:
+            continue
+        blocks.append(
+            {
+                "kind": "line",
+                "line_index": line_index,
+                "start_offset": start_offset,
+                "end_offset": end_offset,
+                "text": compact,
+                "reading_direction": _reading_direction(compact),
+            }
+        )
+    return blocks
+
+
+def _reading_direction(value: str) -> str | None:
+    if not value:
+        return None
+    hebrew_chars = sum(1 for char in value if HEBREW_CHAR_RE.match(char) is not None)
+    latin_chars = sum(1 for char in value if "a" <= char.casefold() <= "z")
+    if hebrew_chars > max(0, latin_chars):
+        return "rtl"
+    if latin_chars > 0:
+        return "ltr"
+    return None
 
 
 def score_extraction_quality(

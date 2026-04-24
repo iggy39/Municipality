@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from typing import Any
 
@@ -7,14 +8,45 @@ from sqlalchemy import and_, select, text
 from sqlalchemy.orm import Session
 
 from municipality.chunking import build_trigrams, normalize_for_search
-from municipality.models import AssetManifest, Document, RetrievalArtifact, SourceSite
-from municipality.search import LEXICAL_FTS_WEIGHT, LEXICAL_TRIGRAM_WEIGHT, SearchHit
+from municipality.models import (
+    ArtifactSemanticLink,
+    AssetManifest,
+    Document,
+    RetrievalArtifact,
+    SemanticAlias,
+    SemanticNode,
+    SourceSite,
+)
+from municipality.search_common import (
+    FTS_TOKEN_LIMIT,
+    LEXICAL_FTS_WEIGHT,
+    LEXICAL_TRIGRAM_WEIGHT,
+    SEARCH_FALLBACK_CONTAINS_LIMIT,
+    SEARCH_FTS_CANDIDATE_LIMIT,
+    SEARCH_TRIGRAM_CANDIDATE_LIMIT,
+    SEMANTIC_OVERLAP_WEIGHT,
+    SEMANTIC_SPECIFICITY_WEIGHT,
+    SearchHit,
+    SemanticDebugNode,
+    _build_snippet,
+    _clamp,
+    _descendant_node_ids,
+    _fts_rank_to_score,
+    _semantic_path_labels,
+    _semantic_text_match_score,
+)
 
 
-FTS_TOKEN_LIMIT = 8
-SEARCH_FTS_CANDIDATE_LIMIT = 250
-SEARCH_TRIGRAM_CANDIDATE_LIMIT = 250
-SEARCH_FALLBACK_CONTAINS_LIMIT = 100
+@dataclass(slots=True)
+class _ArtifactSemanticMatchScore:
+    node_id: int
+    label_he: str
+    node_kind: str
+    semantic_type: str
+    link_confidence: float
+    node_confidence: float
+    specificity_score: float
+    match_score: float
 
 
 class ArtifactSearchService:
@@ -35,6 +67,9 @@ class ArtifactSearchService:
             ).scalars().all()
         )
         if existing_ids:
+            self.session.query(ArtifactSemanticLink).filter(ArtifactSemanticLink.artifact_id.in_(existing_ids)).delete(
+                synchronize_session=False
+            )
             self.session.query(RetrievalArtifact).filter(RetrievalArtifact.document_version_id == document_version_id).delete()
             self.session.execute(text("DELETE FROM artifact_fts WHERE artifact_id = :artifact_id"), [{"artifact_id": artifact_id} for artifact_id in existing_ids])
             self.session.execute(
@@ -95,16 +130,34 @@ class ArtifactSearchService:
         semantic_mode: str = "off",
         limit: int = 20,
     ) -> list[SearchHit]:
-        del semantic_node_id, semantic_label, semantic_mode
         normalized_query = normalize_for_search(query)
         if not normalized_query:
             return []
+
+        normalized_semantic_label = normalize_for_search(semantic_label) if semantic_label else None
+        semantic_mode_normalized = (semantic_mode or "off").strip().casefold()
+        if semantic_mode_normalized not in {"boost", "filter", "off"}:
+            semantic_mode_normalized = "off"
+        semantic_scoring_enabled = semantic_mode_normalized != "off"
+        explicit_semantic_filter = semantic_scoring_enabled and (
+            semantic_node_id is not None or bool(normalized_semantic_label)
+        )
 
         candidate_scores = self._collect_candidate_scores(normalized_query)
         if not candidate_scores:
             return []
 
         artifact_ids = list(candidate_scores.keys())
+        semantic_by_artifact: dict[str, list[Any]] = {}
+        if semantic_scoring_enabled:
+            semantic_by_artifact = self._collect_semantic_scores(
+                artifact_ids=artifact_ids,
+                normalized_query=normalized_query,
+                semantic_node_id=semantic_node_id,
+                normalized_semantic_label=normalized_semantic_label,
+                explicit_semantic_filter=explicit_semantic_filter,
+            )
+
         stmt = (
             select(RetrievalArtifact, Document, SourceSite, AssetManifest)
             .join(Document, RetrievalArtifact.document_id == Document.id)
@@ -130,6 +183,7 @@ class ArtifactSearchService:
                 (Document.title_he.contains(topic))
                 | (Document.canonical_url.contains(topic))
                 | (RetrievalArtifact.retrieval_text.contains(topic))
+                | (AssetManifest.source_node_external_id.contains(topic))
             )
 
         rows = self.session.execute(stmt).all()
@@ -142,10 +196,38 @@ class ArtifactSearchService:
             trigram_overlap = scores.get("trigram_overlap", 0.0)
             trigram_score = min(1.0, trigram_overlap / max(query_trigram_count, int(artifact.trigram_count or 0), 1))
             lexical_score = (LEXICAL_FTS_WEIGHT * fts_score) + (LEXICAL_TRIGRAM_WEIGHT * trigram_score)
+            semantic_rows = semantic_by_artifact.get(str(artifact.artifact_id), [])
+            semantic_match_count = len(semantic_rows)
+            if semantic_mode_normalized == "filter" and explicit_semantic_filter and semantic_match_count == 0:
+                continue
+
+            semantic_boost = 0.0
+            score = lexical_score
+            if semantic_scoring_enabled:
+                semantic_overlap_score = max(
+                    (row.link_confidence * row.match_score for row in semantic_rows),
+                    default=0.0,
+                )
+                specificity_prior = max((row.specificity_score for row in semantic_rows), default=0.0)
+                semantic_boost = (SEMANTIC_OVERLAP_WEIGHT * semantic_overlap_score) + (
+                    SEMANTIC_SPECIFICITY_WEIGHT * specificity_prior
+                )
+                score = min(1.0, lexical_score + semantic_boost)
+
+            semantic_nodes = [
+                SemanticDebugNode(
+                    id=row.node_id,
+                    label=row.label_he,
+                    kind=row.node_kind,
+                    semantic_type=row.semantic_type,
+                    confidence=row.link_confidence,
+                )
+                for row in semantic_rows
+            ]
             hits.append(
                 SearchHit(
                     chunk_id=str(artifact.artifact_id),
-                    score=round(lexical_score, 6),
+                    score=round(score, 6),
                     snippet=_build_snippet(artifact.retrieval_text, query),
                     citation=artifact.citation_label,
                     source_type=artifact.source_kind,
@@ -158,6 +240,10 @@ class ArtifactSearchService:
                     end_offset=artifact.end_offset,
                     start_page=artifact.start_page,
                     end_page=artifact.end_page,
+                    semantic_match_count=semantic_match_count,
+                    semantic_node_ids=[row.node_id for row in semantic_rows],
+                    semantic_boost=round(semantic_boost, 6),
+                    semantic_nodes=semantic_nodes,
                     chunk_text=artifact.retrieval_text,
                     section_path=_loads_json_list(artifact.header_path_json),
                     artifact_kind=artifact.artifact_kind,
@@ -253,32 +339,123 @@ class ArtifactSearchService:
             candidate_scores[str(artifact_id)] = {"fts_rank": 1.0, "trigram_overlap": 0.0}
         return candidate_scores
 
+    def _collect_semantic_scores(
+        self,
+        *,
+        artifact_ids: list[str],
+        normalized_query: str,
+        semantic_node_id: int | None,
+        normalized_semantic_label: str | None,
+        explicit_semantic_filter: bool,
+    ) -> dict[str, list[Any]]:
+        if not artifact_ids:
+            return {}
 
-def _fts_rank_to_score(raw_rank: float | None) -> float:
-    if raw_rank is None:
-        return 0.0
-    return max(0.0, min(1.0, 1.0 / (1.0 + abs(float(raw_rank)))))
+        rows = self.session.execute(
+            select(ArtifactSemanticLink, SemanticNode)
+            .join(SemanticNode, ArtifactSemanticLink.semantic_node_id == SemanticNode.id)
+            .where(ArtifactSemanticLink.artifact_id.in_(artifact_ids))
+        ).all()
+        if not rows:
+            return {}
 
+        nodes_by_id: dict[int, SemanticNode] = {int(node.id): node for _link, node in rows}
+        pending_parent_ids = {
+            int(node.parent_node_id)
+            for node in nodes_by_id.values()
+            if node.parent_node_id is not None and int(node.parent_node_id) not in nodes_by_id
+        }
+        while pending_parent_ids:
+            ancestor_rows = self.session.execute(
+                select(SemanticNode).where(SemanticNode.id.in_(sorted(pending_parent_ids)))
+            ).scalars().all()
+            next_parent_ids: set[int] = set()
+            for ancestor in ancestor_rows:
+                ancestor_id = int(ancestor.id)
+                if ancestor_id in nodes_by_id:
+                    continue
+                nodes_by_id[ancestor_id] = ancestor
+                if ancestor.parent_node_id is not None and int(ancestor.parent_node_id) not in nodes_by_id:
+                    next_parent_ids.add(int(ancestor.parent_node_id))
+            pending_parent_ids = next_parent_ids
 
-def _build_snippet(text_value: str, query: str, window: int = 220) -> str:
-    text_compact = " ".join(str(text_value or "").split())
-    if not text_compact:
-        return ""
-    query_norm = normalize_for_search(query)
-    text_norm = normalize_for_search(text_compact)
-    index = text_norm.find(query_norm) if query_norm else -1
-    if index < 0:
-        return text_compact[:window].strip()
-    start = max(0, index - (window // 3))
-    end = min(len(text_compact), start + window)
-    snippet = text_compact[start:end].strip()
-    if start > 0:
-        snippet = f"...{snippet}"
-    if end < len(text_compact):
-        snippet = f"{snippet}..."
-    return snippet
+        node_ids = sorted(nodes_by_id)
+        alias_rows = self.session.execute(
+            select(SemanticAlias.semantic_node_id, SemanticAlias.alias_label_norm).where(
+                SemanticAlias.semantic_node_id.in_(node_ids)
+            )
+        ).all()
+        aliases_by_node: dict[int, list[str]] = {}
+        for alias_node_id, alias_label_norm in alias_rows:
+            aliases_by_node.setdefault(int(alias_node_id), []).append(str(alias_label_norm or "").strip())
 
+        children_by_parent: dict[int, list[int]] = {}
+        for node in nodes_by_id.values():
+            if node.parent_node_id is None:
+                continue
+            children_by_parent.setdefault(int(node.parent_node_id), []).append(int(node.id))
 
+        explicit_root_ids: set[int] = set()
+        if semantic_node_id is not None and int(semantic_node_id) in nodes_by_id:
+            explicit_root_ids.add(int(semantic_node_id))
+        if normalized_semantic_label:
+            for node_id, node in nodes_by_id.items():
+                selector_labels = [str(node.pref_label_norm or "").strip()]
+                selector_labels.extend(str(label or "").strip() for label in aliases_by_node.get(node_id, []))
+                selector_labels.extend(_semantic_path_labels(node=node, nodes_by_id=nodes_by_id))
+                if _semantic_text_match_score(normalized_semantic_label, selector_labels) > 0.0:
+                    explicit_root_ids.add(node_id)
+        explicit_node_ids = _descendant_node_ids(root_ids=explicit_root_ids, children_by_parent=children_by_parent)
+
+        scored_by_artifact: dict[str, dict[int, Any]] = {}
+        for link, node in rows:
+            labels = [str(node.pref_label_norm or "").strip()]
+            labels.extend(str(label or "").strip() for label in aliases_by_node.get(int(node.id), []))
+            labels.extend(_semantic_path_labels(node=node, nodes_by_id=nodes_by_id))
+
+            query_score = _semantic_text_match_score(normalized_query, labels)
+            explicit_score = 0.0
+            if int(node.id) in explicit_node_ids:
+                explicit_score = 1.0
+
+            match_score = explicit_score if explicit_semantic_filter else query_score
+            if match_score <= 0.0:
+                continue
+
+            candidate_row = _ArtifactSemanticMatchScore(
+                node_id=int(node.id),
+                label_he=str(node.pref_label_he),
+                node_kind=str(node.node_kind),
+                semantic_type=str(node.semantic_type),
+                link_confidence=_clamp(link.confidence),
+                node_confidence=_clamp(node.confidence),
+                specificity_score=_clamp(node.specificity_score),
+                match_score=_clamp(match_score),
+            )
+
+            artifact_id = str(link.artifact_id)
+            bucket = scored_by_artifact.setdefault(artifact_id, {})
+            existing = bucket.get(int(node.id))
+            if existing is None:
+                bucket[int(node.id)] = candidate_row
+                continue
+
+            existing_signal = existing.link_confidence * existing.match_score
+            candidate_signal = candidate_row.link_confidence * candidate_row.match_score
+            if candidate_signal > existing_signal:
+                bucket[int(node.id)] = candidate_row
+
+        return {
+            artifact_id: sorted(
+                node_rows.values(),
+                key=lambda row: (
+                    row.link_confidence * row.match_score,
+                    row.specificity_score,
+                ),
+                reverse=True,
+            )
+            for artifact_id, node_rows in scored_by_artifact.items()
+        }
 def _loads_json_list(value: str | None) -> list[str]:
     if not value:
         return []

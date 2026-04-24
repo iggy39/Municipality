@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from municipality.extraction import PdfExtractionResult, parse_extracted_text, score_extraction_quality
 from municipality.migrations import apply_all
-from municipality.models import AssetManifest, Document, DocumentVersion, ExtractedDocument, SourceSite, TextChunk
+from municipality.models import AssetManifest, Document, DocumentVersion, ExtractedDocument, RetrievalArtifact, SourceSite
 from municipality.processing import ProcessingService
 from municipality.search import SearchService
 
@@ -50,7 +50,7 @@ class StubExtractor:
         )
 
 
-def test_process_pipeline_extracts_chunks_and_supports_search(tmp_path: Path) -> None:
+def test_process_pipeline_extracts_artifacts_and_supports_search(tmp_path: Path) -> None:
     db_path = tmp_path / "m2.db"
     storage_root = tmp_path / "raw"
     storage_root.mkdir(parents=True, exist_ok=True)
@@ -146,9 +146,9 @@ def test_process_pipeline_extracts_chunks_and_supports_search(tmp_path: Path) ->
         processor.run()
 
         extracted_rows = session.execute(select(ExtractedDocument)).scalars().all()
-        chunk_rows = session.execute(select(TextChunk)).scalars().all()
+        artifact_rows = session.execute(select(RetrievalArtifact)).scalars().all()
         assert len(extracted_rows) == 2
-        assert len(chunk_rows) > 0
+        assert len(artifact_rows) > 0
 
         search = SearchService(session)
         hits = search.search(query=HE_QUERY_ACTIVITY, municipality_slug="ashdod")

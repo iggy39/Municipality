@@ -1,5 +1,5 @@
 {
-  "description": "M4 RAG bootstrap eval set seeded from persisted M2 chunk corpus (real municipality.db evidence)",
+  "description": "M4 RAG bootstrap eval set seeded from persisted artifact corpus (real municipality.db evidence)",
   "thresholds": {
     "citation_correctness_min": 1.0,
     "answer_correctness_min": 1.0,
@@ -15,7 +15,7 @@
       "required_evidence": [
         {
           "source_kind": "protocol",
-          "chunk_id": "72cfd3d013348e5ba31c2f5f53a1c6d1f5ce76e1",
+          "chunk_id": "75c123f477ee6bd4e6eae0e5b79b8a988d3a9c85",
           "document_id": 483,
           "document_version_id": 464,
           "citation_label": "pp.2-3"
@@ -24,10 +24,10 @@
       "supporting_evidence": [
         {
           "source_kind": "attachment",
-          "chunk_id": "ab0ed12f9373d2130119a1e20faf951fe1da4490",
+          "chunk_id": "af02f112b5239ada3da094642116e5de78d21050",
           "document_id": 29,
           "document_version_id": 29,
-          "citation_label": "pp.2-3"
+          "citation_label": "p.1"
         }
       ],
       "expected_grounded": {
@@ -37,7 +37,7 @@
           "בדיקת בטיחות לבית הספר ברחוב רבי טרפון"
         ],
         "required_chunk_ids": [
-          "72cfd3d013348e5ba31c2f5f53a1c6d1f5ce76e1"
+          "75c123f477ee6bd4e6eae0e5b79b8a988d3a9c85"
         ]
       },
       "expected_refusal": {

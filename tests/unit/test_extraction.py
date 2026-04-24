@@ -24,6 +24,8 @@ def test_parse_extracted_text_strips_bidi_marks_and_keeps_pages() -> None:
     assert len(pages) == 2
     assert pages[0].page == 1
     assert pages[1].page == 2
+    assert pages[0].reading_direction == "rtl"
+    assert pages[0].layout_blocks[0]["text"] == HE_WELFARE_COMMITTEE
     assert citation_map[0]["page"] == 1
     assert citation_map[1]["page"] == 2
 

@@ -74,6 +74,7 @@ def build_structured_document(
     text: str,
     citation_map: list[dict[str, int]],
     source_kind: str,
+    pages: list[Any] | None = None,
 ) -> StructuredDocumentBuildResult:
     title = str(document_title or "").strip() or _first_non_empty_line(text) or "מסמך"
     sections = _build_sections(
@@ -82,6 +83,7 @@ def build_structured_document(
         text=text,
         citation_map=citation_map,
         source_kind=source_kind,
+        pages=pages,
     )
     metadata = _extract_document_metadata(title=title, text=text)
     artifacts = _build_artifacts(
@@ -106,6 +108,7 @@ def _build_sections(
     text: str,
     citation_map: list[dict[str, int]],
     source_kind: str,
+    pages: list[Any] | None = None,
 ) -> list[StructuredSection]:
     root = StructuredSection(
         section_id=_section_id(document_version_id=document_version_id, ordinal=0, start_offset=0, header_text=title),
@@ -124,7 +127,7 @@ def _build_sections(
     sections: list[StructuredSection] = [root]
     stack: list[StructuredSection] = [root]
     ordinal = 1
-    lines = _iter_lines_with_offsets(text)
+    lines = _iter_lines_with_offsets(text, pages=pages)
 
     for index, line in enumerate(lines):
         compact = WHITESPACE_RE.sub(" ", line.text.strip()).strip()
@@ -424,7 +427,11 @@ class _Line:
     end_offset: int
 
 
-def _iter_lines_with_offsets(text: str) -> list[_Line]:
+def _iter_lines_with_offsets(text: str, *, pages: list[Any] | None = None) -> list[_Line]:
+    layout_lines = _iter_layout_lines(pages)
+    if layout_lines:
+        return layout_lines
+
     lines: list[_Line] = []
     cursor = 0
     for raw in text.split("\n"):
@@ -433,6 +440,39 @@ def _iter_lines_with_offsets(text: str) -> list[_Line]:
         lines.append(_Line(text=raw, start_offset=start_offset, end_offset=end_offset))
         cursor = end_offset + 1
     return lines
+
+
+def _iter_layout_lines(pages: list[Any] | None) -> list[_Line]:
+    if not pages:
+        return []
+
+    collected: list[_Line] = []
+    seen: set[tuple[int, int, str]] = set()
+    for raw_page in pages:
+        blocks = None
+        if isinstance(raw_page, dict):
+            blocks = raw_page.get("layout_blocks")
+        else:
+            blocks = getattr(raw_page, "layout_blocks", None)
+        if not isinstance(blocks, list):
+            continue
+        for raw_block in blocks:
+            if not isinstance(raw_block, dict):
+                continue
+            if str(raw_block.get("kind") or "").strip() != "line":
+                continue
+            text = str(raw_block.get("text") or "").strip()
+            if not text:
+                continue
+            start_offset = int(raw_block.get("start_offset") or 0)
+            end_offset = int(raw_block.get("end_offset") or start_offset + len(text))
+            key = (start_offset, end_offset, text)
+            if key in seen:
+                continue
+            seen.add(key)
+            collected.append(_Line(text=text, start_offset=start_offset, end_offset=end_offset))
+    collected.sort(key=lambda row: (row.start_offset, row.end_offset))
+    return collected
 
 
 def _extract_document_metadata(*, title: str, text: str) -> dict[str, Any]:

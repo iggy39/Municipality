@@ -323,7 +323,7 @@ def test_rag_answering_uses_extractive_decision_match_without_model_call() -> No
     assert provider.requests == []
     assert result.scoring.get("external_call_count") == 0
     assert result.claim_assessments
-    assert result.claim_assessments[0]["semantic_source"] == "decision_embedding_match"
+    assert result.claim_assessments[0]["semantic_source"] == "decision_line_match"
 
 
 def test_rag_answering_exposes_when_external_fallback_overrides_deterministic_low_score(monkeypatch) -> None:

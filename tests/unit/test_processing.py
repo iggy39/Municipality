@@ -51,6 +51,9 @@ class StubChunkEmbeddingService:
     def __init__(self) -> None:
         self.calls: list[int] = []
 
+    def delete_chunk_embeddings(self, *, chunk_ids: list[str]) -> None:
+        return None
+
     def index_chunks(self, *, chunks: list[dict]) -> object:
         self.calls.append(len(chunks))
         return type("EmbeddingResult", (), {"enabled": True, "created": len(chunks), "cached": 0, "total": len(chunks), "error_text": None})()
@@ -76,7 +79,7 @@ class StubSemanticService:
             mentions=1,
             edges=0,
             decision_links=0,
-            chunk_links=1,
+            artifact_links=1,
             reject_rows=0,
         )
 
@@ -105,11 +108,11 @@ def test_processing_skips_semantic_enrichment_for_attachments_by_default(tmp_pat
         steps = session.execute(select(PipelineRunStep.step_name, PipelineRunStep.status, PipelineRunStep.detail)).all()
         by_name = {name: (status, detail) for name, status, detail in steps}
 
-        assert by_name["chunk_embedding_index"][0] == "completed"
+        assert by_name["structure_artifact_index"][0] == "completed"
         assert by_name["semantic_enrichment"][0] == "skipped"
         assert by_name["semantic_enrichment"][1] == "SKIP_SOURCE_KIND:attachment"
         assert semantic_service.calls == []
-        assert embedding_service.calls == [1]
+        assert embedding_service.calls
 
 
 def test_processing_runs_semantic_enrichment_for_protocol_documents(tmp_path: Path) -> None:

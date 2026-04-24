@@ -117,14 +117,6 @@ class DecisionSemanticLinkCandidate:
 
 
 @dataclass(slots=True)
-class ChunkSemanticLinkCandidate:
-    chunk_id: str
-    node_candidate_id: str
-    confidence: float | None = None
-    mention_index: int | None = None
-
-
-@dataclass(slots=True)
 class SemanticCandidateRejectRecord:
     candidate_label_he: str | None
     candidate_label_norm: str | None
@@ -141,7 +133,6 @@ class SemanticExtractionOutput:
     nodes: list[SemanticNodeCandidate] = field(default_factory=list)
     edges: list[SemanticEdgeCandidate] = field(default_factory=list)
     decision_links: list[DecisionSemanticLinkCandidate] = field(default_factory=list)
-    chunk_links: list[ChunkSemanticLinkCandidate] = field(default_factory=list)
     rejects: list[SemanticCandidateRejectRecord] = field(default_factory=list)
     refusal: str | None = None
 
@@ -271,19 +262,6 @@ SEMANTIC_EXTRACTION_RESPONSE_SCHEMA: dict[str, Any] = {
                 },
             },
         },
-        "chunk_links": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "required": ["chunk_id", "node_candidate_id"],
-                "properties": {
-                    "chunk_id": {"type": "string"},
-                    "node_candidate_id": {"type": "string"},
-                    "confidence": {"type": ["number", "null"]},
-                    "mention_index": {"type": ["integer", "null"]},
-                },
-            },
-        },
         "rejects": {
             "type": "array",
             "items": {
@@ -379,7 +357,6 @@ def parse_semantic_model_output(payload: dict[str, Any]) -> tuple[SemanticExtrac
 
     output.edges.extend(_parse_edges(payload.get("edges"), issues=issues))
     output.decision_links.extend(_parse_decision_links(payload.get("decision_links"), issues=issues))
-    output.chunk_links.extend(_parse_chunk_links(payload.get("chunk_links"), issues=issues))
     output.rejects.extend(_parse_rejects(payload.get("rejects"), issues=issues))
     output.refusal = _as_str(payload.get("refusal"))
 
@@ -652,46 +629,6 @@ def _parse_decision_links(raw_value: Any, *, issues: list[SemanticValidationIssu
                 decision_id=decision_id,
                 node_candidate_id=node_candidate_id,
                 relation_role=parsed_role,
-                confidence=_as_float(raw_link.get("confidence"), default=None),
-                mention_index=_as_int(raw_link.get("mention_index")),
-            )
-        )
-    return out
-
-
-def _parse_chunk_links(raw_value: Any, *, issues: list[SemanticValidationIssue]) -> list[ChunkSemanticLinkCandidate]:
-    if raw_value is None:
-        return []
-    if not isinstance(raw_value, list):
-        issues.append(SemanticValidationIssue(code="chunk_links_invalid", path="chunk_links", message="chunk_links must be a list"))
-        return []
-
-    out: list[ChunkSemanticLinkCandidate] = []
-    for idx, raw_link in enumerate(raw_value):
-        if not isinstance(raw_link, dict):
-            issues.append(
-                SemanticValidationIssue(
-                    code="chunk_link_invalid",
-                    path=f"chunk_links[{idx}]",
-                    message="chunk link must be object",
-                )
-            )
-            continue
-        chunk_id = _as_str(raw_link.get("chunk_id"))
-        node_candidate_id = _as_str(raw_link.get("node_candidate_id"))
-        if not chunk_id or not node_candidate_id:
-            issues.append(
-                SemanticValidationIssue(
-                    code="chunk_link_required_fields",
-                    path=f"chunk_links[{idx}]",
-                    message="chunk_id and node_candidate_id are required",
-                )
-            )
-            continue
-        out.append(
-            ChunkSemanticLinkCandidate(
-                chunk_id=chunk_id,
-                node_candidate_id=node_candidate_id,
                 confidence=_as_float(raw_link.get("confidence"), default=None),
                 mention_index=_as_int(raw_link.get("mention_index")),
             )

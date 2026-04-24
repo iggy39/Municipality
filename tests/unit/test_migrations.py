@@ -19,7 +19,7 @@ def test_migrations_apply_and_reapply_cleanly(tmp_path: Path) -> None:
         extracted = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='extracted_document'"))
         assert extracted.first() is not None
         chunk = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='text_chunk'"))
-        assert chunk.first() is not None
+        assert chunk.first() is None
         meeting = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='meeting'"))
         assert meeting.first() is not None
         decision = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='decision'"))
@@ -37,7 +37,7 @@ def test_migrations_apply_and_reapply_cleanly(tmp_path: Path) -> None:
         )
         assert decision_request_context.first() is not None
         chunk_embedding = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_embedding'"))
-        assert chunk_embedding.first() is not None
+        assert chunk_embedding.first() is None
         decision_extraction_cache = conn.execute(
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='decision_extraction_cache'")
         )
@@ -49,7 +49,7 @@ def test_migrations_apply_and_reapply_cleanly(tmp_path: Path) -> None:
         decision_embedding = conn.execute(
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='decision_embedding'")
         )
-        assert decision_embedding.first() is not None
+        assert decision_embedding.first() is None
         rag_answer_cache = conn.execute(
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='rag_answer_cache'")
         )
@@ -66,6 +66,14 @@ def test_migrations_apply_and_reapply_cleanly(tmp_path: Path) -> None:
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='retrieval_artifact_embedding'")
         )
         assert retrieval_artifact_embedding.first() is not None
+        artifact_semantic_link = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='artifact_semantic_link'")
+        )
+        assert artifact_semantic_link.first() is not None
+        chunk_semantic_link = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='chunk_semantic_link'")
+        )
+        assert chunk_semantic_link.first() is None
         retired_summary_cache = conn.execute(
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='rag_decision_summary_cache'")
         )

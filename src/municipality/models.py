@@ -137,35 +137,6 @@ class ExtractedDocument(Base):
     warning_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-
-class TextChunk(Base):
-    __tablename__ = "text_chunk"
-    __table_args__ = (
-        UniqueConstraint("chunk_id", name="uq_text_chunk_chunk_id"),
-        Index("ix_text_chunk_docver_id", "document_version_id"),
-        Index("ix_text_chunk_document_id", "document_id"),
-        Index("ix_text_chunk_source_kind", "source_kind"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    chunk_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
-    document_version_id: Mapped[int] = mapped_column(ForeignKey("document_version.id"), nullable=False)
-    extracted_document_id: Mapped[int] = mapped_column(ForeignKey("extracted_document.id"), nullable=False)
-    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
-    chunk_text_norm: Mapped[str] = mapped_column(Text, nullable=False)
-    start_offset: Mapped[int] = mapped_column(Integer, nullable=False)
-    end_offset: Mapped[int] = mapped_column(Integer, nullable=False)
-    start_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    end_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    citation_label: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    trigram_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-
 class DocumentSection(Base):
     __tablename__ = "document_section"
     __table_args__ = (
@@ -234,26 +205,6 @@ class RetrievalArtifact(Base):
     trigram_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-
-class ChunkEmbedding(Base):
-    __tablename__ = "chunk_embedding"
-    __table_args__ = (
-        UniqueConstraint("chunk_id", "model_provider", "model_name", "dimensions", name="uq_chunk_embedding_model"),
-        Index("ix_chunk_embedding_chunk_id", "chunk_id"),
-        Index("ix_chunk_embedding_model", "model_provider", "model_name", "dimensions"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    chunk_id: Mapped[str] = mapped_column(String(64), ForeignKey("text_chunk.chunk_id"), nullable=False)
-    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
-    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
-    embedding_json: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-
 class RetrievalArtifactEmbedding(Base):
     __tablename__ = "retrieval_artifact_embedding"
     __table_args__ = (
@@ -421,7 +372,7 @@ class DecisionRequestContext(Base):
     gush: Mapped[str | None] = mapped_column(String(64), nullable=True)
     helka: Mapped[str | None] = mapped_column(String(64), nullable=True)
     migrash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    source_chunk_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_artifact_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
@@ -482,25 +433,6 @@ class QueryEmbeddingCache(Base):
     embedding_json: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-
-class DecisionEmbedding(Base):
-    __tablename__ = "decision_embedding"
-    __table_args__ = (
-        UniqueConstraint("decision_id", "model_provider", "model_name", "dimensions", name="uq_decision_embedding_key"),
-        Index("ix_decision_embedding_lookup", "decision_id", "model_provider", "model_name", "dimensions"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    decision_id: Mapped[int] = mapped_column(ForeignKey("decision.id"), nullable=False)
-    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
-    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    dimensions: Mapped[int] = mapped_column(Integer, nullable=False)
-    embedding_json: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-
 class RagAnswerCache(Base):
     __tablename__ = "rag_answer_cache"
     __table_args__ = (
@@ -689,18 +621,16 @@ class DecisionSemanticLink(Base):
     source_mention_id: Mapped[int | None] = mapped_column(ForeignKey("semantic_mention.id"), nullable=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-
-
-class ChunkSemanticLink(Base):
-    __tablename__ = "chunk_semantic_link"
+class ArtifactSemanticLink(Base):
+    __tablename__ = "artifact_semantic_link"
     __table_args__ = (
-        UniqueConstraint("chunk_id", "semantic_node_id", name="uq_chunk_semantic_link_pair"),
-        Index("ix_chunk_semantic_link_chunk_id", "chunk_id"),
-        Index("ix_chunk_semantic_link_semantic_node_id", "semantic_node_id"),
+        UniqueConstraint("artifact_id", "semantic_node_id", name="uq_artifact_semantic_link_pair"),
+        Index("ix_artifact_semantic_link_artifact_id", "artifact_id"),
+        Index("ix_artifact_semantic_link_semantic_node_id", "semantic_node_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    chunk_id: Mapped[str] = mapped_column(String(64), ForeignKey("text_chunk.chunk_id"), nullable=False)
+    artifact_id: Mapped[str] = mapped_column(String(64), ForeignKey("retrieval_artifact.artifact_id"), nullable=False)
     semantic_node_id: Mapped[int] = mapped_column(ForeignKey("semantic_node.id"), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     source_mention_id: Mapped[int | None] = mapped_column(ForeignKey("semantic_mention.id"), nullable=True)

@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from municipality.chunking import normalize_for_search
-from municipality.models import ChunkEmbedding, DecisionEmbedding, QueryEmbeddingCache
+from municipality.models import QueryEmbeddingCache, RetrievalArtifactEmbedding
 
 
 OPENAI_EMBEDDING_PROVIDER = "OpenAI"
@@ -299,11 +299,11 @@ class ChunkEmbeddingService:
             return {}
 
         rows = self.session.execute(
-            select(ChunkEmbedding).where(
-                ChunkEmbedding.chunk_id.in_(normalized_ids),
-                ChunkEmbedding.model_provider == self.model_client.provider_name,
-                ChunkEmbedding.model_name == self.model_client.model_name,
-                ChunkEmbedding.dimensions == self.model_client.dimensions,
+            select(RetrievalArtifactEmbedding).where(
+                RetrievalArtifactEmbedding.artifact_id.in_(normalized_ids),
+                RetrievalArtifactEmbedding.model_provider == self.model_client.provider_name,
+                RetrievalArtifactEmbedding.model_name == self.model_client.model_name,
+                RetrievalArtifactEmbedding.dimensions == self.model_client.dimensions,
             )
         ).scalars().all()
 
@@ -315,14 +315,14 @@ class ChunkEmbeddingService:
                 continue
             if not isinstance(parsed, list) or not parsed:
                 continue
-            out[str(row.chunk_id)] = [float(value) for value in parsed]
+            out[str(row.artifact_id)] = [float(value) for value in parsed]
         return out
 
     def delete_chunk_embeddings(self, *, chunk_ids: Sequence[str]) -> None:
         normalized_ids = [str(chunk_id or "").strip() for chunk_id in chunk_ids if str(chunk_id or "").strip()]
         if not normalized_ids:
             return
-        self.session.query(ChunkEmbedding).filter(ChunkEmbedding.chunk_id.in_(normalized_ids)).delete(
+        self.session.query(RetrievalArtifactEmbedding).filter(RetrievalArtifactEmbedding.artifact_id.in_(normalized_ids)).delete(
             synchronize_session=False
         )
 
@@ -402,11 +402,11 @@ class ChunkEmbeddingService:
             return ChunkEmbeddingIndexResult(enabled=False, total=len(normalized_rows))
 
         existing_rows = self.session.execute(
-            select(ChunkEmbedding.chunk_id).where(
-                ChunkEmbedding.chunk_id.in_([chunk_id for chunk_id, _ in normalized_rows]),
-                ChunkEmbedding.model_provider == self.model_client.provider_name,
-                ChunkEmbedding.model_name == self.model_client.model_name,
-                ChunkEmbedding.dimensions == self.model_client.dimensions,
+            select(RetrievalArtifactEmbedding.artifact_id).where(
+                RetrievalArtifactEmbedding.artifact_id.in_([chunk_id for chunk_id, _ in normalized_rows]),
+                RetrievalArtifactEmbedding.model_provider == self.model_client.provider_name,
+                RetrievalArtifactEmbedding.model_name == self.model_client.model_name,
+                RetrievalArtifactEmbedding.dimensions == self.model_client.dimensions,
             )
         ).all()
         existing_chunk_ids = {str(chunk_id) for chunk_id, in existing_rows}
@@ -442,8 +442,8 @@ class ChunkEmbeddingService:
         now = datetime.utcnow()
         for (chunk_id, _text), vector in zip(missing_rows, vectors, strict=True):
             self.session.add(
-                ChunkEmbedding(
-                    chunk_id=chunk_id,
+                RetrievalArtifactEmbedding(
+                    artifact_id=chunk_id,
                     model_provider=self.model_client.provider_name,
                     model_name=self.model_client.model_name,
                     dimensions=len(vector),

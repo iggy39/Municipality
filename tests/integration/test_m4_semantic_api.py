@@ -13,20 +13,20 @@ from municipality.chunking import build_chunks
 from municipality.extraction import parse_extracted_text
 from municipality.migrations import apply_all
 from municipality.models import (
-    ChunkSemanticLink,
+    ArtifactSemanticLink,
     Decision,
     DecisionSemanticLink,
     Document,
     DocumentVersion,
     ExtractedDocument,
     Meeting,
+    RetrievalArtifact,
     SemanticAlias,
     SemanticCandidateReject,
     SemanticDocumentRun,
     SemanticMention,
     SemanticNode,
     SourceSite,
-    TextChunk,
 )
 from municipality.search import SearchService
 
@@ -79,7 +79,7 @@ def test_m4_semantic_api_endpoints_expose_search_tree_node_and_runs(tmp_path: Pa
         node_payload = semantic_node_detail(fixture["child_node_id"], db=session)
         assert node_payload["aliases"]
         assert node_payload["linked_decisions"]
-        assert node_payload["linked_chunks"]
+        assert node_payload["linked_artifacts"]
         assert node_payload["mentions"]
 
         runs_payload = semantic_runs(document_version_id=fixture["document_version_id"], db=session)
@@ -180,7 +180,7 @@ def _seed_semantic_api_fixture(session: Session) -> dict[str, int]:
         chunks=chunks,
     )
 
-    chunk = session.execute(select(TextChunk).where(TextChunk.document_version_id == version.id)).scalar_one()
+    chunk = session.execute(select(RetrievalArtifact).where(RetrievalArtifact.document_version_id == version.id)).scalar_one()
 
     decision = Decision(
         meeting_id=meeting.id,
@@ -275,8 +275,8 @@ def _seed_semantic_api_fixture(session: Session) -> dict[str, int]:
     session.flush()
 
     session.add(
-        ChunkSemanticLink(
-            chunk_id=chunk.chunk_id,
+        ArtifactSemanticLink(
+            artifact_id=chunk.artifact_id,
             semantic_node_id=child_node.id,
             confidence=0.95,
             source_mention_id=mention.id,

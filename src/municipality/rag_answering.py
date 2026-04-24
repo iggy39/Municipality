@@ -35,7 +35,7 @@ LOCAL_VERIFY_MODEL_DIR_DEFAULT = "local_llm/models/TinyLlama-1.1B-Chat-v1.0"
 DETERMINISTIC_REFUSAL_PROVIDER_NAME = "DeterministicRefusal"
 DETERMINISTIC_REFUSAL_MODEL_NAME = "rule_based_v1"
 DETERMINISTIC_EXTRACTIVE_PROVIDER_NAME = "DeterministicExtractive"
-DETERMINISTIC_EXTRACTIVE_MODEL_NAME = "decision_embedding_match_v1"
+DETERMINISTIC_EXTRACTIVE_MODEL_NAME = "decision_line_match_v2"
 VERIFY_FALLBACK_PROVIDER_EXTERNAL = "external"
 VERIFY_FALLBACK_PROVIDER_LOCAL = "local"
 DETERMINISTIC_SIMILARITY_SOURCE = "deterministic_similarity"
@@ -1089,7 +1089,7 @@ class RagAnsweringService:
             for section in answer_sections
         ]
         scoring_payload["topic_subject_anchor_document_count"] = len(protocol_subject_anchors or {})
-        scoring_payload["decision_request_context_chunk_count"] = len(decision_request_context_by_chunk or {})
+        scoring_payload["decision_request_context_artifact_count"] = len(decision_request_context_by_chunk or {})
         scoring_payload["broad_query_protocol_split_applied"] = broad_protocol_split_applied
         scoring_payload["semantic_topic_enforced"] = semantic_topic_enforced
         scoring_payload["broad_duplicate_text_fixed"] = broad_duplicate_text_fixed
@@ -1107,6 +1107,20 @@ class RagAnsweringService:
                 extended_answer = raw_model_answer
         if not final_answer:
             final_answer = _compose_answer_from_claim_assessments(selected_claim_assessments)
+
+        rewritten_answer, rewritten_extended_answer, rewrite_stats = _maybe_ai21_rewrite_answers(
+            llm_client=self.llm_client,
+            question=question,
+            answer=final_answer,
+            extended_answer=extended_answer,
+            answer_sections=answer_sections,
+            ask_request_id=ask_request_id,
+        )
+        final_answer = rewritten_answer or final_answer
+        extended_answer = rewritten_extended_answer or extended_answer
+        scoring_payload["ai21_rewrite_applied"] = bool(rewrite_stats.get("applied"))
+        if rewrite_stats:
+            scoring_payload["ai21_rewrite"] = rewrite_stats
 
         result = RagAnswerResult(
             status="answer",
@@ -1417,7 +1431,7 @@ def _build_extractive_answer_if_confident(
                 "text": decision_text,
                 "score": round(top_similarity, 6),
                 "citation_chunk_ids": cited_chunk_ids,
-                "semantic_source": "decision_embedding_match",
+                "semantic_source": "decision_line_match",
                 "selected_for_answer": True,
             }
         ],
@@ -1429,7 +1443,7 @@ def _build_extractive_answer_if_confident(
             "answer_external_api_called": False,
             "external_call_count": 0,
             "verify_route": "not_needed",
-            "semantic_scoring_source": "decision_embedding_match",
+            "semantic_scoring_source": "decision_line_match",
             "extractive_decision_similarity": round(top_similarity, 6),
             "extractive_decision_gap": round(top_similarity - second_similarity, 6),
             "extractive_decision_id": top_match.get("decision_id"),
@@ -3572,9 +3586,96 @@ def _rewrite_summary_from_decision_context(
     if parcel_bits:
         rewritten = f"{rewritten.rstrip('.')} - פרטי מקרקעין: {', '.join(parcel_bits)}."
 
-    source_chunk_ids = decision_request_context.get("source_chunk_ids")
+    source_chunk_ids = decision_request_context.get("source_artifact_ids")
+    if not isinstance(source_chunk_ids, list) or not source_chunk_ids:
+        source_chunk_ids = decision_request_context.get("source_chunk_ids")
     used_chunk_ids = [str(chunk_id) for chunk_id in source_chunk_ids] if isinstance(source_chunk_ids, list) else []
     return rewritten, used_chunk_ids
+
+
+def _maybe_ai21_rewrite_answers(
+    *,
+    llm_client: RagLlmClient,
+    question: str,
+    answer: str | None,
+    extended_answer: str | None,
+    answer_sections: list[dict[str, Any]],
+    ask_request_id: str | None,
+) -> tuple[str | None, str | None, dict[str, Any]]:
+    provider_name = str(getattr(llm_client.provider, "provider_name", "") or "").strip().casefold()
+    if provider_name != "ai21":
+        return answer, extended_answer, {"enabled": False, "provider": provider_name or None, "applied": False}
+
+    compact_answer = _as_optional_str(answer)
+    compact_extended = _as_optional_str(extended_answer)
+    if not compact_answer and not compact_extended:
+        return answer, extended_answer, {"enabled": True, "provider": provider_name, "applied": False, "reason": "empty_answer"}
+
+    payload = {
+        "question": question,
+        "answer": compact_answer,
+        "extended_answer": compact_extended,
+        "sections": [
+            {
+                "topic": _as_optional_str(section.get("topic")),
+                "text": _as_optional_str(section.get("text")),
+            }
+            for section in answer_sections[:8]
+        ],
+    }
+    result = llm_client.generate(
+        call_type=RAG_CALL_ANSWER,
+        instruction=(
+            "rewrite the provided grounded hebrew answer for clarity and flow. "
+            "do not add claims, do not remove grounded claims, and keep the factual scope identical. "
+            "return strict json with keys answer and extended_answer only."
+        ),
+        payload=payload,
+        temperature=0.0,
+        ask_request_id=ask_request_id,
+    )
+    if result.error_code or not result.text:
+        return answer, extended_answer, {
+            "enabled": True,
+            "provider": provider_name,
+            "applied": False,
+            "error_code": result.error_code,
+        }
+
+    parsed = _parse_ai21_rewrite_payload(result.text)
+    if parsed is None:
+        return answer, extended_answer, {
+            "enabled": True,
+            "provider": provider_name,
+            "applied": False,
+            "error_code": "INVALID_REWRITE_PAYLOAD",
+        }
+
+    rewritten_answer = parsed.get("answer") or compact_answer
+    rewritten_extended = parsed.get("extended_answer") or compact_extended or rewritten_answer
+    return rewritten_answer, rewritten_extended, {
+        "enabled": True,
+        "provider": provider_name,
+        "applied": True,
+        "model": result.model,
+    }
+
+
+def _parse_ai21_rewrite_payload(value: str) -> dict[str, str] | None:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    answer = _as_optional_str(parsed.get("answer"))
+    extended_answer = _as_optional_str(parsed.get("extended_answer"))
+    if not answer and not extended_answer:
+        return None
+    return {
+        "answer": answer or "",
+        "extended_answer": extended_answer or "",
+    }
 
 
 def _object_root_from_texts(*texts: str) -> str | None:

@@ -1,3 +1,12 @@
+DROP TABLE IF EXISTS decision_embedding;
+DROP TABLE IF EXISTS chunk_embedding;
+DROP TABLE IF EXISTS chunk_semantic_link;
+DROP TABLE IF EXISTS chunk_trigram;
+DROP TABLE IF EXISTS chunk_fts;
+DROP TABLE IF EXISTS text_chunk;
+DROP TABLE IF EXISTS decision_request_context_legacy;
+DROP TABLE IF EXISTS decision_request_context;
+
 CREATE TABLE IF NOT EXISTS decision_request_context (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     decision_id INTEGER NOT NULL,

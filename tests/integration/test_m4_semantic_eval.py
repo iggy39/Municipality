@@ -12,17 +12,17 @@ from municipality.eval_semantic import evaluate_semantic_eval_set, load_semantic
 from municipality.extraction import parse_extracted_text
 from municipality.migrations import apply_all
 from municipality.models import (
-    ChunkSemanticLink,
+    ArtifactSemanticLink,
     Document,
     DocumentVersion,
     ExtractedDocument,
+    RetrievalArtifact,
     SemanticAlias,
     SemanticCandidateReject,
     SemanticDocumentRun,
     SemanticMention,
     SemanticNode,
     SourceSite,
-    TextChunk,
 )
 from municipality.search import SearchService
 
@@ -184,10 +184,10 @@ def _seed_eval_fixture(*, session: Session, search_service: SearchService) -> No
     )
 
     transport_chunk = session.execute(
-        select(TextChunk).where(TextChunk.document_version_id == transport_ver.id)
+        select(RetrievalArtifact).where(RetrievalArtifact.document_version_id == transport_ver.id)
     ).scalar_one()
     clean_chunk = session.execute(
-        select(TextChunk).where(TextChunk.document_version_id == clean_ver.id)
+        select(RetrievalArtifact).where(RetrievalArtifact.document_version_id == clean_ver.id)
     ).scalar_one()
 
     transport_node = SemanticNode(
@@ -245,15 +245,15 @@ def _seed_eval_fixture(*, session: Session, search_service: SearchService) -> No
 
     session.add_all(
         [
-            ChunkSemanticLink(
-                chunk_id=transport_chunk.chunk_id,
+            ArtifactSemanticLink(
+                artifact_id=transport_chunk.artifact_id,
                 semantic_node_id=transport_node.id,
                 confidence=0.95,
                 source_mention_id=None,
                 metadata_json=None,
             ),
-            ChunkSemanticLink(
-                chunk_id=clean_chunk.chunk_id,
+            ArtifactSemanticLink(
+                artifact_id=clean_chunk.artifact_id,
                 semantic_node_id=clean_node.id,
                 confidence=0.91,
                 source_mention_id=None,

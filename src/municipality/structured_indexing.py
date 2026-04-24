@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from municipality.artifact_embeddings import ArtifactEmbeddingService
 from municipality.artifact_search import ArtifactSearchService
+from municipality.embeddings import ChunkEmbeddingService
 from sqlalchemy import select
 
 from municipality.models import DocumentSection, RetrievalArtifact
@@ -30,7 +31,7 @@ class StructuredIndexingService:
         session: Session,
         *,
         search_service: ArtifactSearchService | None = None,
-        embedding_service: ArtifactEmbeddingService | None = None,
+        embedding_service: ChunkEmbeddingService | None = None,
     ):
         self.session = session
         self.search_service = search_service or ArtifactSearchService(session)
@@ -46,6 +47,7 @@ class StructuredIndexingService:
         text: str,
         citation_map: list[dict[str, int]],
         source_kind: str,
+        pages: list[Any] | None = None,
     ) -> StructuredIndexingResult:
         build_result = build_structured_document(
             document_version_id=document_version_id,
@@ -53,6 +55,7 @@ class StructuredIndexingService:
             text=text,
             citation_map=citation_map,
             source_kind=source_kind,
+            pages=pages,
         )
 
         existing_artifact_ids = list(

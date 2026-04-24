@@ -9,14 +9,12 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from municipality.chunking import build_chunks
 from municipality.decision_context import DecisionContextService
 from municipality.decisions import DecisionExtractionService
 from municipality.embeddings import ChunkEmbeddingService
 from municipality.extraction import PdfTextExtractor
 from municipality.models import Document, DocumentVersion, ExtractedDocument, PipelineRun, PipelineRunStep, SourceSite
 from municipality.rag_arch import RagArchitectureConfig
-from municipality.search import SearchService
 from municipality.semantic_service import SemanticService
 from municipality.storage import RawStorage
 from municipality.structured_indexing import StructuredIndexingService
@@ -84,14 +82,16 @@ class ProcessingService:
         self.session = session
         self.storage = RawStorage(storage_root)
         self.extractor = extractor or PdfTextExtractor()
-        self.search = SearchService(session)
         self.decision_extraction = decision_extraction or DecisionExtractionService(session)
         self.decision_context_service = decision_context_service or DecisionContextService(session)
         self.chunk_embedding_service = chunk_embedding_service or ChunkEmbeddingService(session)
         self.semantic_service = semantic_service or SemanticService(session)
         self.semantic_policy = semantic_policy or SemanticEnrichmentPolicy.from_env()
         self.rag_arch = RagArchitectureConfig.from_env()
-        self.structured_indexing = StructuredIndexingService(session) if self.rag_arch.v2_index_build_enabled else None
+        self.structured_indexing = StructuredIndexingService(
+            session,
+            embedding_service=self.chunk_embedding_service,
+        ) if self.rag_arch.v2_index_build_enabled else None
 
     def run(self, doc_id: int | None = None, municipality_slug: str | None = None) -> int:
         run = PipelineRun(
@@ -118,7 +118,7 @@ class ProcessingService:
         for document_version, document, _source_site in rows:
             step = PipelineRunStep(
                 run_id=run.id,
-                step_name="extract_chunk_index",
+                step_name="extract_document",
                 status="running",
                 item_ref=document.canonical_url,
             )
@@ -145,50 +145,11 @@ class ProcessingService:
                     step.detail = extraction.error_code or "EXTRACTION_FAILED"
                     continue
 
-                chunks = build_chunks(
-                    document_version_id=document_version.id,
-                    text=extraction.full_text,
-                    citation_map=extraction.citation_map,
-                    source_kind=source_kind,
-                )
-                self.search.replace_document_chunks(
-                    document_id=document.id,
-                    document_version_id=document_version.id,
-                    extracted_document_id=extracted_row.id,
-                    source_kind=source_kind,
-                    chunks=chunks,
-                )
-
                 quality_score = extraction.quality_score if extraction.quality_score is not None else 0.0
                 flags = ",".join(extraction.quality_flags)
+                structure_artifact_count = 0
                 step.status = "completed"
-                step.detail = f"chunks={len(chunks)}; quality={quality_score:.2f}; flags={flags or 'NONE'}"
-
-                embedding_step = PipelineRunStep(
-                    run_id=run.id,
-                    step_name="chunk_embedding_index",
-                    status="running",
-                    item_ref=document.canonical_url,
-                )
-                self.session.add(embedding_step)
-                self.session.flush()
-
-                try:
-                    embedding_result = self.chunk_embedding_service.index_chunks(chunks=chunks)
-                    if not embedding_result.enabled:
-                        embedding_step.status = "skipped"
-                        embedding_step.detail = embedding_result.error_text or "DISABLED"
-                    elif embedding_result.error_text:
-                        embedding_step.status = "failed"
-                        embedding_step.detail = embedding_result.error_text
-                    else:
-                        embedding_step.status = "completed"
-                        embedding_step.detail = (
-                            f"created={embedding_result.created}; cached={embedding_result.cached}; total={embedding_result.total}"
-                        )
-                except Exception as exc:
-                        embedding_step.status = "failed"
-                        embedding_step.detail = f"UNEXPECTED_ERROR:{exc.__class__.__name__}"
+                step.detail = f"quality={quality_score:.2f}; flags={flags or 'NONE'}"
 
                 if self.structured_indexing is not None:
                     structure_step = PipelineRunStep(
@@ -208,8 +169,10 @@ class ProcessingService:
                             text=extraction.full_text,
                             citation_map=extraction.citation_map,
                             source_kind=source_kind,
+                            pages=list(extraction.pages),
                         )
                         structure_step.status = "completed"
+                        structure_artifact_count = structure_result.artifact_count
                         structure_step.detail = (
                             f"sections={structure_result.section_count}; artifacts={structure_result.artifact_count}; "
                             f"embed_created={structure_result.embedding_created}; embed_cached={structure_result.embedding_cached}; "
@@ -232,7 +195,7 @@ class ProcessingService:
                     source_kind=source_kind,
                     quality_score=quality_score,
                     extracted_text=extraction.full_text,
-                    chunk_count=len(chunks),
+                    chunk_count=structure_artifact_count,
                 )
                 if not should_run_semantic:
                     semantic_step.status = "skipped"
@@ -254,7 +217,7 @@ class ProcessingService:
                             f"run_id={semantic_result.run_id}; status={semantic_result.status}; "
                             f"from_cache={semantic_result.from_cache}; api_calls={semantic_result.api_call_count}; "
                             f"accepted_nodes={semantic_result.accepted_nodes}; aliases={semantic_result.aliases}; "
-                            f"mentions={semantic_result.mentions}; chunk_links={semantic_result.chunk_links}; "
+                            f"mentions={semantic_result.mentions}; artifact_links={semantic_result.artifact_links}; "
                             f"decision_links={semantic_result.decision_links}; rejects={semantic_result.reject_rows}; "
                             f"validation_issues={semantic_result.validation_issues}"
                         )
@@ -311,6 +274,8 @@ class ProcessingService:
                 "text": page.text,
                 "start_offset": page.start_offset,
                 "end_offset": page.end_offset,
+                "reading_direction": page.reading_direction,
+                "layout_blocks": list(page.layout_blocks),
             }
             for page in extraction.pages
         ]
