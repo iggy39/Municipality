@@ -3408,6 +3408,7 @@ def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
     }
 
 
+@app.get("/ask", response_class=HTMLResponse)
 @app.get("/ui/ask", response_class=HTMLResponse)
 def ask_playground_page() -> HTMLResponse:
     html_page = """

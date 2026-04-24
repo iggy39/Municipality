@@ -13,6 +13,16 @@ def test_query_rewrite_prefers_header_strategy_for_broad_protocol_queries() -> N
     assert result.artifact_kind_priority[0] in {"document_profile", "header_anchor"}
 
 
+def test_query_rewrite_treats_generic_what_was_decided_query_as_broad() -> None:
+    service = QueryRewriteService()
+
+    result = service.rewrite_for_retrieval(query="מה הוחלט בעיר?")
+
+    assert result.retrieval_strategy == "headers"
+    assert result.use_neighbors is True
+    assert result.route_reason == "broad_query"
+
+
 def test_query_rewrite_prefers_segment_strategy_for_focused_decisions() -> None:
     service = QueryRewriteService()
 

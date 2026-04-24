@@ -12,7 +12,7 @@ from typing import Any, Mapping
 
 from municipality.chunking import normalize_for_search
 from municipality.fallback import BYTEZ_PROVIDER
-from municipality.rag_llm import RAG_CALL_ANSWER, RAG_CALL_REFUSE, RAG_CALL_VERIFY, RagLlmClient
+from municipality.rag_llm import RAG_CALL_ANSWER, RAG_CALL_REFUSE, RAG_CALL_VERIFY, RAG_PROVIDER_AI21, RagLlmClient
 from municipality.rag_observability import log_rag_event
 from municipality.rag_retrieval import RagContextChunk, RagRetrievalResult
 
@@ -36,6 +36,7 @@ DETERMINISTIC_REFUSAL_PROVIDER_NAME = "DeterministicRefusal"
 DETERMINISTIC_REFUSAL_MODEL_NAME = "rule_based_v1"
 DETERMINISTIC_EXTRACTIVE_PROVIDER_NAME = "DeterministicExtractive"
 DETERMINISTIC_EXTRACTIVE_MODEL_NAME = "decision_line_match_v2"
+DETERMINISTIC_FALLBACK_MODEL_NAME = "retrieval_fallback_v1"
 VERIFY_FALLBACK_PROVIDER_EXTERNAL = "external"
 VERIFY_FALLBACK_PROVIDER_LOCAL = "local"
 DETERMINISTIC_SIMILARITY_SOURCE = "deterministic_similarity"
@@ -664,6 +665,32 @@ class RagAnsweringService:
         )
         answer_call_ms = _elapsed_ms(answer_call_started)
         if answer_call.error_code or not answer_call.text:
+            deterministic_fallback = _build_deterministic_answer_fallback(
+                question=question,
+                retrieval=retrieval,
+                required_source_kinds=required_sources,
+                protocol_subject_anchors=protocol_subject_anchors,
+                protocol_semantic_topic_labels=protocol_semantic_topic_labels,
+                decision_request_context_by_chunk=decision_request_context_by_chunk,
+                llm_provider=answer_call.provider,
+                llm_model=answer_call.model,
+                llm_error_code=answer_call.error_code,
+                llm_error_text=answer_call.error_text,
+            )
+            if deterministic_fallback is not None:
+                deterministic_fallback.scoring = {
+                    **dict(deterministic_fallback.scoring),
+                    "answer_call_error_code": answer_call.error_code,
+                    "answer_call_error_text": answer_call.error_text,
+                    "answer_call_empty_text": not bool(answer_call.text),
+                    "answer_external_api_called": _is_external_provider_name(answer_call.provider),
+                    "external_call_count": 1 if _is_external_provider_name(answer_call.provider) else 0,
+                    "timing_ms": {
+                        "answer_call": answer_call_ms,
+                        "compose_total": _elapsed_ms(compose_started),
+                    },
+                }
+                return deterministic_fallback
             return self._build_refusal(
                 question=question,
                 retrieval=retrieval,
@@ -686,6 +713,30 @@ class RagAnsweringService:
 
         answer_draft = _parse_answer_draft(answer_call.text)
         if answer_draft is None:
+            deterministic_fallback = _build_deterministic_answer_fallback(
+                question=question,
+                retrieval=retrieval,
+                required_source_kinds=required_sources,
+                protocol_subject_anchors=protocol_subject_anchors,
+                protocol_semantic_topic_labels=protocol_semantic_topic_labels,
+                decision_request_context_by_chunk=decision_request_context_by_chunk,
+                llm_provider=answer_call.provider,
+                llm_model=answer_call.model,
+                llm_error_code=REASON_INVALID_ANSWER_FORMAT,
+                llm_error_text="answer draft parsing failed",
+            )
+            if deterministic_fallback is not None:
+                deterministic_fallback.scoring = {
+                    **dict(deterministic_fallback.scoring),
+                    "answer_call_invalid_format": True,
+                    "answer_external_api_called": _is_external_provider_name(answer_call.provider),
+                    "external_call_count": 1 if _is_external_provider_name(answer_call.provider) else 0,
+                    "timing_ms": {
+                        "answer_call": answer_call_ms,
+                        "compose_total": _elapsed_ms(compose_started),
+                    },
+                }
+                return deterministic_fallback
             return self._build_refusal(
                 question=question,
                 retrieval=retrieval,
@@ -1451,6 +1502,177 @@ def _build_extractive_answer_if_confident(
     )
 
 
+def _build_deterministic_answer_fallback(
+    *,
+    question: str,
+    retrieval: RagRetrievalResult,
+    required_source_kinds: list[str],
+    protocol_subject_anchors: dict[int, list[str]] | None,
+    protocol_semantic_topic_labels: dict[int, list[str]] | None,
+    decision_request_context_by_chunk: dict[str, dict[str, Any]] | None,
+    llm_provider: str | None,
+    llm_model: str | None,
+    llm_error_code: str | None,
+    llm_error_text: str | None,
+) -> RagAnswerResult | None:
+    if required_source_kinds and any(source_kind != "protocol" for source_kind in required_source_kinds):
+        return None
+    if not retrieval.contexts:
+        return None
+
+    context_by_chunk = {context.chunk_id: context for context in retrieval.contexts}
+    decision_lines = _augment_decision_lines_with_request_context(
+        decision_lines=_extract_decision_lines(retrieval.contexts),
+        contexts=retrieval.contexts,
+        decision_request_context_by_chunk=decision_request_context_by_chunk,
+    )
+    decision_lines_by_chunk = _build_decision_lines_by_chunk(
+        contexts=retrieval.contexts,
+        decision_lines=decision_lines,
+    )
+    summary_items = _deterministic_summary_items_from_retrieval(
+        question=question,
+        retrieval_contexts=retrieval.contexts,
+        decision_lines_by_chunk=decision_lines_by_chunk,
+    )
+    if not summary_items:
+        return None
+
+    answer_sections, extended_answer_sections = _build_answer_sections(
+        summary_items=summary_items,
+        context_by_chunk=context_by_chunk,
+        fallback_topic=_default_topic_name(question),
+        protocol_subject_anchors=protocol_subject_anchors,
+    )
+    if not answer_sections:
+        return None
+
+    answer_sections, extended_answer_sections, broad_protocol_split_applied = _expand_sections_by_protocol_for_broad_query(
+        question=question,
+        answer_sections=answer_sections,
+        extended_answer_sections=extended_answer_sections,
+        context_by_chunk=context_by_chunk,
+    )
+    answer_sections, extended_answer_sections, semantic_topic_enforced, broad_duplicate_text_fixed = _enforce_semantic_topics_and_section_uniqueness(
+        question=question,
+        answer_sections=answer_sections,
+        extended_answer_sections=extended_answer_sections,
+        context_by_chunk=context_by_chunk,
+        protocol_semantic_topic_labels=protocol_semantic_topic_labels,
+        decision_request_context_by_chunk=decision_request_context_by_chunk,
+    )
+
+    selected_chunk_ids = _section_chunk_ids(answer_sections, extended_answer_sections)
+    citations = _build_citations(retrieval.contexts, selected_chunk_ids)
+    if not citations:
+        return None
+
+    final_answer = _compose_answer_from_sections(answer_sections)
+    extended_answer = _compose_answer_from_sections(extended_answer_sections) or final_answer
+    if not final_answer:
+        return None
+
+    claim_assessments = [
+        {
+            "text": _as_optional_str(section.get("text")) or "",
+            "score": round(float(section.get("topic_score") or 0.65), 6),
+            "citation_chunk_ids": list(section.get("chunk_ids") or []),
+            "semantic_source": "deterministic_retrieval_fallback",
+            "selected_for_answer": True,
+        }
+        for section in answer_sections
+        if _as_optional_str(section.get("text"))
+    ]
+
+    limitations = [
+        "תשובה זו הורכבה דטרמיניסטית מהראיות שנשלפו משום שמחולל התשובה המלא לא היה זמין.",
+    ]
+    if llm_error_code:
+        limitations.append(f"קוד כשל ספק תשובה: {llm_error_code}.")
+
+    return RagAnswerResult(
+        status="answer",
+        answer=final_answer,
+        extended_answer=extended_answer,
+        answer_sections=answer_sections,
+        extended_answer_sections=extended_answer_sections,
+        citations=citations,
+        claim_assessments=claim_assessments,
+        limitations=limitations,
+        provider=DETERMINISTIC_EXTRACTIVE_PROVIDER_NAME,
+        model=DETERMINISTIC_FALLBACK_MODEL_NAME,
+        scoring={
+            "answer_generation_route": "deterministic_retrieval_fallback",
+            "broad_query_protocol_split_applied": broad_protocol_split_applied,
+            "semantic_topic_enforced": semantic_topic_enforced,
+            "broad_duplicate_text_fixed": broad_duplicate_text_fixed,
+            "upstream_answer_provider": llm_provider,
+            "upstream_answer_model": llm_model,
+            "upstream_answer_error_code": llm_error_code,
+            "upstream_answer_error_text": llm_error_text,
+            "answer_external_api_called": False,
+            "external_call_count": 0,
+        },
+    )
+
+
+def _deterministic_summary_items_from_retrieval(
+    *,
+    question: str,
+    retrieval_contexts: list[RagContextChunk],
+    decision_lines_by_chunk: dict[str, list[_DecisionLine]],
+) -> list[dict[str, Any]]:
+    question_has_specific_topic = bool(_primary_topic_tokens(question))
+    candidates: list[tuple[float, str, dict[str, Any]]] = []
+    seen_texts: set[str] = set()
+    for context in retrieval_contexts:
+        line_rows = decision_lines_by_chunk.get(context.chunk_id, [])
+        line_texts = [row.text for row in line_rows] or _extract_decision_sentences(context.chunk_text or context.snippet)
+        if not line_texts:
+            fallback = _compact_summary_text(context.chunk_text or context.snippet)
+            line_texts = [fallback] if fallback else []
+        for line_text in line_texts[:4]:
+            summary = _compact_summary_text(line_text)
+            if not summary:
+                continue
+            normalized = normalize_for_search(summary)
+            if not normalized or normalized in seen_texts:
+                continue
+            seen_texts.add(normalized)
+            score = _decision_candidate_score(question=question, candidate_text=summary)
+            score += round(max(0.0, min(1.0, float(context.score or 0.0))) * 0.1, 6)
+            if context.primary_topic:
+                score += 0.04
+            candidates.append(
+                (
+                    score,
+                    str(context.document_id),
+                    {
+                        "summary_he": summary,
+                        "extended_summary_he": _extended_summary_text(line_text),
+                        "citation_chunk_ids": [context.chunk_id],
+                        "topic_name_he": _as_optional_str(context.primary_topic),
+                        "topic_granularity_hint": 6 if question_has_specific_topic else 4,
+                    },
+                )
+            )
+
+    if not candidates:
+        return []
+    candidates.sort(key=lambda row: row[0], reverse=True)
+    selected: list[dict[str, Any]] = []
+    seen_doc_ids: set[str] = set()
+    for score, document_id, payload in candidates:
+        del score
+        if not question_has_specific_topic and document_id in seen_doc_ids:
+            continue
+        seen_doc_ids.add(document_id)
+        selected.append(payload)
+        if len(selected) >= (5 if not question_has_specific_topic else 4):
+            break
+    return selected
+
+
 def _run_local_verify(
     *,
     question: str,
@@ -1604,7 +1826,8 @@ def _resolve_local_model_dir(value: str) -> str:
 def _is_external_provider_name(provider_name: str | None) -> bool:
     if not provider_name:
         return False
-    return provider_name.strip().casefold() == BYTEZ_PROVIDER.casefold()
+    normalized = provider_name.strip().casefold()
+    return normalized in {BYTEZ_PROVIDER.casefold(), RAG_PROVIDER_AI21.casefold()}
 
 
 def _parse_answer_draft(value: str) -> _AnswerDraft | None:
@@ -1996,6 +2219,9 @@ def _hebrew_refusal_message(*, reason_code: str, missing_source_kinds: list[str]
         REASON_INVALID_VERIFICATION_FORMAT,
     }:
         return "אין מספיק ראיות מצוטטות לכל הטענות. לכן אני מסרב להשיב כדי למנוע השלמה ספקולטיבית."
+
+    if reason_code == REASON_ANSWER_GENERATION_FAILED:
+        return "מחולל התשובה אינו זמין כעת או הוגדר באופן שגוי. נסה שוב מאוחר יותר או בדוק את הגדרות ספק המודל."
 
     return "אין מספיק ראיות כדי לספק תשובה מבוססת. אנא ספק הקשר נוסף או מקורות תומכים."
 

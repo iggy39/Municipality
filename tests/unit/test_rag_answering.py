@@ -90,6 +90,67 @@ def test_rag_answering_returns_structured_answer_with_citations_and_limitations(
     assert provider.requests[0]["messages"][0]["content"].splitlines()[0] == RAG_ANSWER_PREFIX_DEFAULT
 
 
+def test_rag_answering_uses_deterministic_fallback_when_answer_provider_unavailable() -> None:
+    provider = MockRagProvider(configured=False)
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+
+    retrieval = RagRetrievalResult(
+        query="מה הוחלט בעיר?",
+        normalized_query="מה הוחלט בעיר",
+        top_k=5,
+        retrieval_set_id="set-deterministic-fallback",
+        requested_source_kinds=["protocol"],
+        contexts=[
+            RagContextChunk(
+                chunk_id="chunk-protocol-a",
+                score=0.82,
+                snippet=".1 הוחלט לאשר הרחבת חניה ליד בית הספר. .2 הוחלט להציב פקח בשעות הבוקר.",
+                citation="p.2",
+                source_kind="protocol",
+                document_id=11,
+                document_title="פרוטוקול ועדת תחבורה",
+                document_url="https://example.local/protocol-a.pdf",
+                municipality_slug="ashdod",
+                meeting_external_id="meeting:1",
+                start_page=2,
+                end_page=2,
+                chunk_text=".1 הוחלט לאשר הרחבת חניה ליד בית הספר. .2 הוחלט להציב פקח בשעות הבוקר.",
+                primary_topic="תחבורה ובטיחות > הרחבת חניה ליד בית הספר",
+            ),
+            RagContextChunk(
+                chunk_id="chunk-protocol-b",
+                score=0.79,
+                snippet=".1 הוחלט לבצע שיפור תמרור בסביבת גן ילדים.",
+                citation="p.3",
+                source_kind="protocol",
+                document_id=12,
+                document_title="פרוטוקול ועדת בטיחות",
+                document_url="https://example.local/protocol-b.pdf",
+                municipality_slug="ashdod",
+                meeting_external_id="meeting:2",
+                start_page=3,
+                end_page=3,
+                chunk_text=".1 הוחלט לבצע שיפור תמרור בסביבת גן ילדים.",
+                primary_topic="תחבורה ובטיחות > שיפור תמרור בסביבת גן ילדים",
+            ),
+        ],
+    )
+
+    result = service.compose(
+        question="מה הוחלט בעיר?",
+        retrieval=retrieval,
+        required_source_kinds=["protocol"],
+    )
+
+    assert result.status == "answer"
+    assert result.answer is not None
+    assert result.citations
+    assert result.provider == rag_answering.DETERMINISTIC_EXTRACTIVE_PROVIDER_NAME
+    assert result.model == rag_answering.DETERMINISTIC_FALLBACK_MODEL_NAME
+    assert result.scoring.get("answer_generation_route") == "deterministic_retrieval_fallback"
+
+
 def test_rag_answering_skips_second_external_call_when_answer_includes_inline_verification() -> None:
     provider = MockRagProvider(
         responses_by_call_type={

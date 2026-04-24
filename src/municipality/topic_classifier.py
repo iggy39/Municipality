@@ -24,6 +24,21 @@ ROOT_TOPIC_KEYWORDS: dict[str, tuple[str, ...]] = {
     "הסכמים": ("הסכם", "התקשרות", "פטור ממכרז", "רשות שימוש"),
 }
 STOPWORDS = {normalize_for_search(term) for term in ("פרוטוקול", "ועדה", "ועדת", "ישיבה", "נושא", "סעיף", "החלטה", "החלטות")}
+PROCEDURAL_PREFIXES = tuple(
+    normalize_for_search(value)
+    for value in (
+        "מורשי חתימה",
+        "בעלי זכות חתימה",
+        "זכות חתימה",
+        "כתובת",
+        "גוש",
+        "חלקה",
+        "מגרש",
+        "מספר תיק",
+        "תאריך",
+        "רחוב",
+    )
+)
 
 
 @dataclass(slots=True)
@@ -181,9 +196,18 @@ def _clean_topic_phrase(value: str) -> str | None:
     compact = " ".join(str(value or "").split()).strip(" .:-")
     if not compact:
         return None
+    normalized_compact = normalize_for_search(compact)
+    if any(normalized_compact.startswith(prefix) for prefix in PROCEDURAL_PREFIXES):
+        return None
+    if ":" in compact:
+        prefix = normalize_for_search(compact.split(":", 1)[0])
+        if any(prefix.startswith(proc_prefix) for proc_prefix in PROCEDURAL_PREFIXES):
+            return None
     tokens = [token for token in compact.split() if normalize_for_search(token) not in STOPWORDS]
     if len(tokens) < 2:
         return None
+    if len(tokens) > 6 and not any(normalize_for_search(token) in {normalize_for_search(root) for root in ROOT_TOPIC_KEYWORDS} for token in tokens):
+        tokens = tokens[:6]
     return " ".join(tokens[:8]).strip() or None
 
 

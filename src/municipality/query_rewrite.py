@@ -20,6 +20,9 @@ HEADER_HINT_TERMS = (
 )
 ENTITY_TOKEN_RE = re.compile(r"[\u0590-\u05FF\"'\-]{2,}")
 BROAD_QUERY_MARKERS = (
+    "מה הוחלט",
+    "אילו החלטות",
+    "אילו החלטה",
     "באיזה פרוטוקול",
     "איזה פרוטוקול",
     "באיזה נושא",
