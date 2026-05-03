@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import re
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -59,11 +59,11 @@ class ArtifactTopicClassifier:
         self.llm_client = llm_client or build_rag_llm_client()
 
     def annotate_document_version(self, *, document_version_id: int) -> int:
-        artifacts = self.session.execute(
+        artifacts: list[RetrievalArtifact] = list(self.session.execute(
             select(RetrievalArtifact)
             .where(RetrievalArtifact.document_version_id == document_version_id)
             .order_by(RetrievalArtifact.ordinal.asc())
-        ).scalars().all()
+        ).scalars().all())
         if not artifacts:
             return 0
 
@@ -73,66 +73,103 @@ class ArtifactTopicClassifier:
             )
         ).scalars().all()
         existing_by_artifact = {str(row.artifact_id): row for row in existing}
+        representative_by_group: dict[str, RetrievalArtifact] = {
+            group_key: _representative_artifact(group_artifacts)
+            for group_key, group_artifacts in _group_artifacts_for_annotation(artifacts).items()
+        }
+        classification_by_representative_id = {
+            str(artifact.artifact_id): _deterministic_refinement(
+                artifact=artifact,
+                structural_topic=_structural_topic_for_artifact(artifact=artifact),
+            )
+            for artifact in representative_by_group.values()
+        }
+        if _provider_name(self.llm_client) == "ai21":
+            classification_by_representative_id.update(
+                self._batch_refine_topics_with_ai21(list(representative_by_group.values()))
+            )
         touched = 0
-        for artifact in artifacts:
-            classification = self._classify_artifact(artifact=artifact)
-            row = existing_by_artifact.get(str(artifact.artifact_id))
-            if row is None:
-                row = ArtifactTopicAnnotation(artifact_id=str(artifact.artifact_id))
-                self.session.add(row)
-            row.structural_topic_he = classification.structural_topic_he
-            row.structural_topic_norm = normalize_for_search(classification.structural_topic_he or "") or None
-            row.primary_topic_he = classification.primary_topic_he
-            row.primary_topic_norm = normalize_for_search(classification.primary_topic_he or "") or None
-            row.secondary_topics_json = json.dumps(classification.secondary_topics, ensure_ascii=False)
-            row.section_summary = classification.section_summary
-            row.classifier_confidence = classification.confidence
-            row.classifier_route = classification.classifier_route
-            row.provider_name = classification.provider_name
-            row.model_name = classification.model_name
-            touched += 1
+        artifact_groups = _group_artifacts_for_annotation(artifacts)
+        for _group_key, group_artifacts in artifact_groups.items():
+            representative = _representative_artifact(group_artifacts)
+            classification = classification_by_representative_id.get(str(representative.artifact_id)) or _deterministic_refinement(
+                artifact=representative,
+                structural_topic=_structural_topic_for_artifact(artifact=representative),
+            )
+            for artifact in group_artifacts:
+                row = existing_by_artifact.get(str(artifact.artifact_id))
+                if row is None:
+                    row = ArtifactTopicAnnotation(artifact_id=str(artifact.artifact_id))
+                    self.session.add(row)
+                row.structural_topic_he = classification.structural_topic_he
+                row.structural_topic_norm = normalize_for_search(classification.structural_topic_he or "") or None
+                row.primary_topic_he = classification.primary_topic_he
+                row.primary_topic_norm = normalize_for_search(classification.primary_topic_he or "") or None
+                row.secondary_topics_json = json.dumps(classification.secondary_topics, ensure_ascii=False)
+                row.section_summary = classification.section_summary
+                row.classifier_confidence = classification.confidence
+                row.classifier_route = classification.classifier_route
+                row.provider_name = classification.provider_name
+                row.model_name = classification.model_name
+                touched += 1
         self.session.flush()
         return touched
 
-    def _classify_artifact(self, *, artifact: RetrievalArtifact) -> TopicClassification:
-        structural_topic = _structural_topic_for_artifact(artifact=artifact)
-        deterministic = _deterministic_refinement(artifact=artifact, structural_topic=structural_topic)
-        provider_name = str(getattr(self.llm_client.provider, "provider_name", "") or "").strip().casefold()
-        if provider_name != "ai21":
-            return deterministic
-
-        result = self.llm_client.generate(
-            call_type=RAG_CALL_CLASSIFY,
-            instruction=(
-                "classify the municipal artifact into a primary hebrew topic and optional secondary topics. "
-                "use structure as a high-priority prior, refine with body text, and return strict json with keys primary_topic_he, secondary_topics, section_summary, confidence."
-            ),
-            payload={
-                "artifact_kind": artifact.artifact_kind,
-                "document_title": artifact.title_he,
-                "committee_name": artifact.committee_name,
-                "meeting_date": artifact.meeting_date,
-                "header_path": _loads_json_list(artifact.header_path_json),
-                "body_text": _trim_chars(artifact.body_text, limit=1500),
-                "structural_topic_prior": structural_topic,
-            },
-            temperature=0.0,
-        )
-        if result.error_code or not result.text:
-            return deterministic
-        parsed = _parse_ai21_topic_payload(result.text)
-        if parsed is None:
-            return deterministic
-        return TopicClassification(
-            structural_topic_he=structural_topic,
-            primary_topic_he=parsed.get("primary_topic_he") or deterministic.primary_topic_he,
-            secondary_topics=parsed.get("secondary_topics") or deterministic.secondary_topics,
-            section_summary=parsed.get("section_summary") or deterministic.section_summary,
-            confidence=float(parsed.get("confidence") or deterministic.confidence),
-            classifier_route="ai21_structural_refine",
-            provider_name=result.provider,
-            model_name=result.model,
-        )
+    def _batch_refine_topics_with_ai21(self, artifacts: list[RetrievalArtifact]) -> dict[str, TopicClassification]:
+        items = []
+        deterministic_by_id: dict[str, TopicClassification] = {}
+        for artifact in artifacts:
+            structural_topic = _structural_topic_for_artifact(artifact=artifact)
+            deterministic = _deterministic_refinement(artifact=artifact, structural_topic=structural_topic)
+            deterministic_by_id[str(artifact.artifact_id)] = deterministic
+            if not _should_use_ai21_topic_refinement(artifact):
+                continue
+            items.append(
+                {
+                    "artifact_id": str(artifact.artifact_id),
+                    "artifact_kind": artifact.artifact_kind,
+                    "document_title": artifact.title_he,
+                    "committee_name": artifact.committee_name,
+                    "meeting_date": artifact.meeting_date,
+                    "header_path": _loads_json_list(artifact.header_path_json),
+                    "body_text": _trim_chars(artifact.body_text, limit=1200),
+                    "structural_topic_prior": structural_topic,
+                }
+            )
+        if not items:
+            return deterministic_by_id
+        for batch in _chunked(items, size=8):
+            result = self.llm_client.generate(
+                call_type=RAG_CALL_CLASSIFY,
+                instruction=(
+                    "classify each municipal artifact into a primary hebrew topic and optional secondary topics. "
+                    "use structure as a high-priority prior, refine with body text, and return strict json with key items. "
+                    "each item must include artifact_id, primary_topic_he, secondary_topics, section_summary, confidence."
+                ),
+                payload={"items": batch},
+                temperature=0.0,
+            )
+            if result.error_code or not result.text:
+                continue
+            parsed_items = _parse_ai21_topic_batch_payload(result.text)
+            if not parsed_items:
+                continue
+            for parsed in parsed_items:
+                artifact_id = str(parsed.get("artifact_id") or "").strip()
+                deterministic = deterministic_by_id.get(artifact_id)
+                if not artifact_id or deterministic is None:
+                    continue
+                deterministic_by_id[artifact_id] = TopicClassification(
+                    structural_topic_he=deterministic.structural_topic_he,
+                    primary_topic_he=parsed.get("primary_topic_he") or deterministic.primary_topic_he,
+                    secondary_topics=parsed.get("secondary_topics") or deterministic.secondary_topics,
+                    section_summary=parsed.get("section_summary") or deterministic.section_summary,
+                    confidence=float(parsed.get("confidence") or deterministic.confidence),
+                    classifier_route="ai21_structural_refine_batch",
+                    provider_name=result.provider,
+                    model_name=result.model,
+                )
+        return deterministic_by_id
 
 
 def _structural_topic_for_artifact(*, artifact: RetrievalArtifact) -> str | None:
@@ -150,6 +187,47 @@ def _structural_topic_for_artifact(*, artifact: RetrievalArtifact) -> str | None
         leaf = _best_leaf_topic(header_path=header_path, body_text=artifact.body_text)
         return f"{best_root} > {leaf}" if leaf else best_root
     return _best_leaf_topic(header_path=header_path, body_text=artifact.body_text)
+
+
+def _group_artifacts_for_annotation(artifacts: Sequence[RetrievalArtifact]) -> dict[str, list[RetrievalArtifact]]:
+    grouped: dict[str, list[RetrievalArtifact]] = {}
+    for artifact in artifacts:
+        group_key = str(artifact.section_id or artifact.artifact_id)
+        grouped.setdefault(group_key, []).append(artifact)
+    return grouped
+
+
+def _representative_artifact(artifacts: list[RetrievalArtifact]) -> RetrievalArtifact:
+    priority = {
+        "decision_unit": 0,
+        "section_unit": 1,
+        "header_plus_opening": 2,
+        "section_summary": 3,
+        "header_anchor": 4,
+        "context_window": 5,
+        "document_profile": 6,
+    }
+    return min(
+        artifacts,
+        key=lambda artifact: (
+            priority.get(str(artifact.artifact_kind), 99),
+            int(artifact.ordinal or 0),
+        ),
+    )
+
+
+def _should_use_ai21_topic_refinement(artifact: RetrievalArtifact) -> bool:
+    if artifact.source_kind != "protocol":
+        return False
+    if artifact.artifact_kind not in {"decision_unit", "section_unit", "header_plus_opening"}:
+        return False
+    if len(" ".join(str(artifact.body_text or "").split())) < 30:
+        return False
+    return True
+
+
+def _provider_name(llm_client: RagLlmClient) -> str:
+    return str(getattr(llm_client.provider, "provider_name", "") or "").strip().casefold()
 
 
 def _deterministic_refinement(*, artifact: RetrievalArtifact, structural_topic: str | None) -> TopicClassification:
@@ -252,6 +330,28 @@ def _parse_ai21_topic_payload(value: str) -> dict[str, Any] | None:
     }
 
 
+def _parse_ai21_topic_batch_payload(value: str) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        artifact_id = " ".join(str(item.get("artifact_id") or "").split()).strip()
+        parsed = _parse_ai21_topic_payload(json.dumps(item, ensure_ascii=False))
+        if not artifact_id or parsed is None:
+            continue
+        out.append({"artifact_id": artifact_id, **parsed})
+    return out
+
+
 def _loads_json_list(value: str | None) -> list[str]:
     if not value:
         return []
@@ -281,3 +381,9 @@ def _trim_chars(value: str | None, *, limit: int) -> str:
     if len(compact) <= limit:
         return compact
     return f"{compact[: limit - 3].rstrip()}..."
+
+
+def _chunked(items: list[dict[str, Any]], *, size: int) -> list[list[dict[str, Any]]]:
+    if size <= 0:
+        return [items]
+    return [items[index : index + size] for index in range(0, len(items), size)]

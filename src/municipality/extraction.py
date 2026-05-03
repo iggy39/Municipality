@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from municipality.layout_parser import parse_pdf_layout
+from municipality.layout_parser import parse_pdf_layout, parse_pdf_ocr
 
 
 HEBREW_CHAR_RE = re.compile(r"[\u0590-\u05FF]")
@@ -50,7 +50,7 @@ class PdfTextExtractor:
         if layout_result is not None and layout_result.full_text.strip():
             pages = _pages_from_layout_result(layout_result)
             quality_score, quality_flags, quality_summary = score_extraction_quality(layout_result.full_text, pages)
-            return PdfExtractionResult(
+            layout_extraction = PdfExtractionResult(
                 ok=True,
                 parser_name=layout_result.backend_name,
                 parser_version=None,
@@ -63,6 +63,10 @@ class PdfTextExtractor:
                 error_code=None,
                 warning_text=None,
             )
+            ocr_extraction = _ocr_fallback_extraction(pdf_bytes=pdf_bytes, current=layout_extraction)
+            if ocr_extraction is not None:
+                return ocr_extraction
+            return layout_extraction
 
         if not self.pdftotext_path:
             return PdfExtractionResult(
@@ -129,7 +133,7 @@ class PdfTextExtractor:
         full_text, pages, citation_map = parse_extracted_text(text)
         quality_score, quality_flags, quality_summary = score_extraction_quality(full_text, pages)
 
-        return PdfExtractionResult(
+        extraction = PdfExtractionResult(
             ok=True,
             parser_name="pdftotext",
             parser_version=None,
@@ -142,6 +146,10 @@ class PdfTextExtractor:
             error_code=None,
             warning_text=warning,
         )
+        ocr_extraction = _ocr_fallback_extraction(pdf_bytes=pdf_bytes, current=extraction)
+        if ocr_extraction is not None:
+            return ocr_extraction
+        return extraction
 
 
 def parse_extracted_text(raw_text: str) -> tuple[str, list[ExtractedPage], list[dict[str, int]]]:
@@ -235,6 +243,53 @@ def _pages_from_layout_result(layout_result) -> list[ExtractedPage]:
             )
         )
     return pages
+
+
+def _ocr_fallback_extraction(*, pdf_bytes: bytes, current: PdfExtractionResult) -> PdfExtractionResult | None:
+    if not _should_attempt_ocr(current):
+        return None
+    ocr_result = parse_pdf_ocr(pdf_bytes)
+    if ocr_result is None or not ocr_result.full_text.strip():
+        return None
+    pages = _pages_from_layout_result(ocr_result)
+    quality_score, quality_flags, quality_summary = score_extraction_quality(ocr_result.full_text, pages)
+    candidate = PdfExtractionResult(
+        ok=True,
+        parser_name=ocr_result.backend_name,
+        parser_version=None,
+        full_text=ocr_result.full_text,
+        pages=pages,
+        citation_map=ocr_result.citation_map,
+        quality_score=quality_score,
+        quality_flags=quality_flags,
+        quality_summary=quality_summary,
+        error_code=None,
+        warning_text=current.warning_text,
+    )
+    if _is_better_ocr_candidate(candidate=candidate, current=current):
+        return candidate
+    return None
+
+
+def _should_attempt_ocr(current: PdfExtractionResult) -> bool:
+    if not current.ok:
+        return True
+    flags = set(current.quality_flags or [])
+    if "OCR_CANDIDATE" in flags:
+        return True
+    if not current.full_text.strip():
+        return True
+    return False
+
+
+def _is_better_ocr_candidate(*, candidate: PdfExtractionResult, current: PdfExtractionResult) -> bool:
+    current_score = float(current.quality_score or 0.0)
+    candidate_score = float(candidate.quality_score or 0.0)
+    if candidate_score > (current_score + 0.08):
+        return True
+    if len(candidate.full_text.strip()) > max(400, len(current.full_text.strip()) * 2):
+        return True
+    return False
 
 
 def _reading_direction(value: str) -> str | None:

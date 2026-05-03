@@ -22,6 +22,7 @@ RAG_PROVIDER_BYTEZ = "bytez"
 RAG_PROVIDER_AI21 = "ai21"
 RAG_PROVIDER_MOCK = "mock"
 DEFAULT_AI21_API_URL = "https://api.ai21.com/studio/v1/chat/completions"
+DEFAULT_AI21_MODEL = "jamba-mini"
 
 RAG_ANSWER_PREFIX_DEFAULT = "answer question from provided hebrew municipal evidence with citations only"
 RAG_VERIFY_PREFIX_DEFAULT = "verify every claim against provided hebrew evidence and citations only"
@@ -71,7 +72,8 @@ class RagLlmConfig:
     def from_env(cls, env: Mapping[str, str] | None = None) -> RagLlmConfig:
         source = env if env is not None else os.environ
         provider = _normalize_provider(source.get("RAG_LLM_PROVIDER"))
-        model = (source.get("RAG_LLM_MODEL") or BYTEZ_MODEL).strip() or BYTEZ_MODEL
+        default_model = DEFAULT_AI21_MODEL if provider == RAG_PROVIDER_AI21 else BYTEZ_MODEL
+        model = (source.get("RAG_LLM_MODEL") or default_model).strip() or default_model
         endpoint = (source.get("BYTEZ_API_URL") or DEFAULT_BYTEZ_API_URL).strip() or DEFAULT_BYTEZ_API_URL
         ai21_endpoint = (source.get("AI21_API_URL") or DEFAULT_AI21_API_URL).strip() or DEFAULT_AI21_API_URL
         timeout_raw = source.get("RAG_LLM_TIMEOUT_SECONDS")
@@ -189,6 +191,7 @@ class BytezRagProvider:
         body = {
             "model": self.model_name,
             "temperature": temperature,
+            "response_format": {"type": "json_object"},
             "messages": messages,
         }
 
@@ -289,6 +292,7 @@ class AI21RagProvider:
         body = {
             "model": self.model_name,
             "temperature": temperature,
+            "response_format": {"type": "json_object"},
             "messages": messages,
         }
         try:

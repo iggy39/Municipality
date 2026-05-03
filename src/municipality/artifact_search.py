@@ -8,12 +8,14 @@ from sqlalchemy import and_, inspect, select, text
 from sqlalchemy.orm import Session
 
 from municipality.chunking import build_trigrams, normalize_for_search
+from municipality.embeddings import ChunkEmbeddingService
 from municipality.models import (
     ArtifactTopicAnnotation,
     ArtifactSemanticLink,
     AssetManifest,
     Document,
     RetrievalArtifact,
+    RetrievalArtifactEmbedding,
     SemanticAlias,
     SemanticNode,
     SourceSite,
@@ -29,6 +31,8 @@ from municipality.search_common import (
     SEMANTIC_SPECIFICITY_WEIGHT,
     TOPIC_TEXT_WEIGHT,
     ARTIFACT_KIND_PRIORITY_WEIGHT,
+    EMBEDDING_CANDIDATE_WEIGHT,
+    SEARCH_EMBEDDING_CANDIDATE_LIMIT,
     SearchHit,
     SemanticDebugNode,
     _build_snippet,
@@ -53,8 +57,9 @@ class _ArtifactSemanticMatchScore:
 
 
 class ArtifactSearchService:
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, *, embedding_service: ChunkEmbeddingService | None = None):
         self.session = session
+        self.embedding_service = embedding_service or ChunkEmbeddingService(session)
 
     def replace_document_artifacts(
         self,
@@ -235,7 +240,9 @@ class ArtifactSearchService:
             fts_score = _fts_rank_to_score(scores.get("fts_rank"))
             trigram_overlap = scores.get("trigram_overlap", 0.0)
             trigram_score = min(1.0, trigram_overlap / max(query_trigram_count, int(artifact.trigram_count or 0), 1))
+            embedding_similarity = float(scores.get("embedding_similarity") or 0.0)
             lexical_score = (LEXICAL_FTS_WEIGHT * fts_score) + (LEXICAL_TRIGRAM_WEIGHT * trigram_score)
+            hybrid_score = min(1.0, lexical_score + (EMBEDDING_CANDIDATE_WEIGHT * embedding_similarity))
             semantic_rows = semantic_by_artifact.get(str(artifact.artifact_id), [])
             semantic_match_count = len(semantic_rows)
             if semantic_mode_normalized == "filter" and explicit_semantic_filter and semantic_match_count == 0:
@@ -251,7 +258,7 @@ class ArtifactSearchService:
             if kind_priority and artifact.artifact_kind in kind_priority:
                 denominator = max(1, len(kind_priority) - 1)
                 kind_boost = ARTIFACT_KIND_PRIORITY_WEIGHT * (1.0 - (kind_priority[artifact.artifact_kind] / max(denominator, 1)))
-            score = min(1.0, lexical_score + topic_boost + kind_boost)
+            score = min(1.0, hybrid_score + topic_boost + kind_boost)
             if semantic_scoring_enabled:
                 semantic_overlap_score = max(
                     (row.link_confidence * row.match_score for row in semantic_rows),
@@ -390,6 +397,26 @@ class ArtifactSearchService:
             ).mappings().all()
             for row in rows:
                 candidate_scores.setdefault(str(row["artifact_id"]), {})["trigram_overlap"] = float(row["overlap"])
+
+        query_vector = self.embedding_service.embed_query(normalized_query, query_kind="search")
+        if query_vector:
+            embedding_rows = self.session.execute(
+                select(RetrievalArtifactEmbedding.artifact_id, RetrievalArtifactEmbedding.embedding_json).where(
+                    RetrievalArtifactEmbedding.model_provider == self.embedding_service.model_client.provider_name,
+                    RetrievalArtifactEmbedding.model_name == self.embedding_service.model_client.model_name,
+                    RetrievalArtifactEmbedding.dimensions == self.embedding_service.model_client.dimensions,
+                )
+            ).all()
+            embedding_hits: list[tuple[float, str]] = []
+            for artifact_id, embedding_json in embedding_rows:
+                vector = _loads_embedding_vector(embedding_json)
+                similarity = _embedding_similarity(query_vector, vector)
+                if similarity <= 0.0:
+                    continue
+                embedding_hits.append((similarity, str(artifact_id)))
+            embedding_hits.sort(key=lambda row: row[0], reverse=True)
+            for similarity, artifact_id in embedding_hits[:SEARCH_EMBEDDING_CANDIDATE_LIMIT]:
+                candidate_scores.setdefault(artifact_id, {})["embedding_similarity"] = round(similarity, 6)
 
         if self._topic_annotations_available():
             for topic_term in [normalized_query, *normalized_topic_terms]:
@@ -595,3 +622,29 @@ def _annotation_secondary_topics(annotation: ArtifactTopicAnnotation | None) -> 
     if not isinstance(parsed, list):
         return []
     return [str(item).strip() for item in parsed if str(item).strip()]
+
+
+def _loads_embedding_vector(value: str | None) -> list[float] | None:
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, list) or not parsed:
+        return None
+    try:
+        return [float(item) for item in parsed]
+    except (TypeError, ValueError):
+        return None
+
+
+def _embedding_similarity(query_vector: list[float], artifact_vector: list[float] | None) -> float:
+    if not query_vector or not artifact_vector or len(query_vector) != len(artifact_vector):
+        return 0.0
+    numerator = sum(left * right for left, right in zip(query_vector, artifact_vector, strict=True))
+    query_norm = sum(value * value for value in query_vector) ** 0.5
+    artifact_norm = sum(value * value for value in artifact_vector) ** 0.5
+    if query_norm <= 0.0 or artifact_norm <= 0.0:
+        return 0.0
+    return max(0.0, min(1.0, numerator / (query_norm * artifact_norm)))

@@ -341,6 +341,9 @@ def _low_relevance_embedding_refusal(
 ) -> dict[str, Any] | None:
     if not retrieval_result.contexts or not embedding_service.is_enabled():
         return None
+    normalized_question = normalize_for_search(question)
+    if any(marker in normalized_question for marker in (normalize_for_search(item) for item in ("מה הוחלט", "אילו החלטות", "מה אושר", "מה נדחה"))):
+        return None
     query_vector = embedding_service.embed_query(question, query_kind="low_relevance_gate")
     if not query_vector:
         return None

@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 import importlib
 from typing import Any
 
+import numpy as np
+from PIL import Image
+
 
 HEBREW_BLOCK_RE = "\u0590-\u05FF"
 
@@ -35,6 +38,28 @@ def parse_pdf_layout(pdf_bytes: bytes) -> ParsedLayoutDocument | None:
 
     try:
         return _parse_with_fitz(document)
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        document.close()
+
+
+def parse_pdf_ocr(pdf_bytes: bytes) -> ParsedLayoutDocument | None:
+    fitz_module = _load_fitz()
+    easyocr_module = _load_easyocr()
+    if fitz_module is None or easyocr_module is None:
+        return None
+
+    try:
+        document = fitz_module.open(stream=pdf_bytes, filetype="pdf")
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        reader = _easyocr_reader(easyocr_module)
+        if reader is None:
+            return None
+        return _parse_with_easyocr(document, reader=reader)
     except Exception:  # noqa: BLE001
         return None
     finally:
@@ -105,6 +130,77 @@ def _parse_with_fitz(document: Any) -> ParsedLayoutDocument:
         pages=pages,
         citation_map=citation_map,
         backend_name="pymupdf_layout",
+    )
+
+
+def _parse_with_easyocr(document: Any, *, reader: Any) -> ParsedLayoutDocument:
+    pages: list[ParsedLayoutPage] = []
+    full_parts: list[str] = []
+    citation_map: list[dict[str, int]] = []
+    cursor = 0
+
+    for page_index in range(len(document)):
+        page = document.load_page(page_index)
+        pix = page.get_pixmap(dpi=200)
+        if pix is None:
+            continue
+        image = _pixmap_to_numpy(pix)
+        if image is None:
+            continue
+        results = reader.readtext(image, detail=1, paragraph=False)
+        blocks: list[dict[str, Any]] = []
+        page_lines: list[str] = []
+        line_cursor = cursor
+        for line_index, row in enumerate(results):
+            if not isinstance(row, (list, tuple)) or len(row) < 3:
+                continue
+            bbox_raw, text_value, confidence = row[0], row[1], row[2]
+            compact = " ".join(str(text_value or "").split()).strip()
+            if not compact:
+                continue
+            start_offset = line_cursor
+            end_offset = start_offset + len(compact)
+            line_cursor = end_offset + 1
+            bbox = _easyocr_bbox_to_list(bbox_raw)
+            blocks.append(
+                {
+                    "kind": "line",
+                    "block_index": line_index,
+                    "line_index": line_index,
+                    "start_offset": start_offset,
+                    "end_offset": end_offset,
+                    "text": compact,
+                    "bbox": bbox,
+                    "reading_direction": _reading_direction(compact),
+                    "font_size": None,
+                    "font_weight": None,
+                    "alignment": _alignment_for_bbox(bbox, page_width=float(getattr(page.rect, 'width', 0.0) or 0.0), reading_direction=_reading_direction(compact)),
+                    "column_index": _column_index_for_bbox(bbox, page_width=float(getattr(page.rect, 'width', 0.0) or 0.0)),
+                    "is_table": False,
+                    "role_guess": "ocr_line",
+                    "ocr_confidence": float(confidence or 0.0),
+                }
+            )
+            page_lines.append(compact)
+
+        page_text = "\n".join(page_lines)
+        page_start = cursor
+        page_end = page_start + len(page_text)
+        pages.append(ParsedLayoutPage(page=page_index + 1, text=page_text, blocks=blocks))
+        if page_text:
+            full_parts.append(page_text)
+            citation_map.append({"start": page_start, "end": page_end, "page": page_index + 1})
+        if page_index < len(document) - 1:
+            full_parts.append("\n\n")
+            cursor = page_end + 2
+        else:
+            cursor = page_end
+
+    return ParsedLayoutDocument(
+        full_text="".join(full_parts),
+        pages=pages,
+        citation_map=citation_map,
+        backend_name="easyocr_scan_fallback",
     )
 
 
@@ -219,3 +315,46 @@ def _load_fitz() -> Any | None:
         return importlib.import_module("fitz")
     except Exception:  # noqa: BLE001
         return None
+
+
+def _load_easyocr() -> Any | None:
+    try:
+        return importlib.import_module("easyocr")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_EASYOCR_READER: Any | None = None
+
+
+def _easyocr_reader(easyocr_module: Any) -> Any | None:
+    global _EASYOCR_READER
+    if _EASYOCR_READER is not None:
+        return _EASYOCR_READER
+    try:
+        _EASYOCR_READER = easyocr_module.Reader(["he", "en"], gpu=False, verbose=False)
+    except Exception:  # noqa: BLE001
+        _EASYOCR_READER = None
+    return _EASYOCR_READER
+
+
+def _pixmap_to_numpy(pix: Any) -> np.ndarray | None:
+    try:
+        mode = "RGBA" if getattr(pix, "alpha", 0) else "RGB"
+        image = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
+        if mode == "RGBA":
+            image = image.convert("RGB")
+        return np.array(image)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _easyocr_bbox_to_list(value: Any) -> list[float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return []
+    try:
+        xs = [float(point[0]) for point in value]
+        ys = [float(point[1]) for point in value]
+    except Exception:  # noqa: BLE001
+        return []
+    return [min(xs), min(ys), max(xs), max(ys)]

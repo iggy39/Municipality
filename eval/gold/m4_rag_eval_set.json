@@ -15,7 +15,7 @@
       "required_evidence": [
         {
           "source_kind": "protocol",
-          "chunk_id": "75c123f477ee6bd4e6eae0e5b79b8a988d3a9c85",
+          "chunk_id": "fb96c070dcdbc59378f82eccc0167156743f00a1",
           "document_id": 483,
           "document_version_id": 464,
           "citation_label": "pp.2-3"
@@ -24,10 +24,10 @@
       "supporting_evidence": [
         {
           "source_kind": "attachment",
-          "chunk_id": "af02f112b5239ada3da094642116e5de78d21050",
+          "chunk_id": "2b3c39da6f99f45b34a6c889f324e7b13dec761b",
           "document_id": 29,
           "document_version_id": 29,
-          "citation_label": "p.1"
+          "citation_label": "pp.1-3"
         }
       ],
       "expected_grounded": {
@@ -37,7 +37,7 @@
           "בדיקת בטיחות לבית הספר ברחוב רבי טרפון"
         ],
         "required_chunk_ids": [
-          "75c123f477ee6bd4e6eae0e5b79b8a988d3a9c85"
+          "fb96c070dcdbc59378f82eccc0167156743f00a1"
         ]
       },
       "expected_refusal": {

@@ -221,6 +221,8 @@ class RagRetrievalService:
             )
 
         selected_hits.sort(key=lambda row: row.score, reverse=True)
+        if requested_source_kinds:
+            selected_hits = _ensure_requested_source_coverage(selected_hits, requested_source_kinds, limit=effective_top_k)
         contexts = [_to_context(row) for row in selected_hits[:effective_top_k]]
         retrieval_set_id = build_retrieval_set_id(
             normalized_query=normalized_query,
@@ -375,6 +377,43 @@ def _artifact_kind_plans(*, rewrite_result: QueryRewriteResult, retrieval_strate
         ["context_window"],
         ["header_anchor", "document_profile"],
     ]
+
+
+def _ensure_requested_source_coverage(hits: list[Any], requested_source_kinds: list[str], *, limit: int) -> list[Any]:
+    if limit <= 0 or not hits or not requested_source_kinds:
+        return hits
+    requested = [source_kind for source_kind in requested_source_kinds if source_kind]
+    top_hits = list(hits[:limit])
+    covered = {getattr(hit, "source_type", None) for hit in top_hits}
+    missing = [source_kind for source_kind in requested if source_kind not in covered]
+    if not missing:
+        return hits
+
+    remaining = list(top_hits)
+    used_ids = {str(getattr(hit, "chunk_id", "")) for hit in remaining}
+    for source_kind in missing:
+        replacement = next(
+            (
+                hit
+                for hit in hits
+                if getattr(hit, "source_type", None) == source_kind and str(getattr(hit, "chunk_id", "")) not in used_ids
+            ),
+            None,
+        )
+        if replacement is None:
+            continue
+        weakest_index = next(
+            (idx for idx in range(len(remaining) - 1, -1, -1) if getattr(remaining[idx], "source_type", None) != source_kind),
+            None,
+        )
+        if weakest_index is None:
+            continue
+        used_ids.discard(str(getattr(remaining[weakest_index], "chunk_id", "")))
+        remaining[weakest_index] = replacement
+        used_ids.add(str(getattr(replacement, "chunk_id", "")))
+
+    tail = [hit for hit in hits[limit:] if str(getattr(hit, "chunk_id", "")) not in used_ids]
+    return [*remaining, *tail]
 
 
 def _normalize_source_kinds(source_kinds: list[str] | None) -> list[str]:

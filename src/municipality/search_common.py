@@ -17,6 +17,8 @@ SEMANTIC_OVERLAP_WEIGHT = 0.25
 SEMANTIC_SPECIFICITY_WEIGHT = 0.10
 TOPIC_TEXT_WEIGHT = 0.18
 ARTIFACT_KIND_PRIORITY_WEIGHT = 0.08
+EMBEDDING_CANDIDATE_WEIGHT = 0.24
+SEARCH_EMBEDDING_CANDIDATE_LIMIT = 180
 
 FTS_TOKEN_LIMIT = 8
 SEARCH_FTS_CANDIDATE_LIMIT = 250
@@ -75,11 +77,13 @@ def search_thresholds_snapshot() -> dict[str, Any]:
             "semantic_specificity_weight": SEMANTIC_SPECIFICITY_WEIGHT,
             "topic_text_weight": TOPIC_TEXT_WEIGHT,
             "artifact_kind_priority_weight": ARTIFACT_KIND_PRIORITY_WEIGHT,
+            "embedding_candidate_weight": EMBEDDING_CANDIDATE_WEIGHT,
         },
         "candidate_limits": {
             "fts_token_limit": FTS_TOKEN_LIMIT,
             "fts_candidate_limit": SEARCH_FTS_CANDIDATE_LIMIT,
             "trigram_candidate_limit": SEARCH_TRIGRAM_CANDIDATE_LIMIT,
+            "embedding_candidate_limit": SEARCH_EMBEDDING_CANDIDATE_LIMIT,
             "fallback_contains_limit": SEARCH_FALLBACK_CONTAINS_LIMIT,
         },
         "semantic_modes": ["off", "boost", "filter"],

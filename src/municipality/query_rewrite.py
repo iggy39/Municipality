@@ -91,6 +91,7 @@ class QueryRewriteService:
         parsed = _parse_rewrite_payload(result.text)
         if parsed is None:
             return deterministic
+        parsed = _merge_with_deterministic_rewrite(parsed=parsed, deterministic=deterministic)
         parsed.provider = result.provider
         parsed.model = result.model
         return parsed
@@ -167,6 +168,33 @@ def _parse_rewrite_payload(value: str) -> QueryRewriteResult | None:
         use_neighbors=bool(payload.get("use_neighbors")),
         use_document_fallback=bool(payload.get("use_document_fallback", True)),
         route_reason=str(payload.get("route_reason") or "ai21_rewrite").strip() or "ai21_rewrite",
+    )
+
+
+def _merge_with_deterministic_rewrite(*, parsed: QueryRewriteResult, deterministic: QueryRewriteResult) -> QueryRewriteResult:
+    retrieval_strategy = parsed.retrieval_strategy
+    artifact_kind_priority = list(parsed.artifact_kind_priority)
+    use_neighbors = parsed.use_neighbors
+    route_reason = parsed.route_reason
+    if deterministic.route_reason == "broad_query" and parsed.retrieval_strategy != "headers":
+        retrieval_strategy = deterministic.retrieval_strategy
+        artifact_kind_priority = list(deterministic.artifact_kind_priority)
+        use_neighbors = deterministic.use_neighbors
+        route_reason = "broad_query_guardrail"
+
+    return QueryRewriteResult(
+        original_query=parsed.original_query,
+        rewritten_query=parsed.rewritten_query,
+        lexical_terms=_dedupe_preserve_order([*parsed.lexical_terms, *deterministic.lexical_terms]),
+        semantic_terms=_dedupe_preserve_order([*parsed.semantic_terms, *deterministic.semantic_terms]),
+        header_terms=_dedupe_preserve_order([*parsed.header_terms, *deterministic.header_terms]),
+        artifact_kind_priority=artifact_kind_priority,
+        retrieval_strategy=retrieval_strategy,
+        use_neighbors=use_neighbors,
+        use_document_fallback=parsed.use_document_fallback or deterministic.use_document_fallback,
+        route_reason=route_reason,
+        provider=parsed.provider,
+        model=parsed.model,
     )
 
 
