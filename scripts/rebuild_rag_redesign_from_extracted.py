@@ -3,6 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -14,6 +20,7 @@ from municipality.processing import SemanticEnrichmentPolicy, _source_kind_for_d
 from municipality.decision_context import DecisionContextService
 from municipality.semantic_service import SemanticService
 from municipality.structured_indexing import StructuredIndexingService
+from municipality.topic_data_maintenance import TopicDataMaintenanceStats, cleanup_low_quality_topic_data
 
 
 def main() -> int:
@@ -21,7 +28,9 @@ def main() -> int:
         description="Rebuild artifact-native RAG structures, semantic links, and decision context from extracted documents"
     )
     parser.add_argument("--doc-id", type=int, default=None, help="Only rebuild one document id")
+    parser.add_argument("--docver-id", type=int, default=None, help="Only rebuild one document version id")
     parser.add_argument("--limit", type=int, default=None, help="Maximum extracted documents to process")
+    parser.add_argument("--offset", type=int, default=0, help="Skip the first N extracted document rows after filtering")
     parser.add_argument(
         "--reindex-existing",
         action="store_true",
@@ -35,7 +44,19 @@ def main() -> int:
         action="store_true",
         help="Allow new semantic model calls when no cached semantic run exists for a document version",
     )
+    parser.add_argument(
+        "--cleanup-low-quality-topics",
+        action="store_true",
+        help="Sanitize stale low-quality topic annotations and deprecate low-quality semantic topic nodes for the selected scope",
+    )
+    parser.add_argument(
+        "--cleanup-dry-run",
+        action="store_true",
+        help="Report low-quality topic cleanup counts for the selected scope without mutating data",
+    )
     args = parser.parse_args()
+    if args.cleanup_dry_run and not args.cleanup_low_quality_topics:
+        parser.error("--cleanup-dry-run requires --cleanup-low-quality-topics")
 
     engine = build_engine()
     apply_all(engine, Path("migrations"))
@@ -47,6 +68,7 @@ def main() -> int:
     structure_runs = 0
     semantic_runs = 0
     context_runs = 0
+    cleanup_stats = TopicDataMaintenanceStats()
 
     with Session(engine) as session:
         structure_service = StructuredIndexingService(session)
@@ -63,10 +85,36 @@ def main() -> int:
         )
         if args.doc_id is not None:
             stmt = stmt.where(Document.id == args.doc_id)
+        if args.docver_id is not None:
+            stmt = stmt.where(DocumentVersion.id == args.docver_id)
 
         rows = session.execute(stmt).all()
+        if args.offset is not None and int(args.offset) > 0:
+            rows = rows[int(args.offset) :]
         if args.limit is not None:
             rows = rows[: max(0, int(args.limit))]
+
+        selected_document_ids = sorted({int(document.id) for _extracted, _document_version, document in rows})
+        selected_document_version_ids = sorted({int(document_version.id) for _extracted, document_version, _document in rows})
+
+        if args.cleanup_low_quality_topics:
+            cleanup_stats = cleanup_low_quality_topic_data(
+                session,
+                document_ids=selected_document_ids,
+                document_version_ids=selected_document_version_ids,
+                dry_run=bool(args.cleanup_dry_run),
+            )
+            print(
+                "cleanup "
+                f"artifact_annotations_scanned={cleanup_stats.artifact_annotations_scanned} "
+                f"artifact_annotations_updated={cleanup_stats.artifact_annotations_updated} "
+                f"semantic_nodes_scanned={cleanup_stats.semantic_nodes_scanned} "
+                f"semantic_nodes_deprecated={cleanup_stats.semantic_nodes_deprecated}"
+            )
+            if args.cleanup_dry_run:
+                session.rollback()
+                return 0
+            session.commit()
 
         for extracted, document_version, document in rows:
             extracted_text = str(extracted.extracted_text or "").strip()
@@ -150,7 +198,9 @@ def main() -> int:
     print(
         "done "
         f"processed={processed} skipped={skipped} failures={failures} "
-        f"structure_runs={structure_runs} semantic_runs={semantic_runs} context_runs={context_runs}"
+        f"structure_runs={structure_runs} semantic_runs={semantic_runs} context_runs={context_runs} "
+        f"cleanup_artifact_annotations_updated={cleanup_stats.artifact_annotations_updated} "
+        f"cleanup_semantic_nodes_deprecated={cleanup_stats.semantic_nodes_deprecated}"
     )
     return 0 if failures == 0 else 1
 

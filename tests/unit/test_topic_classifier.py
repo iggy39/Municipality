@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import municipality.topic_classifier as topic_classifier
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -98,3 +99,26 @@ def test_topic_classifier_persists_structural_and_primary_topics(tmp_path: Path)
         assert row.structural_topic_he is not None
         assert row.primary_topic_he is not None
         assert "חניה" in row.primary_topic_he
+
+
+def test_topic_cleaning_rejects_structural_admin_headings() -> None:
+    assert topic_classifier._clean_topic_phrase("עיקרי ההחלטה") is None
+    assert topic_classifier._clean_topic_phrase("מכותבים תוכן ההחלטה") is None
+    assert topic_classifier._clean_topic_phrase("החלטות עירוניות") is None
+    assert topic_classifier._clean_topic_phrase("אליצור עדכון ניקוד") is None
+
+
+def test_ai21_topic_payload_rejects_low_quality_primary_topic() -> None:
+    payload = topic_classifier._parse_ai21_topic_payload(
+        json.dumps(
+            {
+                "primary_topic_he": "עיקרי ההחלטה",
+                "secondary_topics": ["תחבורה עירונית"],
+                "section_summary": "foo",
+                "confidence": 0.8,
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert payload is None

@@ -14,6 +14,7 @@ from municipality.semantic_contract import (
     SemanticNodeKind,
     SemanticRejectReason,
 )
+from municipality.topic_label_quality import is_low_quality_topic_label
 
 
 BIDI_ZERO_WIDTH_RE = re.compile(r"[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]")
@@ -183,6 +184,8 @@ class SemanticCanonicalizer:
             return SemanticRejectReason.STOPWORDS_ONLY
 
         if label_norm in self.config.generic_denylist:
+            return SemanticRejectReason.TOO_GENERIC
+        if is_low_quality_topic_label(label_norm):
             return SemanticRejectReason.TOO_GENERIC
 
         informative_tokens = [token for token in tokens if token not in self.config.stopwords]

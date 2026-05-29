@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import municipality.artifact_search as artifact_search
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -112,6 +113,17 @@ def test_artifact_search_uses_topic_annotations_for_topic_terms(tmp_path: Path) 
         assert hits
         assert hits[0].document_id == transport_doc_id
         assert hits[0].primary_topic == "תחבורה ובטיחות > תחבורה עירונית"
+
+
+def test_artifact_search_hides_low_quality_topic_annotations() -> None:
+    annotation = ArtifactTopicAnnotation(
+        artifact_id="artifact-1",
+        primary_topic_he="החלטות עירוניות",
+        secondary_topics_json=json.dumps(["עיקרי ההחלטה", "תחבורה עירונית"], ensure_ascii=False),
+    )
+
+    assert artifact_search._annotation_primary_topic(annotation) is None
+    assert artifact_search._annotation_secondary_topics(annotation) == ["תחבורה עירונית"]
 
 
 def _seed_artifact_search_fixture(session: Session, service: ArtifactSearchService) -> tuple[int, int]:

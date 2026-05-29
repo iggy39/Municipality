@@ -15,6 +15,7 @@ from municipality.fallback import BYTEZ_PROVIDER
 from municipality.rag_llm import RAG_CALL_ANSWER, RAG_CALL_REFUSE, RAG_CALL_VERIFY, RAG_PROVIDER_AI21, RagLlmClient
 from municipality.rag_observability import log_rag_event
 from municipality.rag_retrieval import RagContextChunk, RagRetrievalResult
+from municipality.topic_label_quality import is_low_quality_topic_label
 
 
 REASON_INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
@@ -700,6 +701,11 @@ class RagAnsweringService:
                 model=answer_call.model,
                 ask_request_id=ask_request_id,
                 scoring={
+                    "degraded_upstream_failure": True,
+                    "upstream_answer_provider": answer_call.provider,
+                    "upstream_answer_model": answer_call.model,
+                    "upstream_answer_error_code": answer_call.error_code,
+                    "upstream_answer_error_text": answer_call.error_text,
                     "answer_call_error_code": answer_call.error_code,
                     "answer_call_error_text": answer_call.error_text,
                     "answer_call_empty_text": not bool(answer_call.text),
@@ -1470,6 +1476,7 @@ def _build_extractive_answer_if_confident(
         "text": decision_text,
         "chunk_ids": cited_chunk_ids,
     }
+    _set_section_topic_fields(section_payload)
     return RagAnswerResult(
         status="answer",
         answer=decision_text,
@@ -1561,6 +1568,14 @@ def _build_deterministic_answer_fallback(
         protocol_semantic_topic_labels=protocol_semantic_topic_labels,
         decision_request_context_by_chunk=decision_request_context_by_chunk,
     )
+    answer_sections, extended_answer_sections, topic_alignment_stats = _filter_deterministic_fallback_sections_by_topic_alignment(
+        question=question,
+        answer_sections=answer_sections,
+        extended_answer_sections=extended_answer_sections,
+        context_by_chunk=context_by_chunk,
+    )
+    if not answer_sections:
+        return None
 
     selected_chunk_ids = _section_chunk_ids(answer_sections, extended_answer_sections)
     citations = _build_citations(retrieval.contexts, selected_chunk_ids)
@@ -1606,10 +1621,12 @@ def _build_deterministic_answer_fallback(
             "broad_query_protocol_split_applied": broad_protocol_split_applied,
             "semantic_topic_enforced": semantic_topic_enforced,
             "broad_duplicate_text_fixed": broad_duplicate_text_fixed,
+            "topic_alignment_filter": topic_alignment_stats,
             "upstream_answer_provider": llm_provider,
             "upstream_answer_model": llm_model,
             "upstream_answer_error_code": llm_error_code,
             "upstream_answer_error_text": llm_error_text,
+            "degraded_upstream_failure": True,
             "answer_external_api_called": False,
             "external_call_count": 0,
         },
@@ -1671,6 +1688,105 @@ def _deterministic_summary_items_from_retrieval(
         if len(selected) >= (5 if not question_has_specific_topic else 4):
             break
     return selected
+
+
+def _filter_deterministic_fallback_sections_by_topic_alignment(
+    *,
+    question: str,
+    answer_sections: list[dict[str, Any]],
+    extended_answer_sections: list[dict[str, Any]],
+    context_by_chunk: dict[str, RagContextChunk],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    topic_tokens = sorted(_primary_topic_tokens(question))
+    if not topic_tokens:
+        return answer_sections, extended_answer_sections, {
+            "applied": False,
+            "topic_tokens": [],
+            "sections_dropped": 0,
+            "mismatch_chunk_ids": [],
+        }
+
+    filtered_sections: list[dict[str, Any]] = []
+    filtered_extended_sections: list[dict[str, Any]] = []
+    mismatch_chunk_ids: list[str] = []
+    sections_dropped = 0
+
+    for index, section in enumerate(answer_sections):
+        extended_section = extended_answer_sections[index] if index < len(extended_answer_sections) else dict(section)
+        chunk_ids = [str(chunk_id) for chunk_id in list(section.get("chunk_ids") or []) if str(chunk_id).strip()]
+        kept_chunk_ids: list[str] = []
+        for chunk_id in chunk_ids:
+            if _fallback_section_chunk_matches_topic(
+                question=question,
+                section=section,
+                context=context_by_chunk.get(chunk_id),
+            ):
+                kept_chunk_ids.append(chunk_id)
+            else:
+                mismatch_chunk_ids.append(chunk_id)
+
+        if chunk_ids and not kept_chunk_ids:
+            sections_dropped += 1
+            continue
+
+        if not chunk_ids and not _fallback_section_matches_topic_without_chunks(question=question, section=section):
+            sections_dropped += 1
+            continue
+
+        filtered_section = dict(section)
+        filtered_extended_section = dict(extended_section)
+        if kept_chunk_ids and kept_chunk_ids != chunk_ids:
+            filtered_section["chunk_ids"] = kept_chunk_ids
+            filtered_extended_section["chunk_ids"] = kept_chunk_ids
+        filtered_sections.append(filtered_section)
+        filtered_extended_sections.append(filtered_extended_section)
+
+    return filtered_sections, filtered_extended_sections, {
+        "applied": True,
+        "topic_tokens": topic_tokens,
+        "sections_dropped": sections_dropped,
+        "mismatch_chunk_ids": list(dict.fromkeys(chunk_id for chunk_id in mismatch_chunk_ids if chunk_id)),
+    }
+
+
+def _fallback_section_chunk_matches_topic(
+    *,
+    question: str,
+    section: dict[str, Any],
+    context: RagContextChunk | None,
+) -> bool:
+    topic_tokens = _primary_topic_tokens(question)
+    if not topic_tokens:
+        return True
+    haystack_parts = [
+        _as_optional_str(section.get("topic_name")) or "",
+        _as_optional_str(section.get("topic_root")) or "",
+        _as_optional_str(section.get("topic_child")) or "",
+        _as_optional_str(section.get("protocol_title")) or "",
+        _as_optional_str(section.get("text")) or "",
+    ]
+    if context is not None:
+        haystack_parts.extend(
+            [
+                context.document_title,
+                " ".join(context.section_path),
+                context.snippet,
+                context.chunk_text,
+                context.primary_topic or "",
+                " ".join(context.secondary_topics),
+                " ".join(context.semantic_topic_labels),
+            ]
+        )
+    haystack = normalize_for_search(" ".join(part for part in haystack_parts if part))
+    if not haystack:
+        return False
+    return any(token in haystack for token in topic_tokens)
+
+
+def _fallback_section_matches_topic_without_chunks(*, question: str, section: dict[str, Any]) -> bool:
+    return _fallback_section_chunk_matches_topic(question=question, section=section, context=None)
+
+
 
 
 def _run_local_verify(
@@ -3228,26 +3344,30 @@ def _build_answer_sections(
             )
 
         concise_sections.append(
-            {
-                "protocol_title": protocol_title,
-                "topic_name": topic_name,
-                "text": summary,
-                "chunk_ids": list(normalized_chunk_ids),
-                "topic_route": topic_route,
-                "topic_score": topic_score,
-                "topic_granularity_level": _as_int_in_range(item.get("topic_granularity_hint"), min_value=1, max_value=10),
-            }
+            _set_section_topic_fields(
+                {
+                    "protocol_title": protocol_title,
+                    "topic_name": topic_name,
+                    "text": summary,
+                    "chunk_ids": list(normalized_chunk_ids),
+                    "topic_route": topic_route,
+                    "topic_score": topic_score,
+                    "topic_granularity_level": _as_int_in_range(item.get("topic_granularity_hint"), min_value=1, max_value=10),
+                }
+            )
         )
         extended_sections.append(
-            {
-                "protocol_title": protocol_title,
-                "topic_name": topic_name,
-                "text": extended_summary or summary,
-                "chunk_ids": list(normalized_chunk_ids),
-                "topic_route": topic_route,
-                "topic_score": topic_score,
-                "topic_granularity_level": _as_int_in_range(item.get("topic_granularity_hint"), min_value=1, max_value=10),
-            }
+            _set_section_topic_fields(
+                {
+                    "protocol_title": protocol_title,
+                    "topic_name": topic_name,
+                    "text": extended_summary or summary,
+                    "chunk_ids": list(normalized_chunk_ids),
+                    "topic_route": topic_route,
+                    "topic_score": topic_score,
+                    "topic_granularity_level": _as_int_in_range(item.get("topic_granularity_hint"), min_value=1, max_value=10),
+                }
+            )
         )
 
     return concise_sections, extended_sections
@@ -3389,6 +3509,7 @@ def _enforce_semantic_topics_and_section_uniqueness(
             semantic_changed = True
 
         section_copy["topic_name"] = resolved_topic
+        _set_section_topic_fields(section_copy)
         section_copy["topic_route"] = "semantic_label" if semantic_topic else "object_topic_inferred"
         section_copy["topic_score"] = 1.0 if semantic_topic else 0.65
 
@@ -3437,6 +3558,7 @@ def _enforce_semantic_topics_and_section_uniqueness(
             section_copy["text"] = compact_text
 
         extended_copy["topic_name"] = resolved_topic
+        _set_section_topic_fields(extended_copy)
         extended_copy["topic_route"] = section_copy["topic_route"]
         extended_copy["topic_score"] = section_copy["topic_score"]
         extended_text = _sanitize_summary_for_output(_as_optional_str(extended_copy.get("text")) or "")
@@ -3607,6 +3729,14 @@ def _topic_path_parts(topic_name: str | None) -> tuple[str, str | None]:
     if len(parts) >= 2:
         return parts[0], " > ".join(parts[1:])
     return raw, None
+
+
+def _set_section_topic_fields(section: dict[str, Any]) -> dict[str, Any]:
+    topic_name = _as_optional_str(section.get("topic_name")) or ""
+    topic_root, topic_child = _topic_path_parts(topic_name)
+    section["topic_root"] = topic_root or None
+    section["topic_child"] = topic_child or None
+    return section
 
 
 def _topic_display_label(topic_name: str | None) -> str:
@@ -4043,7 +4173,20 @@ def _resolve_section_topic_name(
     if "הסכם" in agreement_signal and "רשות" in agreement_signal:
         object_root = "הסכמים"
     if not object_root:
-        object_root = "החלטות עירוניות"
+        object_root = (
+            _clean_topic_candidate(
+                _protocol_root_topic(protocol_title=protocol_title, fallback_topic=existing_root or section_text),
+                max_tokens=6,
+                min_tokens=1,
+                drop_noise_tokens=True,
+            )
+            or "נושא כללי"
+        )
+    if is_low_quality_topic_label(object_root):
+        object_root = (
+            _clean_topic_candidate(protocol_title, max_tokens=6, min_tokens=1, drop_noise_tokens=True)
+            or "נושא כללי"
+        )
 
     decision_context_topic = _decision_context_subject_topic(decision_request_context)
     semantic_child = _clean_topic_candidate(semantic_topic or "", max_tokens=5, min_tokens=2, drop_noise_tokens=True)
@@ -4145,13 +4288,18 @@ def _resolve_section_topic_name(
         elif object_root == "הקצאות":
             best_child = "הקצאה לעמותה"
         else:
-            best_child = _clean_topic_candidate(section_text, max_tokens=4, min_tokens=2, drop_noise_tokens=True) or "החלטה ענפית"
+            best_child = _clean_topic_candidate(section_text, max_tokens=4, min_tokens=2, drop_noise_tokens=True)
 
-    if object_root == "הסכמים" and best_child.startswith("הכנת הסכם"):
-        best_child = best_child.replace("הכנת ", "", 1)
-        best_child = _clean_topic_candidate(best_child, max_tokens=5, min_tokens=2, drop_noise_tokens=True) or "הסכם רשות"
+    agreement_best_child = best_child if isinstance(best_child, str) else None
+    if object_root == "הסכמים" and agreement_best_child and agreement_best_child.startswith("הכנת הסכם"):
+        agreement_best_child = agreement_best_child.replace("הכנת ", "", 1)
+        best_child = _clean_topic_candidate(agreement_best_child, max_tokens=5, min_tokens=2, drop_noise_tokens=True) or "הסכם רשות"
     if object_root == "הקצאות" and _is_generic_allocation_child(best_child):
         best_child = _allocation_child_from_texts(section_text, " ".join(chunk_texts), existing_topic_raw) or best_child
+    if best_child and normalize_for_search(best_child) == normalize_for_search(object_root):
+        best_child = None
+    if not best_child:
+        return object_root
 
     return f"{object_root} > {best_child}"
 
@@ -4184,11 +4332,15 @@ def _sanitize_semantic_topic_label(value: str) -> str | None:
     candidate = _clean_topic_candidate(value, max_tokens=5, min_tokens=2, drop_noise_tokens=True)
     if not candidate:
         return None
+    if is_low_quality_topic_label(candidate):
+        return None
     tokens = [token for token in _normalized_topic_tokens(candidate) if token not in SEMANTIC_TOPIC_STOP_TOKENS]
     tokens = _trim_topic_edge_tokens(tokens)
     if len(tokens) < 2:
         return None
     sanitized = _clean_topic_candidate(" ".join(tokens), max_tokens=4, min_tokens=2, drop_noise_tokens=True)
+    if sanitized and is_low_quality_topic_label(sanitized):
+        return None
     return sanitized
 
 
@@ -4885,6 +5037,8 @@ def _clean_headline_topic_candidate(value: str, *, max_tokens: int = 6, min_toke
     compact = " ".join(normalized_tokens[:max_tokens]).strip()
     if not compact:
         return None
+    if is_low_quality_topic_label(compact):
+        return None
 
     semantic_tokens = _normalized_topic_tokens(compact)
     if len(semantic_tokens) < min_tokens:
@@ -5041,6 +5195,8 @@ def _clean_topic_candidate(
         return None
 
     compact = " ".join(tokens[:max_tokens]).strip()
+    if compact and is_low_quality_topic_label(compact):
+        return None
     return compact or None
 
 

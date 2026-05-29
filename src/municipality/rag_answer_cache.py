@@ -53,7 +53,8 @@ class RagAnswerCacheService:
         except Exception:  # noqa: BLE001
             self.session.rollback()
             return None
-        best_row: RagAnswerCache | None = None
+        best_payload: dict[str, Any] | None = None
+        best_cache_id: int | None = None
         best_similarity = 0.0
         for row in rows:
             try:
@@ -63,15 +64,17 @@ class RagAnswerCacheService:
             if not isinstance(cached_vector, list) or not cached_vector:
                 continue
             similarity = _cosine_similarity(query_vector, [float(value) for value in cached_vector])
-            if similarity >= self.min_similarity and similarity > best_similarity:
-                best_row = row
-                best_similarity = similarity
-        if best_row is None:
+            if similarity < self.min_similarity or similarity <= best_similarity:
+                continue
+            payload = _loads_json_dict(row.answer_payload_json)
+            if not payload or is_degraded_answer_cache_payload(payload):
+                continue
+            best_payload = payload
+            best_cache_id = int(row.id)
+            best_similarity = similarity
+        if best_payload is None or best_cache_id is None:
             return None
-        payload = _loads_json_dict(best_row.answer_payload_json)
-        if not payload:
-            return None
-        return RagAnswerCacheHit(payload=payload, similarity=round(best_similarity, 6), cache_id=int(best_row.id))
+        return RagAnswerCacheHit(payload=best_payload, similarity=round(best_similarity, 6), cache_id=best_cache_id)
 
     def store(
         self,
@@ -119,6 +122,18 @@ def _loads_json_dict(value: str | None) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def is_degraded_answer_cache_payload(payload: dict[str, Any] | None) -> bool:
+    if not isinstance(payload, dict):
+        return True
+    scoring = payload.get("scoring")
+    if not isinstance(scoring, dict):
+        return False
+    if bool(scoring.get("degraded_upstream_failure")):
+        return True
+    route = str(scoring.get("answer_generation_route") or "").strip()
+    return route == "deterministic_retrieval_fallback"
 
 
 def _env_bool(value: str | None, *, default: bool) -> bool:

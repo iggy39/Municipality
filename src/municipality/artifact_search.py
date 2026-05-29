@@ -42,6 +42,7 @@ from municipality.search_common import (
     _semantic_path_labels,
     _semantic_text_match_score,
 )
+from municipality.topic_label_quality import is_low_quality_topic_label, sanitize_topic_path_label
 
 
 @dataclass(slots=True)
@@ -460,6 +461,7 @@ class ArtifactSearchService:
             select(ArtifactSemanticLink, SemanticNode)
             .join(SemanticNode, ArtifactSemanticLink.semantic_node_id == SemanticNode.id)
             .where(ArtifactSemanticLink.artifact_id.in_(artifact_ids))
+            .where(SemanticNode.status == "active")
         ).all()
         if not rows:
             return {}
@@ -514,9 +516,19 @@ class ArtifactSearchService:
 
         scored_by_artifact: dict[str, dict[int, Any]] = {}
         for link, node in rows:
+            if is_low_quality_topic_label(str(node.pref_label_he or "")):
+                continue
             labels = [str(node.pref_label_norm or "").strip()]
-            labels.extend(str(label or "").strip() for label in aliases_by_node.get(int(node.id), []))
-            labels.extend(_semantic_path_labels(node=node, nodes_by_id=nodes_by_id))
+            labels.extend(
+                str(label or "").strip()
+                for label in aliases_by_node.get(int(node.id), [])
+                if str(label or "").strip() and not is_low_quality_topic_label(str(label or ""))
+            )
+            labels.extend(
+                label
+                for label in _semantic_path_labels(node=node, nodes_by_id=nodes_by_id)
+                if label and not is_low_quality_topic_label(label)
+            )
 
             query_score = _semantic_text_match_score(normalized_query, labels)
             explicit_score = 0.0
@@ -608,8 +620,7 @@ def _loads_json_list(value: str | None) -> list[str]:
 def _annotation_primary_topic(annotation: ArtifactTopicAnnotation | None) -> str | None:
     if annotation is None:
         return None
-    value = str(annotation.primary_topic_he or "").strip()
-    return value or None
+    return sanitize_topic_path_label(annotation.primary_topic_he)
 
 
 def _annotation_secondary_topics(annotation: ArtifactTopicAnnotation | None) -> list[str]:
@@ -621,7 +632,12 @@ def _annotation_secondary_topics(annotation: ArtifactTopicAnnotation | None) -> 
         return []
     if not isinstance(parsed, list):
         return []
-    return [str(item).strip() for item in parsed if str(item).strip()]
+    return [
+        sanitized
+        for value in [str(item).strip() for item in parsed if str(item).strip()]
+        for sanitized in [sanitize_topic_path_label(value)]
+        if sanitized and not is_low_quality_topic_label(sanitized)
+    ]
 
 
 def _loads_embedding_vector(value: str | None) -> list[float] | None:

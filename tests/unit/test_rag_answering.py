@@ -4,6 +4,7 @@ import json
 
 import municipality.rag_answering as rag_answering
 from municipality.rag_answering import (
+    REASON_ANSWER_GENERATION_FAILED,
     REASON_INSUFFICIENT_EVIDENCE,
     REASON_INVALID_VERIFICATION_FORMAT,
     LOCAL_VERIFY_PROVIDER_NAME,
@@ -1155,6 +1156,90 @@ def test_topic_cleaning_reduces_over_specific_subtopic_phrase() -> None:
     assert cleaned in {"תמרורים מוארים", "תמרורים מוארים פניה", "הוספת תמרורים"}
 
 
+def test_topic_cleaning_rejects_low_quality_public_labels() -> None:
+    assert rag_answering._clean_topic_candidate("החלטות עירוניות", min_tokens=2) is None
+    assert rag_answering._clean_topic_candidate("עיקרי ההחלטה", min_tokens=2) is None
+    assert rag_answering._clean_topic_candidate("מכותבים תוכן ההחלטה", min_tokens=2) is None
+    assert rag_answering._clean_topic_candidate("אליצור עדכון ניקוד", min_tokens=2) is None
+
+
+def test_compose_refuses_when_upstream_failure_fallback_is_topic_mismatched() -> None:
+    provider = MockRagProvider(configured=False)
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+
+    retrieval = RagRetrievalResult(
+        query="אילו החלטות בטיחות בדרכים התקבלו?",
+        normalized_query="אילו החלטות בטיחות בדרכים התקבלו",
+        top_k=4,
+        retrieval_set_id="retrieval-topic-mismatch",
+        requested_source_kinds=["protocol"],
+        contexts=[
+            RagContextChunk(
+                chunk_id="chunk-mismatch",
+                score=0.89,
+                snippet="גב' בריג'יט דוקרן תתואם פגישה ליישום ההחלטה.",
+                citation="p.4",
+                source_kind="protocol",
+                document_id=901,
+                document_title="פרוטוקול הועדה למאבק בנגע הסמים",
+                document_url="https://example.local/mismatch.pdf",
+                municipality_slug="ashdod",
+                meeting_external_id="meeting:901",
+                start_page=4,
+                end_page=4,
+                chunk_text="גב' בריג'יט דוקרן תתואם פגישה ליישום ההחלטה.",
+                primary_topic="הסכמים > אחריות לביצוע במהלך מנהלת",
+                semantic_topic_labels=["אחריות לביצוע במהלך מנהלת"],
+            )
+        ],
+    )
+
+    result = service.compose(question="אילו החלטות בטיחות בדרכים התקבלו?", retrieval=retrieval)
+
+    assert result.status == "refusal"
+    assert result.refusal_reason_code == REASON_ANSWER_GENERATION_FAILED
+
+
+def test_compose_keeps_deterministic_fallback_for_aligned_topic_when_upstream_fails() -> None:
+    provider = MockRagProvider(configured=False)
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+
+    retrieval = RagRetrievalResult(
+        query="מה הוחלט על הסכמי רשות?",
+        normalized_query="מה הוחלט על הסכמי רשות",
+        top_k=4,
+        retrieval_set_id="retrieval-agreement-fallback",
+        requested_source_kinds=["protocol"],
+        contexts=[
+            RagContextChunk(
+                chunk_id="chunk-agreement",
+                score=0.93,
+                snippet="מאשרים הכנת הסכם רשות לתקופה של 5 שנים לעמותה.",
+                citation="p.20",
+                source_kind="protocol",
+                document_id=902,
+                document_title="פרוטוקול ועדת משנה להקצאות קרקע",
+                document_url="https://example.local/agreement.pdf",
+                municipality_slug="ashdod",
+                meeting_external_id="meeting:902",
+                start_page=20,
+                end_page=20,
+                chunk_text="מאשרים הכנת הסכם רשות לתקופה של 5 שנים לעמותה.",
+                primary_topic="הסכמים > הסכם רשות",
+                semantic_topic_labels=["הסכם רשות"],
+            )
+        ],
+    )
+
+    result = service.compose(question="מה הוחלט על הסכמי רשות?", retrieval=retrieval)
+
+    assert result.status == "answer"
+    assert result.scoring.get("answer_generation_route") == "deterministic_retrieval_fallback"
+    assert result.scoring.get("degraded_upstream_failure") is True
+
+
 def test_section_semantic_topic_prefers_more_specific_candidate() -> None:
     context_by_chunk = {
         "chunk-a": RagContextChunk(
@@ -1194,6 +1279,40 @@ def test_section_semantic_topic_prefers_more_specific_candidate() -> None:
     )
 
     assert topic in {"הקצאת כיתת גן ילדים", "הקצאת כיתת ילדים"}
+
+
+def test_section_semantic_topic_ignores_low_quality_document_labels() -> None:
+    context_by_chunk = {
+        "chunk-a": RagContextChunk(
+            chunk_id="chunk-a",
+            score=0.8,
+            snippet="הוחלט לקדם תחבורה עירונית ליד בית הספר.",
+            citation="p.2",
+            source_kind="protocol",
+            document_id=313,
+            document_title="פרוטוקול ועדת תחבורה",
+            document_url="https://example.local/a.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:313",
+            start_page=2,
+            end_page=2,
+            chunk_text="הוחלט לקדם תחבורה עירונית ליד בית הספר.",
+            semantic_topic_labels=[],
+        )
+    }
+    section = {
+        "protocol_title": "פרוטוקול ועדת תחבורה",
+        "text": "אושרה הרחבת פתרונות תחבורה ליד בית הספר.",
+        "chunk_ids": ["chunk-a"],
+    }
+
+    topic = rag_answering._section_semantic_topic_label(
+        section=section,
+        context_by_chunk=context_by_chunk,
+        protocol_semantic_topic_labels={313: ["החלטות עירוניות", "עיקרי ההחלטה", "תחבורה עירונית"]},
+    )
+
+    assert topic == "תחבורה עירונית"
 
 
 def test_subjectless_publication_summary_is_enriched_with_topic() -> None:
@@ -1270,6 +1389,41 @@ def test_resolve_section_topic_name_prefers_object_first_agreements() -> None:
 
     assert topic_name.startswith("הסכמים >")
     assert "הסכם רשות" in topic_name
+
+
+def test_resolve_section_topic_name_returns_root_only_without_generic_public_fallback() -> None:
+    context_by_chunk = {
+        "chunk-a": RagContextChunk(
+            chunk_id="chunk-a",
+            score=0.9,
+            snippet="הוחלט.",
+            citation="p.3",
+            source_kind="protocol",
+            document_id=471,
+            document_title="פרוטוקול ועדת תחבורה",
+            document_url="https://example.local/p.pdf",
+            municipality_slug="ashdod",
+            meeting_external_id="meeting:471",
+            start_page=3,
+            end_page=3,
+            chunk_text="הוחלט.",
+            semantic_topic_labels=[],
+        )
+    }
+    section = {
+        "protocol_title": "פרוטוקול ועדת תחבורה",
+        "topic_name": "נושא כללי",
+        "text": "הוחלט.",
+        "chunk_ids": ["chunk-a"],
+    }
+
+    topic_name = rag_answering._resolve_section_topic_name(
+        section=section,
+        semantic_topic=None,
+        context_by_chunk=context_by_chunk,
+    )
+
+    assert topic_name == "תחבורה"
 
 
 def test_enforce_semantic_topics_never_returns_placeholder_topic() -> None:

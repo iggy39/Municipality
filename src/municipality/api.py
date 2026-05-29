@@ -44,7 +44,7 @@ from municipality.models import (
 from municipality.pipeline import PipelineService
 from municipality.processing import ProcessingService
 from municipality.rag_arch import RagArchitectureConfig
-from municipality.rag_answer_cache import RagAnswerCacheService
+from municipality.rag_answer_cache import RagAnswerCacheService, is_degraded_answer_cache_payload
 from municipality.rag_answering import RagAnswerResult, RagAnsweringService, RagCitation, rag_answering_thresholds_snapshot
 from municipality.rag_backend import build_embedding_backend, build_search_backend
 from municipality.rag_llm import RagLlmClient, RagLlmConfig, build_rag_llm_client
@@ -58,6 +58,7 @@ from municipality.rag_observability import (
 from municipality.rag_retrieval import RagContextChunk, RagRetrievalResult, RagRetrievalService
 from municipality.search import search_thresholds_snapshot
 from municipality.semantic_canonicalization import SemanticCanonicalizer
+from municipality.topic_label_quality import is_low_quality_topic_label
 
 
 def _default_html_fetcher(url: str) -> str:
@@ -505,6 +506,34 @@ def _normalized_answering_trace(scoring: dict | None) -> dict:
     if not isinstance(timing_payload, dict):
         trace["timing_ms"] = {}
     return trace
+
+
+def _provider_warning_payload(answer_result: RagAnswerResult) -> dict[str, Any] | None:
+    scoring = dict(answer_result.scoring or {})
+    if not bool(scoring.get("degraded_upstream_failure")):
+        return None
+    upstream_provider = str(scoring.get("upstream_answer_provider") or "").strip() or None
+    upstream_model = str(scoring.get("upstream_answer_model") or "").strip() or None
+    error_code = str(scoring.get("upstream_answer_error_code") or scoring.get("answer_call_error_code") or "").strip() or None
+    mock_mode = answer_result.status == "answer"
+    message_he = (
+        "ספק התשובה אינו זמין כעת. מוצגת טיוטת תשובה מבוססת שליפה בלבד."
+        if mock_mode
+        else "ספק התשובה אינו זמין כעת, ולא ניתן היה להרכיב גם טיוטת תשובה אמינה מהראיות שנשלפו."
+    )
+    return {
+        "message_he": message_he,
+        "provider": upstream_provider,
+        "model": upstream_model,
+        "error_code": error_code,
+        "mock_mode": mock_mode,
+    }
+
+
+def _answer_mode(answer_result: RagAnswerResult) -> str:
+    if answer_result.status != "answer":
+        return "refusal"
+    return "mockup" if bool(dict(answer_result.scoring or {}).get("degraded_upstream_failure")) else "grounded"
 
 
 def _as_int_in_range(value: Any, *, min_value: int, max_value: int) -> int | None:
@@ -2392,12 +2421,13 @@ def _load_protocol_semantic_topic_labels(
         .where(RetrievalArtifact.document_id.in_(unique_document_ids))
         .where(RetrievalArtifact.source_kind == "protocol")
         .where(SemanticNode.node_kind == "topic")
+        .where(SemanticNode.status == "active")
     ).all()
     if artifact_rows:
         scored: dict[int, dict[str, float]] = {}
         for document_id, label_he, confidence in artifact_rows:
             label = _sanitize_topic_label(str(label_he or ""), min_tokens=2)
-            if not label:
+            if not label or is_low_quality_topic_label(label):
                 continue
             bucket = scored.setdefault(int(document_id), {})
             bucket[label] = bucket.get(label, 0.0) + max(0.0, min(1.0, float(confidence or 0.0)))
@@ -3019,16 +3049,20 @@ def _run_ask(
     limitations = list(answer_result.limitations)
     if answer_result.status == "answer" and len(retrieval_result.source_kinds) <= 1:
         limitations.append("הראיות חלקיות ומבוססות על סוג מקור אחד בלבד.")
+    provider_warning = _provider_warning_payload(answer_result)
+    if provider_warning is not None and provider_warning["message_he"] not in limitations:
+        limitations.insert(0, str(provider_warning["message_he"]))
 
     if answer_result.status == "answer":
-        if not bool(answer_result.scoring.get("semantic_answer_cache_hit")):
+        cache_payload = _answer_result_to_cache_payload(answer_result)
+        if not bool(answer_result.scoring.get("semantic_answer_cache_hit")) and not is_degraded_answer_cache_payload(cache_payload):
             answer_cache_service.store(
                 query=request.question,
                 query_hash=question_hash,
                 retrieval_set_id=retrieval_result.retrieval_set_id,
                 answer_provider=answer_result.provider,
                 answer_model=answer_result.model,
-                answer_payload=_answer_result_to_cache_payload(answer_result),
+                answer_payload=cache_payload,
             )
         db.commit()
 
@@ -3061,6 +3095,7 @@ def _run_ask(
     response_payload = {
         "ask_request_id": ask_request_id,
         "status": answer_result.status,
+        "answer_mode": _answer_mode(answer_result),
         "question": request.question,
         "answer": answer_result.answer,
         "extended_answer": answer_result.extended_answer,
@@ -3069,6 +3104,7 @@ def _run_ask(
         "citations": citations_payload,
         "claim_assessments": list(answer_result.claim_assessments),
         "limitations": limitations,
+        "provider_warning": provider_warning,
         "refusal": refusal_payload,
         "scoring": dict(answer_result.scoring),
         "retrieval": {
@@ -3511,6 +3547,7 @@ def ask_playground_page() -> HTMLResponse:
       background: #fff;
     }
     .output.refusal { border-color: #ebd6c5; background: #fff8f2; }
+    .output.warning { border-color: #f1d39d; background: #fff8e7; }
     .answer-text, .refusal-text { direction: rtl; text-align: right; white-space: pre-line; }
     .answer-sections { margin-top: 10px; display: grid; gap: 10px; }
     .topic-tree-body { display: grid; gap: 10px; }
@@ -3638,6 +3675,11 @@ def ask_playground_page() -> HTMLResponse:
       <ul id="ask-playground-limitations"></ul>
     </section>
 
+    <section id="ask-playground-provider-warning" class="output warning hidden">
+      <h3>Provider Warning</h3>
+      <p id="ask-playground-provider-warning-text" class="answer-text"></p>
+    </section>
+
     <section id="ask-playground-refusal" class="output refusal hidden">
       <h3>Refusal</h3>
       <p id="ask-playground-refusal-text" class="refusal-text"></p>
@@ -3693,6 +3735,8 @@ def ask_playground_page() -> HTMLResponse:
       const extendedPanel = document.getElementById("ask-playground-extended-panel");
       const extendedText = document.getElementById("ask-playground-extended-text");
       const limitationsList = document.getElementById("ask-playground-limitations");
+      const providerWarningPanel = document.getElementById("ask-playground-provider-warning");
+      const providerWarningText = document.getElementById("ask-playground-provider-warning-text");
       const refusalPanel = document.getElementById("ask-playground-refusal");
       const refusalText = document.getElementById("ask-playground-refusal-text");
       const citationsPanel = document.getElementById("ask-playground-citations");
@@ -3835,8 +3879,17 @@ def ask_playground_page() -> HTMLResponse:
         }
         return true;
       };
-      const splitTopicPath = (topicValue, fallbackText) => {
-        const rawTopic = String(topicValue || "").trim();
+      const splitTopicPath = (section) => {
+        const topicRoot = typeof section?.topic_root === "string" ? section.topic_root.trim() : "";
+        const topicChild = typeof section?.topic_child === "string" ? section.topic_child.trim() : "";
+        if (topicRoot || topicChild) {
+          return {
+            root: topicRoot || topicChild || "נושא כללי",
+            child: topicChild,
+          };
+        }
+
+        const rawTopic = String((section && typeof section === "object" ? section.topic_name : "") || "").trim();
         const parts = rawTopic.split(">").map((part) => part.trim()).filter(Boolean);
         if (parts.length >= 2) {
           return {
@@ -3845,10 +3898,9 @@ def ask_playground_page() -> HTMLResponse:
           };
         }
 
-        const fallbackWords = String(fallbackText || "").trim().split(/\\s+/).filter(Boolean);
         return {
           root: parts[0] || "נושא כללי",
-          child: fallbackWords.slice(0, 4).join(" ") || "החלטה",
+          child: "",
         };
       };
       const citationByChunkId = () => {
@@ -3893,8 +3945,7 @@ def ask_playground_page() -> HTMLResponse:
             continue;
           }
 
-          const topic = typeof section.topic_name === "string" ? section.topic_name : "נושא כללי";
-          const topicPath = splitTopicPath(topic, conciseText);
+          const topicPath = splitTopicPath(section);
           const extSection = extendedSections[idx];
           const extText = extSection && typeof extSection === "object" && typeof extSection.text === "string"
             ? extSection.text
@@ -3947,16 +3998,8 @@ def ask_playground_page() -> HTMLResponse:
 
             const rowsForRoot = rootBuckets.get(rootLabel) || [];
             for (const row of rowsForRoot) {
-              const childDetails = document.createElement("details");
-              childDetails.className = "topic-child";
-              childDetails.open = true;
-
-              const childSummary = document.createElement("summary");
-              childSummary.textContent = row.child;
-              childDetails.appendChild(childSummary);
-
               const childContent = document.createElement("div");
-              childContent.className = "topic-child-content";
+              childContent.className = row.child ? "topic-child-content" : "topic-root-leaf";
 
               const textNode = document.createElement("p");
               textNode.className = "text";
@@ -4011,8 +4054,19 @@ def ask_playground_page() -> HTMLResponse:
                 childContent.appendChild(sourceList);
               }
 
-              childDetails.appendChild(childContent);
-              rootContent.appendChild(childDetails);
+              if (row.child) {
+                const childDetails = document.createElement("details");
+                childDetails.className = "topic-child";
+                childDetails.open = true;
+
+                const childSummary = document.createElement("summary");
+                childSummary.textContent = row.child;
+                childDetails.appendChild(childSummary);
+                childDetails.appendChild(childContent);
+                rootContent.appendChild(childDetails);
+              } else {
+                rootContent.appendChild(childContent);
+              }
             }
 
             rootDetails.appendChild(rootContent);
@@ -4109,6 +4163,7 @@ def ask_playground_page() -> HTMLResponse:
 
         statusNode.textContent = "Submitting ask request...";
         hide(answerPanel);
+        hide(providerWarningPanel);
         hide(refusalPanel);
         hide(citationsPanel);
         hide(thresholdsPanel);
@@ -4125,6 +4180,9 @@ def ask_playground_page() -> HTMLResponse:
         thresholdsJson.textContent = "";
         if (extendedText) {
           extendedText.textContent = "";
+        }
+        if (providerWarningText) {
+          providerWarningText.textContent = "";
         }
         lastExtendedAnswer = null;
         lastAnswerSections = [];
@@ -4146,6 +4204,7 @@ def ask_playground_page() -> HTMLResponse:
 
           const data = await response.json();
           rawJson.textContent = JSON.stringify(data, null, 2);
+          const providerWarning = data.provider_warning && typeof data.provider_warning === "object" ? data.provider_warning : null;
 
           const retrieval = data.retrieval && typeof data.retrieval === "object" ? data.retrieval : {};
           const model = data.model && typeof data.model === "object" ? data.model : {};
@@ -4211,6 +4270,19 @@ def ask_playground_page() -> HTMLResponse:
             hide(tracePanel);
           }
 
+          if (providerWarning && providerWarningText) {
+            const warningBits = [providerWarning.message_he || "Provider unavailable."];
+            if (providerWarning.provider || providerWarning.model) {
+              warningBits.push(`(${providerWarning.provider || "-"} / ${providerWarning.model || "-"})`);
+            }
+            providerWarningText.textContent = warningBits.join(" ");
+            show(providerWarningPanel);
+            appendItem(metaList, `provider_warning.error_code: ${providerWarning.error_code || "-"}`);
+            appendItem(metaList, `answer_mode: ${data.answer_mode || "-"}`);
+          } else {
+            hide(providerWarningPanel);
+          }
+
           if (data.status === "answer") {
             const sections = Array.isArray(data.answer_sections) ? data.answer_sections : [];
             const extendedSections = Array.isArray(data.extended_answer_sections) ? data.extended_answer_sections : [];
@@ -4266,7 +4338,9 @@ def ask_playground_page() -> HTMLResponse:
             show(answerPanel);
             show(citationsPanel);
             hide(refusalPanel);
-            statusNode.textContent = "Received grounded answer with citations.";
+            statusNode.textContent = providerWarning && providerWarning.mock_mode === true
+              ? "Provider unavailable; showing best-effort mockup answer with citations."
+              : "Received grounded answer with citations.";
             return;
           }
 
@@ -4283,13 +4357,16 @@ def ask_playground_page() -> HTMLResponse:
           hide(answerPanel);
           hide(citationsPanel);
           show(refusalPanel);
-          statusNode.textContent = "Model refused due to evidence policy.";
+          statusNode.textContent = providerWarning
+            ? "Provider unavailable; no reliable mockup answer could be built."
+            : "Model refused due to evidence policy.";
         } catch (_err) {
           console.error("ask_playground_request_failed", _err);
           const errorMessage = _err instanceof Error ? _err.message : String(_err || "unknown_error");
           hide(answerPanel);
           hide(citationsPanel);
           hide(refusalPanel);
+          hide(providerWarningPanel);
           hide(thresholdsPanel);
           hide(tracePanel);
           hide(extendedPanel);
@@ -4310,6 +4387,7 @@ def semantic_tree(
     root_id: int | None = None,
     depth: int | None = None,
     kind: str | None = None,
+    status: str | None = "active",
     db=Depends(get_db),
 ) -> dict:
     stmt = select(SemanticNode)
@@ -4319,6 +4397,11 @@ def semantic_tree(
         )
     if kind:
         stmt = stmt.where(SemanticNode.node_kind == kind)
+    normalized_status = str(status or "").strip().casefold()
+    if normalized_status and normalized_status != "all":
+        if normalized_status not in {"active", "candidate", "deprecated", "rejected"}:
+            raise HTTPException(status_code=400, detail="semantic_status_invalid")
+        stmt = stmt.where(SemanticNode.status == normalized_status)
 
     nodes = db.execute(
         stmt.order_by(SemanticNode.depth.asc(), SemanticNode.pref_label_norm.asc(), SemanticNode.id.asc())
@@ -4816,6 +4899,7 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
     .ask-controls button:hover {{ background: #0c666b; }}
     .ask-output {{ margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }}
     .ask-output.refusal {{ border-color: #e6d1be; background: #fff8f2; }}
+    .ask-output.warning {{ border-color: #f1d39d; background: #fff8e7; }}
     .ask-output h3 {{ margin: 0 0 8px; font-size: 0.98rem; }}
     #ask-answer-text {{ direction: rtl; text-align: right; white-space: pre-line; }}
     .answer-sections {{ margin-top: 10px; display: grid; gap: 10px; }}
@@ -4907,6 +4991,10 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
         <div id="ask-answer-sections" class="answer-sections"></div>
         <ul id="ask-limitations"></ul>
       </section>
+      <section id="ask-provider-warning-panel" class="ask-output warning hidden">
+        <h3>אזהרת ספק</h3>
+        <p id="ask-provider-warning-text"></p>
+      </section>
       <section id="ask-refusal-panel" class="ask-output refusal hidden">
         <h3>מצב סירוב</h3>
         <p id="ask-refusal-text"></p>
@@ -4937,6 +5025,8 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
       const answerText = document.getElementById("ask-answer-text");
       const answerSectionsNode = document.getElementById("ask-answer-sections");
       const limitationsList = document.getElementById("ask-limitations");
+      const providerWarningPanel = document.getElementById("ask-provider-warning-panel");
+      const providerWarningText = document.getElementById("ask-provider-warning-text");
       const refusalPanel = document.getElementById("ask-refusal-panel");
       const refusalText = document.getElementById("ask-refusal-text");
       const citationsPanel = document.getElementById("ask-citations-panel");
@@ -5014,6 +5104,7 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
 
         statusNode.textContent = "שולח שאלה...";
         hide(answerPanel);
+        hide(providerWarningPanel);
         hide(refusalPanel);
         hide(citationsPanel);
         hide(thresholdsPanel);
@@ -5024,6 +5115,9 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
         }}
         if (thresholdsJson) {{
           thresholdsJson.textContent = "";
+        }}
+        if (providerWarningText) {{
+          providerWarningText.textContent = "";
         }}
 
         try {{
@@ -5039,12 +5133,23 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
           }}
 
           const data = await response.json();
+          const providerWarning = data.provider_warning && typeof data.provider_warning === "object" ? data.provider_warning : null;
           const debugPayload = data.debug && typeof data.debug === "object" ? data.debug : null;
           if (debugPayload && debugPayload.thresholds && thresholdsJson) {{
             thresholdsJson.textContent = JSON.stringify(debugPayload.thresholds, null, 2);
             show(thresholdsPanel);
           }} else {{
             hide(thresholdsPanel);
+          }}
+          if (providerWarning && providerWarningText) {{
+            const warningBits = [providerWarning.message_he || "ספק התשובה אינו זמין."];
+            if (providerWarning.provider || providerWarning.model) {{
+              warningBits.push(`(${{providerWarning.provider || "-"}} / ${{providerWarning.model || "-"}})`);
+            }}
+            providerWarningText.textContent = warningBits.join(" ");
+            show(providerWarningPanel);
+          }} else {{
+            hide(providerWarningPanel);
           }}
           if (data.status === "answer") {{
             const sections = Array.isArray(data.answer_sections) ? data.answer_sections : [];
@@ -5234,7 +5339,9 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
             show(answerPanel);
             show(citationsPanel);
             hide(refusalPanel);
-            statusNode.textContent = "התקבלה תשובה מבוססת ציטוטים.";
+            statusNode.textContent = providerWarning && providerWarning.mock_mode === true
+              ? "ספק התשובה אינו זמין; מוצגת טיוטת תשובה מבוססת שליפה בלבד."
+              : "התקבלה תשובה מבוססת ציטוטים.";
             return;
           }}
 
@@ -5249,11 +5356,14 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
           show(refusalPanel);
           hide(answerPanel);
           hide(citationsPanel);
-          statusNode.textContent = "המערכת סירבה להשיב בגלל חוסר ראיות מספק.";
+          statusNode.textContent = providerWarning
+            ? "ספק התשובה אינו זמין, ולא ניתן היה להרכיב גם טיוטת תשובה אמינה."
+            : "המערכת סירבה להשיב בגלל חוסר ראיות מספק.";
         }} catch (_err) {{
           console.error("ask_inline_panel_request_failed", _err);
           const errorMessage = _err instanceof Error ? _err.message : String(_err || "unknown_error");
           hide(answerPanel);
+          hide(providerWarningPanel);
           hide(refusalPanel);
           hide(citationsPanel);
           hide(thresholdsPanel);

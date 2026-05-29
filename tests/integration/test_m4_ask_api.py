@@ -43,6 +43,7 @@ def test_m4_ask_ui_playground_exposes_debug_threshold_panels() -> None:
     assert 'id="ask-show-extended"' in body
     assert 'id="ask-playground-extended-panel"' in body
     assert 'id="ask-playground-answer-sections"' in body
+    assert 'id="ask-playground-provider-warning"' in body
     assert "isAlmostEqualText" in body
     assert "hasMeaningfulExtraInfo" in body
     assert "topic-root" in body
@@ -127,6 +128,8 @@ def test_m4_ask_api_returns_answer_with_citation_contract(tmp_path: Path) -> Non
         assert isinstance(payload["extended_answer_sections"], list)
         assert payload["extended_answer_sections"]
         assert len(payload["extended_answer_sections"]) == len(payload["answer_sections"])
+        assert all("topic_root" in row for row in payload["answer_sections"])
+        assert all("topic_child" in row for row in payload["answer_sections"])
         assert payload["refusal"] is None
         assert payload["citations"]
         assert isinstance(payload["retrieval"]["retrieval_set_id"], str)
@@ -196,6 +199,43 @@ def test_m4_ask_api_returns_refusal_with_reason_code_when_source_missing(tmp_pat
         assert payload["refusal"]["reason_code"] == "MISSING_ATTACHMENT_EVIDENCE"
         assert "אין מספיק ראיות" in (payload["refusal"]["message_he"] or "")
         assert payload["refusal"]["missing_source_types"] == ["attachment"]
+
+
+def test_m4_ask_api_returns_mockup_answer_with_provider_warning_when_provider_fails(tmp_path: Path) -> None:
+    db_path = tmp_path / "m4_ask_provider_warning.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    apply_all(engine, Path("migrations"))
+
+    with Session(engine) as session:
+        _seed_mixed_source_chunks(session)
+
+        llm_client = build_rag_llm_client(
+            config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}),
+            provider=MockRagProvider(configured=False),
+        )
+        payload = _run_ask(
+            request=AskRequest(
+                question="אילו החלטות בטיחות בדרכים התקבלו?",
+                top_k=8,
+                source_types=["protocol"],
+                required_source_types=["protocol"],
+                semantic_mode="off",
+                debug_mode=True,
+            ),
+            db=session,
+            llm_client=llm_client,
+        )
+
+        assert payload["status"] == "answer"
+        assert payload["answer_mode"] == "mockup"
+        assert payload["provider_warning"] is not None
+        assert payload["provider_warning"]["mock_mode"] is True
+        assert payload["provider_warning"]["error_code"] == "MODEL_NOT_CONFIGURED"
+        assert payload["answer_sections"]
+        assert payload["citations"]
+        assert payload["scoring"].get("degraded_upstream_failure") is True
+        assert payload["limitations"]
+        assert "ספק התשובה אינו זמין" in payload["limitations"][0]
 
 
 def test_m4_ask_api_semantic_filter_preserves_citation_first_refusal(tmp_path: Path) -> None:

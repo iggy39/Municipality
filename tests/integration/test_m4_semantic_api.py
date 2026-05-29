@@ -91,6 +91,43 @@ def test_m4_semantic_api_endpoints_expose_search_tree_node_and_runs(tmp_path: Pa
         assert run["reject_reason_histogram"].get("TOO_GENERIC") == 1
 
 
+def test_semantic_tree_excludes_deprecated_nodes_by_default(tmp_path: Path) -> None:
+    db_path = tmp_path / "m4_api_tree_status.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    apply_all(engine, Path("migrations"))
+
+    with Session(engine) as session:
+        fixture = _seed_semantic_api_fixture(session)
+        root_node = session.execute(select(SemanticNode).where(SemanticNode.id == fixture["root_node_id"])).scalar_one()
+        deprecated_node = SemanticNode(
+            source_site_id=root_node.source_site_id,
+            node_key_hash="f" * 40,
+            node_kind="topic",
+            semantic_type="legacy_topic",
+            pref_label_he="החלטות עירוניות",
+            pref_label_norm="החלטות עירוניות",
+            parent_node_id=None,
+            depth=0,
+            specificity_score=0.2,
+            confidence=0.4,
+            support_count=1,
+            status="deprecated",
+            first_seen_document_version_id=fixture["document_version_id"],
+            last_seen_document_version_id=fixture["document_version_id"],
+            metadata_json=None,
+            updated_at=datetime.utcnow(),
+        )
+        session.add(deprecated_node)
+        session.commit()
+
+        active_payload = semantic_tree(muni="ashdod", db=session)
+        all_payload = semantic_tree(muni="ashdod", status="all", db=session)
+
+        assert all(item["status"] == "active" for item in active_payload["items"])
+        assert all(item["id"] != deprecated_node.id for item in active_payload["items"])
+        assert any(item["id"] == deprecated_node.id for item in all_payload["items"])
+
+
 def _seed_semantic_api_fixture(session: Session) -> dict[str, int]:
     site = SourceSite(municipality_slug="ashdod", name="Ashdod", root_url="https://example.local")
     session.add(site)
