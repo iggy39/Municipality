@@ -4,6 +4,7 @@
 
 # Common additional ignores (optional)
 .env
+.venv/
 /local_llm/
 municipality.db
 __pycache__/
