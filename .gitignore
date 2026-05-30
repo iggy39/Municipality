@@ -17,3 +17,13 @@ npm-debug.log
 yarn-error.log
 tmp_uvicorn_*.log
 rebuild_rag_redesign.log
+
+# Local/generated RAG evaluation artifacts
+/rag_eval/data/*
+!/rag_eval/data/raw_docs/
+/rag_eval/data/raw_docs/**
+!/rag_eval/data/raw_docs/.gitkeep
+/rag_eval/runs/*
+!/rag_eval/runs/.gitkeep
+/rag_eval/results/*
+!/rag_eval/results/.gitkeep

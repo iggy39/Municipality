@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 import time
 from datetime import datetime
@@ -146,6 +147,7 @@ def _semantic_node_payload(node: SemanticNode, *, child_count: int = 0) -> dict:
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1)
+    model_name: str | None = None
     muni: str | None = None
     top_k: int = Field(default=8, ge=1, le=50)
     source_types: list[str] | None = None
@@ -157,6 +159,7 @@ class AskRequest(BaseModel):
     semantic_mode: str = "off"
     retrieval_strategy: str = "auto"
     debug_mode: bool = False
+    disable_answer_cache: bool = False
 
 
 def _active_embedding_cache_summary(*, db) -> dict[str, Any]:
@@ -2990,15 +2993,17 @@ def _run_ask(
         contexts=retrieval_for_answering.contexts,
     )
 
-    resolved_llm_client = llm_client or build_rag_llm_client()
+    resolved_llm_client = llm_client or _build_ask_llm_client(request=request)
     answering_service = RagAnsweringService(llm_client=resolved_llm_client)
     answer_cache_service = RagAnswerCacheService(db, embedding_service=embedding_service)
     answering_started = time.perf_counter()
     answer_result: RagAnswerResult | None = None
-    cache_hit = answer_cache_service.lookup(
-        query=request.question,
-        retrieval_set_id=retrieval_result.retrieval_set_id,
-    )
+    cache_hit = None
+    if not request.disable_answer_cache:
+        cache_hit = answer_cache_service.lookup(
+            query=request.question,
+            retrieval_set_id=retrieval_result.retrieval_set_id,
+        )
     if cache_hit is not None:
         answer_result = _answer_result_from_cache_payload(cache_hit.payload)
         if answer_result is None:
@@ -3055,7 +3060,11 @@ def _run_ask(
 
     if answer_result.status == "answer":
         cache_payload = _answer_result_to_cache_payload(answer_result)
-        if not bool(answer_result.scoring.get("semantic_answer_cache_hit")) and not is_degraded_answer_cache_payload(cache_payload):
+        if (
+            not request.disable_answer_cache
+            and not bool(answer_result.scoring.get("semantic_answer_cache_hit"))
+            and not is_degraded_answer_cache_payload(cache_payload)
+        ):
             answer_cache_service.store(
                 query=request.question,
                 query_hash=question_hash,
@@ -3180,6 +3189,17 @@ def _run_ask(
         )
 
     return response_payload
+
+
+def _build_ask_llm_client(*, request: AskRequest) -> RagLlmClient:
+    model_name = (request.model_name or "").strip()
+    if not model_name:
+        return build_rag_llm_client()
+
+    source = dict(os.environ)
+    source["RAG_LLM_PROVIDER"] = "ollama"
+    source["RAG_LLM_MODEL"] = model_name
+    return build_rag_llm_client(config=RagLlmConfig.from_env(source))
 
 
 def _decision_payload(decision_id: int, db) -> dict | None:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+
+import httpx
 import pytest
 
 from municipality.fallback import BYTEZ_MODEL
@@ -13,6 +16,7 @@ from municipality.rag_llm import (
     RAG_VERIFY_PREFIX_DEFAULT,
     BytezRagProvider,
     MockRagProvider,
+    OllamaRagProvider,
     RagLlmConfig,
     build_rag_llm_client,
 )
@@ -52,6 +56,56 @@ def test_rag_llm_can_build_ai21_provider_from_env() -> None:
 
     assert isinstance(client.provider, AI21RagProvider)
     assert client.provider.model_name == "jamba-mini"
+
+
+def test_rag_llm_can_build_ollama_provider_from_env() -> None:
+    config = RagLlmConfig.from_env(
+        {
+            "RAG_LLM_PROVIDER": "ollama",
+            "RAG_LLM_MODEL": "qwen3.5:122b",
+            "OLLAMA_BASE_URL": "http://ollama.local:11434",
+        }
+    )
+    client = build_rag_llm_client(config=config)
+
+    assert isinstance(client.provider, OllamaRagProvider)
+    assert client.provider.model_name == "qwen3.5:122b"
+    assert client.provider.base_url == "http://ollama.local:11434"
+
+
+def test_ollama_provider_posts_chat_json_request() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content.decode("utf-8"))
+        assert request.url.path == "/api/chat"
+        assert payload["model"] == "dicta-il/DictaLM-3.0-24B-Thinking:bf16"
+        assert payload["stream"] is False
+        assert payload["format"] == "json"
+        assert payload["messages"][0]["role"] == "system"
+        return httpx.Response(
+            200,
+            json={
+                "message": {"content": '{"answer":"בסדר"}'},
+                "prompt_eval_count": 7,
+                "eval_count": 3,
+            },
+        )
+
+    provider = OllamaRagProvider(
+        base_url="http://ollama.local:11434",
+        model_name="dicta-il/DictaLM-3.0-24B-Thinking:bf16",
+        transport=httpx.MockTransport(handler),
+    )
+    result = provider.generate(
+        call_type=RAG_CALL_ANSWER,
+        messages=[{"role": "system", "content": "x"}, {"role": "user", "content": "y"}],
+    )
+
+    assert result.error_code is None
+    assert result.provider == "ollama"
+    assert result.model == "dicta-il/DictaLM-3.0-24B-Thinking:bf16"
+    assert result.text == '{"answer":"בסדר"}'
+    assert result.request_tokens == 7
+    assert result.response_tokens == 3
 
 
 def test_rag_llm_prompt_prefixes_are_first_line_for_all_call_types() -> None:
