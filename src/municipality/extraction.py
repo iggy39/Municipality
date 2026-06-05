@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import re
-import shutil
-import subprocess
-import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from municipality.layout_parser import parse_pdf_layout, parse_pdf_ocr
+from municipality.qwen_ocr import QwenVisionOcrClient
 
 
 HEBREW_CHAR_RE = re.compile(r"[\u0590-\u05FF]")
@@ -35,121 +32,64 @@ class PdfExtractionResult:
     citation_map: list[dict[str, int]]
     quality_score: float | None
     quality_flags: list[str]
-    quality_summary: dict[str, float | int]
+    quality_summary: dict[str, object]
     error_code: str | None
     warning_text: str | None
 
 
 class PdfTextExtractor:
-    def __init__(self, pdftotext_path: str | None = None, timeout_seconds: float = 45.0):
-        self.pdftotext_path = pdftotext_path or shutil.which("pdftotext")
-        self.timeout_seconds = timeout_seconds
+    def __init__(self, qwen_ocr_client: QwenVisionOcrClient | None = None):
+        self.qwen_ocr_client = qwen_ocr_client
 
     def extract(self, pdf_bytes: bytes) -> PdfExtractionResult:
-        layout_result = parse_pdf_layout(pdf_bytes)
-        if layout_result is not None and layout_result.full_text.strip():
-            pages = _pages_from_layout_result(layout_result)
-            quality_score, quality_flags, quality_summary = score_extraction_quality(layout_result.full_text, pages)
-            layout_extraction = PdfExtractionResult(
-                ok=True,
-                parser_name=layout_result.backend_name,
-                parser_version=None,
-                full_text=layout_result.full_text,
-                pages=pages,
-                citation_map=layout_result.citation_map,
-                quality_score=quality_score,
-                quality_flags=quality_flags,
-                quality_summary=quality_summary,
-                error_code=None,
-                warning_text=None,
-            )
-            ocr_extraction = _ocr_fallback_extraction(pdf_bytes=pdf_bytes, current=layout_extraction)
-            if ocr_extraction is not None:
-                return ocr_extraction
-            return layout_extraction
-
-        if not self.pdftotext_path:
+        layout_result = parse_pdf_ocr(pdf_bytes, client=self.qwen_ocr_client)
+        if layout_result is None:
             return PdfExtractionResult(
                 ok=False,
-                parser_name="pdftotext",
+                parser_name="qwen_vision_ocr",
                 parser_version=None,
                 full_text="",
                 pages=[],
                 citation_map=[],
                 quality_score=None,
-                quality_flags=["MISSING_PARSER"],
+                quality_flags=["QWEN_OCR_FAILED"],
                 quality_summary={},
-                error_code="MISSING_PARSER",
-                warning_text=None,
+                error_code="QWEN_OCR_FAILED",
+                warning_text="Qwen OCR did not return a parsed document",
             )
 
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
-            tmp.write(pdf_bytes)
-
-        try:
-            proc = subprocess.run(
-                [self.pdftotext_path, "-layout", "-enc", "UTF-8", str(tmp_path), "-"],
-                capture_output=True,
-                check=False,
-                timeout=self.timeout_seconds,
+        native_layout_result = parse_pdf_layout(pdf_bytes)
+        pages = _pages_from_layout_result(layout_result)
+        quality_score, quality_flags, quality_summary = score_extraction_quality(layout_result.full_text, pages)
+        quality_summary = {**quality_summary, **dict(layout_result.metadata)}
+        if native_layout_result is not None:
+            quality_summary.update(
+                {
+                    "native_parser_name": native_layout_result.backend_name,
+                    "native_text_chars": len(native_layout_result.full_text),
+                    "native_page_count": len(native_layout_result.pages),
+                    "native_citation_count": len(native_layout_result.citation_map),
+                }
             )
-        except subprocess.TimeoutExpired:
-            tmp_path.unlink(missing_ok=True)
-            return PdfExtractionResult(
-                ok=False,
-                parser_name="pdftotext",
-                parser_version=None,
-                full_text="",
-                pages=[],
-                citation_map=[],
-                quality_score=None,
-                quality_flags=["TIMEOUT"],
-                quality_summary={},
-                error_code="TIMEOUT",
-                warning_text=None,
-            )
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        if layout_result.metadata.get("ocr_failed_pages"):
+            quality_flags.append("OCR_PAGE_FAILURE")
+        if layout_result.metadata.get("ocr_parse_warning_pages"):
+            quality_flags.append("OCR_PARSE_WARNING")
+        ok = bool(layout_result.full_text.strip())
 
-        if proc.returncode != 0:
-            warning = proc.stderr.decode("utf-8", errors="replace").strip() or None
-            return PdfExtractionResult(
-                ok=False,
-                parser_name="pdftotext",
-                parser_version=None,
-                full_text="",
-                pages=[],
-                citation_map=[],
-                quality_score=None,
-                quality_flags=["PARSER_ERROR"],
-                quality_summary={},
-                error_code="PARSER_ERROR",
-                warning_text=warning,
-            )
-
-        text = proc.stdout.decode("utf-8", errors="replace")
-        warning = proc.stderr.decode("utf-8", errors="replace").strip() or None
-        full_text, pages, citation_map = parse_extracted_text(text)
-        quality_score, quality_flags, quality_summary = score_extraction_quality(full_text, pages)
-
-        extraction = PdfExtractionResult(
-            ok=True,
-            parser_name="pdftotext",
+        return PdfExtractionResult(
+            ok=ok,
+            parser_name=layout_result.backend_name,
             parser_version=None,
-            full_text=full_text,
+            full_text=layout_result.full_text,
             pages=pages,
-            citation_map=citation_map,
+            citation_map=layout_result.citation_map,
             quality_score=quality_score,
-            quality_flags=quality_flags,
+            quality_flags=sorted(set(quality_flags)),
             quality_summary=quality_summary,
-            error_code=None,
-            warning_text=warning,
+            error_code=None if ok else "QWEN_OCR_EMPTY_TEXT",
+            warning_text=None if ok else "Qwen OCR returned no text",
         )
-        ocr_extraction = _ocr_fallback_extraction(pdf_bytes=pdf_bytes, current=extraction)
-        if ocr_extraction is not None:
-            return ocr_extraction
-        return extraction
 
 
 def parse_extracted_text(raw_text: str) -> tuple[str, list[ExtractedPage], list[dict[str, int]]]:
@@ -243,53 +183,6 @@ def _pages_from_layout_result(layout_result) -> list[ExtractedPage]:
             )
         )
     return pages
-
-
-def _ocr_fallback_extraction(*, pdf_bytes: bytes, current: PdfExtractionResult) -> PdfExtractionResult | None:
-    if not _should_attempt_ocr(current):
-        return None
-    ocr_result = parse_pdf_ocr(pdf_bytes)
-    if ocr_result is None or not ocr_result.full_text.strip():
-        return None
-    pages = _pages_from_layout_result(ocr_result)
-    quality_score, quality_flags, quality_summary = score_extraction_quality(ocr_result.full_text, pages)
-    candidate = PdfExtractionResult(
-        ok=True,
-        parser_name=ocr_result.backend_name,
-        parser_version=None,
-        full_text=ocr_result.full_text,
-        pages=pages,
-        citation_map=ocr_result.citation_map,
-        quality_score=quality_score,
-        quality_flags=quality_flags,
-        quality_summary=quality_summary,
-        error_code=None,
-        warning_text=current.warning_text,
-    )
-    if _is_better_ocr_candidate(candidate=candidate, current=current):
-        return candidate
-    return None
-
-
-def _should_attempt_ocr(current: PdfExtractionResult) -> bool:
-    if not current.ok:
-        return True
-    flags = set(current.quality_flags or [])
-    if "OCR_CANDIDATE" in flags:
-        return True
-    if not current.full_text.strip():
-        return True
-    return False
-
-
-def _is_better_ocr_candidate(*, candidate: PdfExtractionResult, current: PdfExtractionResult) -> bool:
-    current_score = float(current.quality_score or 0.0)
-    candidate_score = float(candidate.quality_score or 0.0)
-    if candidate_score > (current_score + 0.08):
-        return True
-    if len(candidate.full_text.strip()) > max(400, len(current.full_text.strip()) * 2):
-        return True
-    return False
 
 
 def _reading_direction(value: str) -> str | None:

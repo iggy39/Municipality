@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import re
 from typing import Any, Sequence
 
 from sqlalchemy import select
@@ -78,25 +77,14 @@ class ArtifactTopicClassifier:
             group_key: _representative_artifact(group_artifacts)
             for group_key, group_artifacts in _group_artifacts_for_annotation(artifacts).items()
         }
-        classification_by_representative_id = {
-            str(artifact.artifact_id): _deterministic_refinement(
-                artifact=artifact,
-                structural_topic=_structural_topic_for_artifact(artifact=artifact),
-            )
-            for artifact in representative_by_group.values()
-        }
-        if _provider_name(self.llm_client) == "ai21":
-            classification_by_representative_id.update(
-                self._batch_refine_topics_with_ai21(list(representative_by_group.values()))
-            )
+        classification_by_representative_id = self._batch_refine_topics_with_llm(list(representative_by_group.values()))
         touched = 0
         artifact_groups = _group_artifacts_for_annotation(artifacts)
         for _group_key, group_artifacts in artifact_groups.items():
             representative = _representative_artifact(group_artifacts)
-            classification = classification_by_representative_id.get(str(representative.artifact_id)) or _deterministic_refinement(
-                artifact=representative,
-                structural_topic=_structural_topic_for_artifact(artifact=representative),
-            )
+            classification = classification_by_representative_id.get(str(representative.artifact_id))
+            if classification is None:
+                continue
             for artifact in group_artifacts:
                 row = existing_by_artifact.get(str(artifact.artifact_id))
                 if row is None:
@@ -116,15 +104,15 @@ class ArtifactTopicClassifier:
         self.session.flush()
         return touched
 
-    def _batch_refine_topics_with_ai21(self, artifacts: list[RetrievalArtifact]) -> dict[str, TopicClassification]:
+    def _batch_refine_topics_with_llm(self, artifacts: list[RetrievalArtifact]) -> dict[str, TopicClassification]:
+        if not self.llm_client.provider.is_configured():
+            return {}
+
         items = []
         artifact_by_id: dict[str, RetrievalArtifact] = {}
-        deterministic_by_id: dict[str, TopicClassification] = {}
         for artifact in artifacts:
             structural_topic = _structural_topic_for_artifact(artifact=artifact)
-            deterministic = _deterministic_refinement(artifact=artifact, structural_topic=structural_topic)
-            deterministic_by_id[str(artifact.artifact_id)] = deterministic
-            if not _should_use_ai21_topic_refinement(artifact):
+            if not _should_use_llm_topic_refinement(artifact):
                 continue
             artifact_by_id[str(artifact.artifact_id)] = artifact
             items.append(
@@ -140,7 +128,8 @@ class ArtifactTopicClassifier:
                 }
             )
         if not items:
-            return deterministic_by_id
+            return {}
+        refined_by_id: dict[str, TopicClassification] = {}
         for batch in _chunked(items, size=8):
             result = self.llm_client.generate(
                 call_type=RAG_CALL_CLASSIFY,
@@ -156,7 +145,7 @@ class ArtifactTopicClassifier:
                 self._refine_batch_items_individually(
                     batch=batch,
                     artifact_by_id=artifact_by_id,
-                    deterministic_by_id=deterministic_by_id,
+                    refined_by_id=refined_by_id,
                 )
                 continue
             parsed_items = _parse_ai21_topic_batch_payload(result.text)
@@ -164,7 +153,7 @@ class ArtifactTopicClassifier:
                 self._refine_batch_items_individually(
                     batch=batch,
                     artifact_by_id=artifact_by_id,
-                    deterministic_by_id=deterministic_by_id,
+                    refined_by_id=refined_by_id,
                 )
                 continue
             parsed_by_artifact_id = {
@@ -174,16 +163,16 @@ class ArtifactTopicClassifier:
             }
             for parsed in parsed_items:
                 artifact_id = str(parsed.get("artifact_id") or "").strip()
-                deterministic = deterministic_by_id.get(artifact_id)
-                if not artifact_id or deterministic is None:
+                artifact = artifact_by_id.get(artifact_id)
+                if not artifact_id or artifact is None:
                     continue
-                deterministic_by_id[artifact_id] = TopicClassification(
-                    structural_topic_he=deterministic.structural_topic_he,
-                    primary_topic_he=parsed.get("primary_topic_he") or deterministic.primary_topic_he,
-                    secondary_topics=parsed.get("secondary_topics") or deterministic.secondary_topics,
-                    section_summary=parsed.get("section_summary") or deterministic.section_summary,
-                    confidence=float(parsed.get("confidence") or deterministic.confidence),
-                    classifier_route="ai21_structural_refine_batch",
+                refined_by_id[artifact_id] = TopicClassification(
+                    structural_topic_he=_structural_topic_for_artifact(artifact=artifact),
+                    primary_topic_he=parsed.get("primary_topic_he"),
+                    secondary_topics=parsed.get("secondary_topics") or [],
+                    section_summary=parsed.get("section_summary") or None,
+                    confidence=float(parsed.get("confidence") or 0.7),
+                    classifier_route=f"{_provider_name(self.llm_client)}_dictalm_refine_batch",
                     provider_name=result.provider,
                     model_name=result.model,
                 )
@@ -196,33 +185,32 @@ class ArtifactTopicClassifier:
                 self._refine_batch_items_individually(
                     batch=[item for item in batch if str(item.get("artifact_id") or "").strip() in set(missing_ids)],
                     artifact_by_id=artifact_by_id,
-                    deterministic_by_id=deterministic_by_id,
+                    refined_by_id=refined_by_id,
                 )
-        return deterministic_by_id
+        return refined_by_id
 
     def _refine_batch_items_individually(
         self,
         *,
         batch: list[dict[str, Any]],
         artifact_by_id: dict[str, RetrievalArtifact],
-        deterministic_by_id: dict[str, TopicClassification],
+        refined_by_id: dict[str, TopicClassification],
     ) -> None:
         for item in batch:
             artifact_id = str(item.get("artifact_id") or "").strip()
             artifact = artifact_by_id.get(artifact_id)
-            deterministic = deterministic_by_id.get(artifact_id)
-            if artifact is None or deterministic is None:
+            if artifact is None:
                 continue
-            refined = self._single_refine_topic_with_ai21(artifact=artifact, deterministic=deterministic)
+            refined = self._single_refine_topic_with_llm(artifact=artifact)
             if refined is not None:
-                deterministic_by_id[artifact_id] = refined
+                refined_by_id[artifact_id] = refined
 
-    def _single_refine_topic_with_ai21(
+    def _single_refine_topic_with_llm(
         self,
         *,
         artifact: RetrievalArtifact,
-        deterministic: TopicClassification,
     ) -> TopicClassification | None:
+        structural_topic = _structural_topic_for_artifact(artifact=artifact)
         result = self.llm_client.generate(
             call_type=RAG_CALL_CLASSIFY,
             instruction=(
@@ -237,7 +225,7 @@ class ArtifactTopicClassifier:
                 "meeting_date": artifact.meeting_date,
                 "header_path": _loads_json_list(artifact.header_path_json),
                 "body_text": _trim_chars(artifact.body_text, limit=1200),
-                "structural_topic_prior": deterministic.structural_topic_he,
+                "structural_topic_prior": structural_topic,
             },
             temperature=0.0,
         )
@@ -247,12 +235,12 @@ class ArtifactTopicClassifier:
         if parsed is None:
             return None
         return TopicClassification(
-            structural_topic_he=deterministic.structural_topic_he,
-            primary_topic_he=parsed.get("primary_topic_he") or deterministic.primary_topic_he,
-            secondary_topics=parsed.get("secondary_topics") or deterministic.secondary_topics,
-            section_summary=parsed.get("section_summary") or deterministic.section_summary,
-            confidence=float(parsed.get("confidence") or deterministic.confidence),
-            classifier_route="ai21_structural_refine_single",
+            structural_topic_he=structural_topic,
+            primary_topic_he=parsed.get("primary_topic_he"),
+            secondary_topics=parsed.get("secondary_topics") or [],
+            section_summary=parsed.get("section_summary"),
+            confidence=float(parsed.get("confidence") or 0.7),
+            classifier_route=f"{_provider_name(self.llm_client)}_dictalm_refine_single",
             provider_name=result.provider,
             model_name=result.model,
         )
@@ -302,7 +290,7 @@ def _representative_artifact(artifacts: list[RetrievalArtifact]) -> RetrievalArt
     )
 
 
-def _should_use_ai21_topic_refinement(artifact: RetrievalArtifact) -> bool:
+def _should_use_llm_topic_refinement(artifact: RetrievalArtifact) -> bool:
     if artifact.source_kind != "protocol":
         return False
     if artifact.artifact_kind not in {"decision_unit", "section_unit", "header_plus_opening"}:
@@ -316,40 +304,8 @@ def _provider_name(llm_client: RagLlmClient) -> str:
     return str(getattr(llm_client.provider, "provider_name", "") or "").strip().casefold()
 
 
-def _deterministic_refinement(*, artifact: RetrievalArtifact, structural_topic: str | None) -> TopicClassification:
-    header_path = _loads_json_list(artifact.header_path_json)
-    leaf = _best_leaf_topic(header_path=header_path, body_text=artifact.body_text)
-    root = _root_topic_name(structural_topic)
-    primary = None
-    if root and leaf and normalize_for_search(leaf) != normalize_for_search(root):
-        primary = f"{root} > {leaf}"
-    else:
-        primary = structural_topic or leaf or _fallback_topic_from_text(artifact.body_text)
-    secondary = [item for item in [leaf, _fallback_topic_from_text(artifact.body_text)] if item and normalize_for_search(item) != normalize_for_search(primary or "")]
-    return TopicClassification(
-        structural_topic_he=structural_topic,
-        primary_topic_he=primary,
-        secondary_topics=_dedupe_topics(secondary),
-        section_summary=_section_summary_from_artifact(artifact),
-        confidence=0.62 if structural_topic else 0.48,
-        classifier_route="deterministic_structural_refine",
-    )
-
-
 def _best_leaf_topic(*, header_path: list[str], body_text: str) -> str | None:
     for candidate in reversed(header_path):
-        cleaned = _clean_topic_phrase(candidate)
-        if cleaned:
-            return cleaned
-    return _fallback_topic_from_text(body_text)
-
-
-def _fallback_topic_from_text(value: str) -> str | None:
-    compact = " ".join(str(value or "").split()).strip()
-    if not compact:
-        return None
-    candidates = [segment.strip(" .:-") for segment in re.split(r"(?<=[.!?])\s+", compact) if segment.strip()]
-    for candidate in candidates[:2]:
         cleaned = _clean_topic_phrase(candidate)
         if cleaned:
             return cleaned
@@ -378,22 +334,6 @@ def _clean_topic_phrase(value: str) -> str | None:
     if cleaned and is_low_quality_topic_label(cleaned):
         return None
     return cleaned
-
-
-def _section_summary_from_artifact(artifact: RetrievalArtifact) -> str | None:
-    compact = " ".join(str(artifact.body_text or "").split()).strip()
-    if not compact:
-        return None
-    if len(compact) <= 280:
-        return compact
-    return f"{compact[:277].rstrip()}..."
-
-
-def _root_topic_name(value: str | None) -> str | None:
-    compact = " ".join(str(value or "").split()).strip()
-    if not compact:
-        return None
-    return compact.split(" > ", 1)[0].strip() or None
 
 
 def _parse_ai21_topic_payload(value: str) -> dict[str, Any] | None:

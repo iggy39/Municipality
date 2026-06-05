@@ -97,11 +97,15 @@ class RagRetrievalService:
         semantic_label: str | None = None,
         semantic_mode: str = "off",
         retrieval_strategy: str | None = None,
+        document_ids: list[int] | None = None,
+        document_version_ids: list[int] | None = None,
         ask_request_id: str | None = None,
     ) -> RagRetrievalResult:
         normalized_query = normalize_for_search(query)
         effective_top_k = max(1, top_k)
         requested_source_kinds = _normalize_source_kinds(source_kinds)
+        scoped_document_ids = _normalize_positive_ints(document_ids)
+        scoped_document_version_ids = _normalize_positive_ints(document_version_ids)
         query_hash = hash_text(query)
 
         log_rag_event(
@@ -131,6 +135,8 @@ class RagRetrievalService:
                 semantic_node_id=semantic_node_id,
                 semantic_label=semantic_label,
                 semantic_mode=semantic_mode,
+                document_ids=scoped_document_ids,
+                document_version_ids=scoped_document_version_ids,
             ),
         )
 
@@ -185,6 +191,8 @@ class RagRetrievalService:
             rewrite_result=rewrite_result,
             retrieval_strategy=effective_strategy,
             topic_terms=topic_terms,
+            scoped_document_ids=scoped_document_ids,
+            document_version_ids=scoped_document_version_ids,
         )
 
         selected_hits = _dedupe_hits(hits)
@@ -202,8 +210,14 @@ class RagRetrievalService:
                 semantic_node_id=semantic_node_id,
                 semantic_label=semantic_label,
                 semantic_mode=semantic_mode,
-                artifact_kinds=_artifact_kind_plans(rewrite_result=rewrite_result, retrieval_strategy=effective_strategy)[0],
+                artifact_kinds=_source_artifact_kinds(
+                    source_kind=source_kind,
+                    rewrite_result=rewrite_result,
+                    retrieval_strategy=effective_strategy,
+                ),
                 topic_terms=topic_terms,
+                document_ids=scoped_document_ids,
+                document_version_ids=scoped_document_version_ids,
                 limit=max(effective_top_k, min(initial_limit, effective_top_k * 6)),
             )
             selected_hits.extend(source_hits)
@@ -237,6 +251,8 @@ class RagRetrievalService:
                 semantic_node_id=semantic_node_id,
                 semantic_label=semantic_label,
                 semantic_mode=semantic_mode,
+                document_ids=scoped_document_ids,
+                document_version_ids=scoped_document_version_ids,
             ),
         )
         result = RagRetrievalResult(
@@ -310,6 +326,8 @@ def _run_retrieval_plan(
     rewrite_result: QueryRewriteResult,
     retrieval_strategy: str,
     topic_terms: list[str],
+    scoped_document_ids: list[int],
+    document_version_ids: list[int],
 ) -> list[Any]:
     plans = _artifact_kind_plans(rewrite_result=rewrite_result, retrieval_strategy=retrieval_strategy)
     selected_hits: list[Any] = []
@@ -325,15 +343,21 @@ def _run_retrieval_plan(
             semantic_mode=semantic_mode,
             artifact_kinds=plans[0],
             topic_terms=topic_terms,
+            document_ids=scoped_document_ids,
+            document_version_ids=document_version_ids,
             limit=initial_limit,
         )
     )
     selected_hits = _dedupe_hits(selected_hits)
 
     for plan_index, artifact_kinds in enumerate(plans[1:], start=1):
-        document_ids = []
-        if plan_index == 1 and rewrite_result.use_neighbors:
-            document_ids = [hit.document_id for hit in selected_hits[: max(1, min(8, len(selected_hits)))] if getattr(hit, "document_id", None)]
+        plan_document_ids = list(scoped_document_ids)
+        if not plan_document_ids and plan_index == 1 and rewrite_result.use_neighbors:
+            plan_document_ids = [
+                hit.document_id
+                for hit in selected_hits[: max(1, min(8, len(selected_hits)))]
+                if getattr(hit, "document_id", None)
+            ]
         selected_hits.extend(
             search_service.search(
                 query=query,
@@ -346,7 +370,8 @@ def _run_retrieval_plan(
                 semantic_mode=semantic_mode,
                 artifact_kinds=artifact_kinds,
                 topic_terms=topic_terms,
-                document_ids=document_ids,
+                document_ids=plan_document_ids,
+                document_version_ids=document_version_ids,
                 limit=max(1, initial_limit // 2),
             )
         )
@@ -377,6 +402,12 @@ def _artifact_kind_plans(*, rewrite_result: QueryRewriteResult, retrieval_strate
         ["context_window"],
         ["header_anchor", "document_profile"],
     ]
+
+
+def _source_artifact_kinds(*, source_kind: str, rewrite_result: QueryRewriteResult, retrieval_strategy: str) -> list[str]:
+    if source_kind == "pdf_first_protocol":
+        return ["pdf_first_retrieval_chunk"]
+    return _artifact_kind_plans(rewrite_result=rewrite_result, retrieval_strategy=retrieval_strategy)[0]
 
 
 def _ensure_requested_source_coverage(hits: list[Any], requested_source_kinds: list[str], *, limit: int) -> list[Any]:
@@ -419,7 +450,7 @@ def _ensure_requested_source_coverage(hits: list[Any], requested_source_kinds: l
 def _normalize_source_kinds(source_kinds: list[str] | None) -> list[str]:
     if not source_kinds:
         return []
-    accepted = {"protocol", "attachment", "other"}
+    accepted = {"protocol", "pdf_first_protocol", "attachment", "other"}
     out: list[str] = []
     seen: set[str] = set()
     for source_kind in source_kinds:
@@ -427,6 +458,21 @@ def _normalize_source_kinds(source_kinds: list[str] | None) -> list[str]:
         if normalized in accepted and normalized not in seen:
             out.append(normalized)
             seen.add(normalized)
+    return out
+
+
+def _normalize_positive_ints(values: list[int] | None) -> list[int]:
+    out: list[int] = []
+    seen: set[int] = set()
+    for value in values or []:
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            continue
+        if normalized <= 0 or normalized in seen:
+            continue
+        out.append(normalized)
+        seen.add(normalized)
     return out
 
 
@@ -438,6 +484,8 @@ def _retrieval_scope_filters(
     semantic_node_id: int | None,
     semantic_label: str | None,
     semantic_mode: str,
+    document_ids: list[int],
+    document_version_ids: list[int],
 ) -> dict[str, Any]:
     return {
         "municipality_slug": municipality_slug or None,
@@ -446,6 +494,8 @@ def _retrieval_scope_filters(
         "semantic_node_id": int(semantic_node_id) if semantic_node_id is not None else None,
         "semantic_label": str(semantic_label or "").strip() or None,
         "semantic_mode": str(semantic_mode or "off").strip().casefold() or "off",
+        "document_ids": list(document_ids),
+        "document_version_ids": list(document_version_ids),
     }
 
 

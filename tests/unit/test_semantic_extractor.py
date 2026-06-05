@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from municipality.migrations import apply_all
 from municipality.models import Document, DocumentVersion, SourceSite
 from municipality.semantic_extractor import (
-    AI21SemanticClient,
+    DEFAULT_DICTALM_MODEL,
+    OllamaSemanticClient,
     SemanticExtractor,
     SemanticModelResponse,
     build_semantic_model_client,
@@ -142,14 +143,24 @@ def test_extract_response_content_handles_content_parts_array() -> None:
     assert parsed.get("nodes") == []
 
 
-def test_build_semantic_model_client_can_switch_to_ai21(monkeypatch) -> None:
+def test_build_semantic_model_client_ignores_non_dictalm_provider_env(monkeypatch) -> None:
     monkeypatch.setenv("SEMANTIC_MODEL_PROVIDER", "ai21")
-    monkeypatch.setenv("SEMANTIC_MODEL", "jamba-mini")
+    monkeypatch.delenv("SEMANTIC_MODEL", raising=False)
 
     client = build_semantic_model_client()
 
-    assert isinstance(client, AI21SemanticClient)
-    assert client.model_name == "jamba-mini"
+    assert isinstance(client, OllamaSemanticClient)
+    assert client.model_name == DEFAULT_DICTALM_MODEL
+
+
+def test_build_semantic_model_client_defaults_to_dictalm_ollama(monkeypatch) -> None:
+    monkeypatch.delenv("SEMANTIC_MODEL_PROVIDER", raising=False)
+    monkeypatch.delenv("SEMANTIC_MODEL", raising=False)
+
+    client = build_semantic_model_client()
+
+    assert isinstance(client, OllamaSemanticClient)
+    assert client.model_name == DEFAULT_DICTALM_MODEL
 
 
 def test_parse_json_content_coerces_single_evidence_span_object() -> None:

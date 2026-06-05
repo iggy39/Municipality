@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -23,7 +24,10 @@ from municipality.semantic_contract import (
 
 SEMANTIC_PROVIDER_BYTEZ = "bytez"
 SEMANTIC_PROVIDER_AI21 = "ai21"
+SEMANTIC_PROVIDER_OLLAMA = "ollama"
 DEFAULT_AI21_API_URL = "https://api.ai21.com/studio/v1/chat/completions"
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_DICTALM_MODEL = "dicta-il/DictaLM-3.0-24B-Thinking:bf16"
 
 
 @dataclass(slots=True)
@@ -295,27 +299,131 @@ class AI21SemanticClient:
         )
 
 
+class OllamaSemanticClient:
+    def __init__(
+        self,
+        *,
+        base_url: str | None = None,
+        timeout_seconds: float = 60.0,
+        model_name: str = DEFAULT_DICTALM_MODEL,
+        max_attempts: int = 3,
+        retry_backoff_seconds: float = 0.75,
+    ):
+        self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL") or DEFAULT_OLLAMA_BASE_URL).rstrip("/")
+        self.timeout_seconds = timeout_seconds
+        self._model_name = model_name
+        self.max_attempts = max(1, int(max_attempts))
+        self.retry_backoff_seconds = max(0.0, float(retry_backoff_seconds))
+
+    @property
+    def provider_name(self) -> str:
+        return SEMANTIC_PROVIDER_OLLAMA
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    def is_configured(self) -> bool:
+        return bool(self.base_url and self.model_name)
+
+    def extract_semantic(self, *, request_payload: dict[str, Any]) -> SemanticModelResponse:
+        if not self.is_configured():
+            return SemanticModelResponse(
+                payload=None,
+                request_tokens=None,
+                response_tokens=None,
+                error_code="MODEL_NOT_CONFIGURED",
+                error_text="OLLAMA_BASE_URL or semantic model name is missing",
+            )
+
+        system_instruction = str(request_payload.get("system_instruction") or "")
+        body = {
+            "model": self.model_name,
+            "stream": False,
+            "think": False,
+            "format": "json",
+            "messages": [
+                {"role": "system", "content": f"/no_think\n{system_instruction}".strip()},
+                {"role": "user", "content": json.dumps(request_payload, ensure_ascii=False)},
+            ],
+            "options": {"temperature": 0},
+        }
+
+        payload: dict[str, Any] | None = None
+        last_exception: Exception | None = None
+        for attempt_index in range(1, self.max_attempts + 1):
+            try:
+                with httpx.Client(timeout=self.timeout_seconds) as client:
+                    response = client.post(f"{self.base_url}/api/chat", json=body)
+                    response.raise_for_status()
+                    parsed_payload = response.json()
+                if isinstance(parsed_payload, dict):
+                    payload = parsed_payload
+                    last_exception = None
+                    break
+                last_exception = ValueError("response JSON root is not an object")
+            except Exception as exc:  # noqa: BLE001
+                last_exception = exc
+
+            if attempt_index < self.max_attempts and self.retry_backoff_seconds > 0.0:
+                time.sleep(self.retry_backoff_seconds * attempt_index)
+
+        if payload is None:
+            error_suffix = f"; attempts={self.max_attempts}" if self.max_attempts > 1 else ""
+            error_text = (
+                "model response payload missing"
+                if last_exception is None
+                else f"{last_exception.__class__.__name__}:{last_exception}"
+            )
+            return SemanticModelResponse(
+                payload=None,
+                request_tokens=None,
+                response_tokens=None,
+                error_code="MODEL_REQUEST_FAILED",
+                error_text=f"{error_text}{error_suffix}",
+            )
+
+        content = _extract_ollama_response_content(payload)
+        if content is None:
+            return SemanticModelResponse(
+                payload=None,
+                request_tokens=_as_int(payload.get("prompt_eval_count")),
+                response_tokens=_as_int(payload.get("eval_count")),
+                error_code="MODEL_EMPTY_RESPONSE",
+                error_text="missing Ollama message content",
+            )
+
+        parsed = _parse_json_content(content)
+        if not isinstance(parsed, dict):
+            return SemanticModelResponse(
+                payload=None,
+                request_tokens=_as_int(payload.get("prompt_eval_count")),
+                response_tokens=_as_int(payload.get("eval_count")),
+                error_code="MODEL_INVALID_JSON",
+                error_text=_invalid_json_error_text(content),
+            )
+
+        return SemanticModelResponse(
+            payload=parsed,
+            request_tokens=_as_int(payload.get("prompt_eval_count")),
+            response_tokens=_as_int(payload.get("eval_count")),
+            error_code=None,
+            error_text=None,
+        )
+
+
 def build_semantic_model_client() -> SemanticModelClient:
-    provider = (os.getenv("SEMANTIC_MODEL_PROVIDER") or SEMANTIC_PROVIDER_BYTEZ).strip().casefold()
-    default_model_name = "jamba-mini" if provider == SEMANTIC_PROVIDER_AI21 else BYTEZ_MODEL
-    model_name = (os.getenv("SEMANTIC_MODEL") or default_model_name).strip() or default_model_name
+    requested_provider = (os.getenv("SEMANTIC_MODEL_PROVIDER") or SEMANTIC_PROVIDER_OLLAMA).strip().casefold()
+    default_model_name = DEFAULT_DICTALM_MODEL
+    model_env = os.getenv("SEMANTIC_MODEL") if requested_provider == SEMANTIC_PROVIDER_OLLAMA else None
+    model_name = (model_env or default_model_name).strip() or default_model_name
     timeout_seconds = _env_float(os.getenv("SEMANTIC_MODEL_TIMEOUT_SECONDS"), default=60.0)
     max_attempts = _env_int(os.getenv("SEMANTIC_MODEL_MAX_ATTEMPTS"), default=3)
     retry_backoff_seconds = _env_float(os.getenv("SEMANTIC_MODEL_RETRY_BACKOFF_SECONDS"), default=0.75)
 
-    if provider == SEMANTIC_PROVIDER_AI21:
-        ai21_model = model_name if model_name else "jamba-mini"
-        return AI21SemanticClient(
-            model_name=ai21_model,
-            endpoint=os.getenv("AI21_API_URL", DEFAULT_AI21_API_URL),
-            timeout_seconds=timeout_seconds,
-            max_attempts=max_attempts,
-            retry_backoff_seconds=retry_backoff_seconds,
-        )
-
-    return BytezSemanticClient(
+    return OllamaSemanticClient(
         model_name=model_name,
-        endpoint=os.getenv("BYTEZ_API_URL", DEFAULT_BYTEZ_API_URL),
+        base_url=os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL),
         timeout_seconds=timeout_seconds,
         max_attempts=max_attempts,
         retry_backoff_seconds=retry_backoff_seconds,
@@ -438,6 +546,26 @@ def _extract_response_content(payload: dict[str, Any]) -> Any | None:
             return "\n".join(text_parts)
         return None
     return content
+
+
+def _extract_ollama_response_content(payload: dict[str, Any]) -> str | None:
+    message = payload.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return _clean_model_text(content)
+    response = payload.get("response")
+    if isinstance(response, str) and response.strip():
+        return _clean_model_text(response)
+    return None
+
+
+def _clean_model_text(value: str) -> str | None:
+    text = value.strip()
+    text = text.split("</think>")[-1].strip() if "</think>" in text else text
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+    text = re.sub(r"^```(?:json|text|markdown)?\s*|\s*```$", "", text, flags=re.IGNORECASE).strip()
+    return text or None
 
 
 def _parse_json_content(content: Any) -> Any | None:

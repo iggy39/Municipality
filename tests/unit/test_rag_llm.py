@@ -5,9 +5,9 @@ import json
 import httpx
 import pytest
 
-from municipality.fallback import BYTEZ_MODEL
 from municipality.rag_llm import (
     AI21RagProvider,
+    DEFAULT_OLLAMA_MODEL,
     RAG_ANSWER_PREFIX_DEFAULT,
     RAG_CALL_ANSWER,
     RAG_CALL_REFUSE,
@@ -25,8 +25,8 @@ from municipality.rag_llm import (
 def test_rag_llm_default_config_matches_m4_policy_lock() -> None:
     config = RagLlmConfig.from_env({})
 
-    assert config.provider == "bytez"
-    assert config.model == BYTEZ_MODEL
+    assert config.provider == "ollama"
+    assert config.model == DEFAULT_OLLAMA_MODEL
     assert config.prompt_prefixes.for_call_type(RAG_CALL_ANSWER) == RAG_ANSWER_PREFIX_DEFAULT
     assert config.prompt_prefixes.for_call_type(RAG_CALL_VERIFY) == RAG_VERIFY_PREFIX_DEFAULT
     assert config.prompt_prefixes.for_call_type(RAG_CALL_REFUSE) == RAG_REFUSE_PREFIX_DEFAULT
@@ -45,7 +45,7 @@ def test_rag_llm_config_can_switch_provider_without_code_change() -> None:
     assert client.provider.model_name == "mock-rag-v9"
 
 
-def test_rag_llm_can_build_ai21_provider_from_env() -> None:
+def test_rag_llm_ignores_non_dictalm_provider_env() -> None:
     config = RagLlmConfig.from_env(
         {
             "RAG_LLM_PROVIDER": "ai21",
@@ -54,8 +54,8 @@ def test_rag_llm_can_build_ai21_provider_from_env() -> None:
     )
     client = build_rag_llm_client(config=config)
 
-    assert isinstance(client.provider, AI21RagProvider)
-    assert client.provider.model_name == "jamba-mini"
+    assert isinstance(client.provider, OllamaRagProvider)
+    assert client.provider.model_name == DEFAULT_OLLAMA_MODEL
 
 
 def test_rag_llm_can_build_ollama_provider_from_env() -> None:
@@ -79,8 +79,10 @@ def test_ollama_provider_posts_chat_json_request() -> None:
         assert request.url.path == "/api/chat"
         assert payload["model"] == "dicta-il/DictaLM-3.0-24B-Thinking:bf16"
         assert payload["stream"] is False
+        assert payload["think"] is False
         assert payload["format"] == "json"
         assert payload["messages"][0]["role"] == "system"
+        assert payload["messages"][0]["content"].startswith("/no_think")
         return httpx.Response(
             200,
             json={

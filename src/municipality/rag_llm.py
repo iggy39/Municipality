@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
@@ -25,7 +26,9 @@ RAG_PROVIDER_MOCK = "mock"
 DEFAULT_AI21_API_URL = "https://api.ai21.com/studio/v1/chat/completions"
 DEFAULT_AI21_MODEL = "jamba-mini"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
-DEFAULT_OLLAMA_MODEL = "qwen3.5:122b"
+DEFAULT_OLLAMA_MODEL = "dicta-il/DictaLM-3.0-24B-Thinking:bf16"
+DEFAULT_OLLAMA_TIMEOUT_SECONDS = 300.0
+DEFAULT_OLLAMA_NUM_PREDICT = 1536
 
 RAG_ANSWER_PREFIX_DEFAULT = "answer question from provided hebrew municipal evidence with citations only"
 RAG_VERIFY_PREFIX_DEFAULT = "verify every claim against provided hebrew evidence and citations only"
@@ -64,36 +67,46 @@ class RagPromptPrefixConfig:
 
 @dataclass(slots=True)
 class RagLlmConfig:
-    provider: str = RAG_PROVIDER_BYTEZ
-    model: str = BYTEZ_MODEL
+    provider: str = RAG_PROVIDER_OLLAMA
+    model: str = DEFAULT_OLLAMA_MODEL
     bytez_endpoint: str = DEFAULT_BYTEZ_API_URL
     ai21_endpoint: str = DEFAULT_AI21_API_URL
     ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL
-    timeout_seconds: float = 60.0
+    timeout_seconds: float = DEFAULT_OLLAMA_TIMEOUT_SECONDS
+    ollama_num_predict: int = DEFAULT_OLLAMA_NUM_PREDICT
     prompt_prefixes: RagPromptPrefixConfig = field(default_factory=RagPromptPrefixConfig)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> RagLlmConfig:
         source = env if env is not None else os.environ
-        provider = _normalize_provider(source.get("RAG_LLM_PROVIDER"))
+        requested_provider = (source.get("RAG_LLM_PROVIDER") or RAG_PROVIDER_OLLAMA).strip().casefold()
+        provider = _normalize_provider(requested_provider)
         if provider == RAG_PROVIDER_AI21:
             default_model = DEFAULT_AI21_MODEL
         elif provider == RAG_PROVIDER_OLLAMA:
             default_model = DEFAULT_OLLAMA_MODEL
         else:
             default_model = BYTEZ_MODEL
-        model = (source.get("RAG_LLM_MODEL") or default_model).strip() or default_model
+        model_env = source.get("RAG_LLM_MODEL") if requested_provider == provider else None
+        model = (model_env or default_model).strip() or default_model
         endpoint = (source.get("BYTEZ_API_URL") or DEFAULT_BYTEZ_API_URL).strip() or DEFAULT_BYTEZ_API_URL
         ai21_endpoint = (source.get("AI21_API_URL") or DEFAULT_AI21_API_URL).strip() or DEFAULT_AI21_API_URL
         ollama_base_url = (source.get("OLLAMA_BASE_URL") or DEFAULT_OLLAMA_BASE_URL).strip() or DEFAULT_OLLAMA_BASE_URL
         timeout_raw = source.get("RAG_LLM_TIMEOUT_SECONDS")
 
-        timeout_seconds = 60.0
+        timeout_seconds = DEFAULT_OLLAMA_TIMEOUT_SECONDS if provider == RAG_PROVIDER_OLLAMA else 60.0
         if timeout_raw:
             try:
                 timeout_seconds = max(1.0, float(timeout_raw))
             except ValueError:
-                timeout_seconds = 60.0
+                timeout_seconds = DEFAULT_OLLAMA_TIMEOUT_SECONDS if provider == RAG_PROVIDER_OLLAMA else 60.0
+        num_predict_raw = source.get("RAG_LLM_OLLAMA_NUM_PREDICT") or source.get("OLLAMA_NUM_PREDICT")
+        ollama_num_predict = DEFAULT_OLLAMA_NUM_PREDICT
+        if num_predict_raw:
+            try:
+                ollama_num_predict = max(128, int(num_predict_raw))
+            except ValueError:
+                ollama_num_predict = DEFAULT_OLLAMA_NUM_PREDICT
 
         prefixes = RagPromptPrefixConfig(
             answer=(source.get("RAG_PROMPT_PREFIX_ANSWER") or RAG_ANSWER_PREFIX_DEFAULT).strip()
@@ -115,6 +128,7 @@ class RagLlmConfig:
             ai21_endpoint=ai21_endpoint,
             ollama_base_url=ollama_base_url,
             timeout_seconds=timeout_seconds,
+            ollama_num_predict=ollama_num_predict,
             prompt_prefixes=prefixes,
         )
 
@@ -359,12 +373,14 @@ class OllamaRagProvider:
         *,
         base_url: str | None = None,
         model_name: str = DEFAULT_OLLAMA_MODEL,
-        timeout_seconds: float = 60.0,
+        timeout_seconds: float = DEFAULT_OLLAMA_TIMEOUT_SECONDS,
+        num_predict: int = DEFAULT_OLLAMA_NUM_PREDICT,
         transport: httpx.BaseTransport | None = None,
     ):
         self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL") or DEFAULT_OLLAMA_BASE_URL).rstrip("/")
         self._model_name = model_name
         self.timeout_seconds = timeout_seconds
+        self.num_predict = num_predict
         self.transport = transport
 
     @property
@@ -397,18 +413,29 @@ class OllamaRagProvider:
                 error_text="OLLAMA_BASE_URL or model name is missing",
             )
 
+        sent_messages = _with_no_think(messages)
         body = {
             "model": self.model_name,
-            "messages": messages,
+            "messages": sent_messages,
             "stream": False,
+            "think": False,
             "format": "json",
+            "keep_alive": "10m",
             "options": {
                 "temperature": temperature,
+                "num_predict": self.num_predict,
             },
         }
 
         try:
-            with httpx.Client(timeout=self.timeout_seconds, transport=self.transport) as client:
+            timeout = httpx.Timeout(
+                timeout=max(1.0, self.timeout_seconds),
+                connect=10.0,
+                read=max(1.0, self.timeout_seconds),
+                write=30.0,
+                pool=10.0,
+            )
+            with httpx.Client(timeout=timeout, transport=self.transport) as client:
                 response = client.post(f"{self.base_url}/api/chat", json=body)
                 response.raise_for_status()
                 payload = response.json()
@@ -613,6 +640,7 @@ def build_rag_provider(*, config: RagLlmConfig | None = None) -> RagLlmProvider:
             model_name=resolved_config.model,
             base_url=resolved_config.ollama_base_url,
             timeout_seconds=resolved_config.timeout_seconds,
+            num_predict=resolved_config.ollama_num_predict,
         )
     if provider_key == RAG_PROVIDER_MOCK:
         return MockRagProvider(model_name=resolved_config.model)
@@ -627,10 +655,22 @@ def _normalize_call_type(call_type: str) -> str:
 
 
 def _normalize_provider(provider: str | None) -> str:
-    normalized = (provider or RAG_PROVIDER_BYTEZ).strip().casefold()
-    if normalized in {RAG_PROVIDER_BYTEZ, RAG_PROVIDER_AI21, RAG_PROVIDER_OLLAMA, RAG_PROVIDER_MOCK}:
+    normalized = (provider or RAG_PROVIDER_OLLAMA).strip().casefold()
+    if normalized == RAG_PROVIDER_MOCK:
         return normalized
-    return RAG_PROVIDER_BYTEZ
+    if normalized == RAG_PROVIDER_OLLAMA:
+        return normalized
+    return RAG_PROVIDER_OLLAMA
+
+
+def _with_no_think(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    if not messages:
+        return messages
+    first = dict(messages[0])
+    content = str(first.get("content") or "")
+    if not content.lstrip().startswith("/no_think"):
+        first["content"] = f"/no_think\n{content}".strip()
+    return [first, *messages[1:]]
 
 
 def _extract_response_content(payload: dict[str, Any]) -> str | None:
@@ -666,11 +706,19 @@ def _extract_ollama_response_content(payload: dict[str, Any]) -> str | None:
     if isinstance(message, dict):
         content = message.get("content")
         if isinstance(content, str) and content.strip():
-            return content.strip()
+            return _clean_model_text(content)
     response = payload.get("response")
     if isinstance(response, str) and response.strip():
-        return response.strip()
+        return _clean_model_text(response)
     return None
+
+
+def _clean_model_text(value: str) -> str | None:
+    text = value.strip()
+    text = text.split("</think>")[-1].strip() if "</think>" in text else text
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+    text = re.sub(r"^```(?:json|text|markdown)?\s*|\s*```$", "", text, flags=re.IGNORECASE).strip()
+    return text or None
 
 
 def _as_int(value: Any) -> int | None:

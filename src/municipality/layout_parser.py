@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import importlib
+import os
 from typing import Any
 
-import numpy as np
-from PIL import Image
+from municipality.qwen_ocr import (
+    DEFAULT_QWEN_OCR_DPI,
+    DEFAULT_QWEN_OCR_IMAGE_FORMAT,
+    QwenOcrPageResult,
+    QwenVisionOcrClient,
+)
 
 
 HEBREW_BLOCK_RE = "\u0590-\u05FF"
@@ -24,6 +29,7 @@ class ParsedLayoutDocument:
     pages: list[ParsedLayoutPage]
     citation_map: list[dict[str, int]]
     backend_name: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def parse_pdf_layout(pdf_bytes: bytes) -> ParsedLayoutDocument | None:
@@ -44,10 +50,11 @@ def parse_pdf_layout(pdf_bytes: bytes) -> ParsedLayoutDocument | None:
         document.close()
 
 
-def parse_pdf_ocr(pdf_bytes: bytes) -> ParsedLayoutDocument | None:
+def parse_pdf_ocr(pdf_bytes: bytes, *, client: QwenVisionOcrClient | None = None) -> ParsedLayoutDocument | None:
     fitz_module = _load_fitz()
-    easyocr_module = _load_easyocr()
-    if fitz_module is None or easyocr_module is None:
+    resolved_client = client or QwenVisionOcrClient()
+    is_configured = getattr(resolved_client, "is_configured", lambda: True)
+    if fitz_module is None or not is_configured():
         return None
 
     try:
@@ -56,10 +63,7 @@ def parse_pdf_ocr(pdf_bytes: bytes) -> ParsedLayoutDocument | None:
         return None
 
     try:
-        reader = _easyocr_reader(easyocr_module)
-        if reader is None:
-            return None
-        return _parse_with_easyocr(document, reader=reader)
+        return _parse_with_qwen_ocr(document, client=resolved_client)
     except Exception:  # noqa: BLE001
         return None
     finally:
@@ -133,59 +137,39 @@ def _parse_with_fitz(document: Any) -> ParsedLayoutDocument:
     )
 
 
-def _parse_with_easyocr(document: Any, *, reader: Any) -> ParsedLayoutDocument:
+def _parse_with_qwen_ocr(document: Any, *, client: QwenVisionOcrClient) -> ParsedLayoutDocument:
     pages: list[ParsedLayoutPage] = []
     full_parts: list[str] = []
     citation_map: list[dict[str, int]] = []
     cursor = 0
+    dpi = _qwen_ocr_dpi()
+    image_format = _qwen_ocr_image_format()
+    failed_pages: list[int] = []
+    parse_warning_pages: list[int] = []
+    confidence_values: list[float] = []
 
     for page_index in range(len(document)):
         page = document.load_page(page_index)
-        pix = page.get_pixmap(dpi=200)
-        if pix is None:
-            continue
-        image = _pixmap_to_numpy(pix)
-        if image is None:
-            continue
-        results = reader.readtext(image, detail=1, paragraph=False)
-        blocks: list[dict[str, Any]] = []
-        page_lines: list[str] = []
-        line_cursor = cursor
-        for line_index, row in enumerate(results):
-            if not isinstance(row, (list, tuple)) or len(row) < 3:
-                continue
-            bbox_raw, text_value, confidence = row[0], row[1], row[2]
-            compact = " ".join(str(text_value or "").split()).strip()
-            if not compact:
-                continue
-            start_offset = line_cursor
-            end_offset = start_offset + len(compact)
-            line_cursor = end_offset + 1
-            bbox = _easyocr_bbox_to_list(bbox_raw)
-            blocks.append(
-                {
-                    "kind": "line",
-                    "block_index": line_index,
-                    "line_index": line_index,
-                    "start_offset": start_offset,
-                    "end_offset": end_offset,
-                    "text": compact,
-                    "bbox": bbox,
-                    "reading_direction": _reading_direction(compact),
-                    "font_size": None,
-                    "font_weight": None,
-                    "alignment": _alignment_for_bbox(bbox, page_width=float(getattr(page.rect, 'width', 0.0) or 0.0), reading_direction=_reading_direction(compact)),
-                    "column_index": _column_index_for_bbox(bbox, page_width=float(getattr(page.rect, 'width', 0.0) or 0.0)),
-                    "is_table": False,
-                    "role_guess": "ocr_line",
-                    "ocr_confidence": float(confidence or 0.0),
-                }
-            )
-            page_lines.append(compact)
-
-        page_text = "\n".join(page_lines)
+        image_bytes, image_mime = _render_page_image(page, dpi=dpi, image_format=image_format)
+        ocr_result = client.ocr_page(
+            image_bytes=image_bytes,
+            page_number=page_index + 1,
+            image_mime=image_mime,
+        )
+        if ocr_result.error_code:
+            failed_pages.append(page_index + 1)
+        if ocr_result.parse_warning:
+            parse_warning_pages.append(page_index + 1)
+        if ocr_result.ocr_confidence is not None:
+            confidence_values.append(float(ocr_result.ocr_confidence))
+        page_text = _normalize_qwen_page_text(ocr_result.text)
         page_start = cursor
         page_end = page_start + len(page_text)
+        blocks = _qwen_layout_blocks_for_page(
+            result=ocr_result,
+            page_text=page_text,
+            page_start_offset=page_start,
+        )
         pages.append(ParsedLayoutPage(page=page_index + 1, text=page_text, blocks=blocks))
         if page_text:
             full_parts.append(page_text)
@@ -200,8 +184,99 @@ def _parse_with_easyocr(document: Any, *, reader: Any) -> ParsedLayoutDocument:
         full_text="".join(full_parts),
         pages=pages,
         citation_map=citation_map,
-        backend_name="easyocr_scan_fallback",
+        backend_name="qwen_vision_ocr",
+        metadata={
+            "ocr_engine": "qwen_vision",
+            "ocr_model": getattr(client, "model_name", None),
+            "ocr_provider": getattr(client, "provider", None),
+            "ocr_dpi": dpi,
+            "ocr_image_format": image_format,
+            "ocr_page_count": len(document),
+            "ocr_failed_pages": failed_pages,
+            "ocr_parse_warning_pages": parse_warning_pages,
+            "ocr_confidence_avg": (
+                round(sum(confidence_values) / len(confidence_values), 4)
+                if confidence_values
+                else None
+            ),
+        },
     )
+
+
+def _render_page_image(page: Any, *, dpi: int, image_format: str) -> tuple[bytes, str]:
+    pix = page.get_pixmap(dpi=dpi, alpha=False)
+    normalized_format = image_format.strip().casefold()
+    if normalized_format in {"jpg", "jpeg"}:
+        return pix.tobytes("jpg"), "image/jpeg"
+    return pix.tobytes("png"), "image/png"
+
+
+def _normalize_qwen_page_text(value: str) -> str:
+    without_cr = str(value or "").replace("\r", "")
+    lines = [line.rstrip() for line in without_cr.split("\n")]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _qwen_layout_blocks_for_page(
+    *,
+    result: QwenOcrPageResult,
+    page_text: str,
+    page_start_offset: int,
+) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    heading_values = {
+        " ".join(value.split()).strip()
+        for value in result.detected_headings
+        if str(value).strip()
+    }
+    cursor = page_start_offset
+    for line_index, raw_line in enumerate(page_text.split("\n")):
+        line_text = str(raw_line or "")
+        start_offset = cursor
+        end_offset = start_offset + len(line_text)
+        cursor = end_offset + 1
+        compact = " ".join(line_text.split()).strip()
+        if not compact:
+            continue
+        role_guess = "heading_candidate" if compact in heading_values else _role_guess(
+            text=compact,
+            font_size=0.0,
+            alignment=None,
+            font_weight=None,
+        )
+        block = {
+            "kind": "line",
+            "block_index": line_index,
+            "line_index": line_index,
+            "start_offset": start_offset,
+            "end_offset": end_offset,
+            "text": compact,
+            "bbox": [],
+            "reading_direction": _reading_direction(compact),
+            "font_size": None,
+            "font_weight": None,
+            "alignment": None,
+            "column_index": None,
+            "is_table": "|" in compact,
+            "role_guess": role_guess or "qwen_ocr_line",
+            "source": "qwen_vision_ocr",
+            "ocr_confidence": result.ocr_confidence,
+        }
+        if not blocks:
+            block.update(
+                {
+                    "qwen_quality_notes": result.quality_notes,
+                    "qwen_parse_warning": result.parse_warning,
+                    "qwen_tables_markdown": list(result.tables_markdown),
+                    "qwen_uncertain_regions": list(result.uncertain_regions),
+                }
+            )
+        blocks.append(block)
+    return blocks
 
 
 def _extract_page_lines(page_payload: dict[str, Any], *, page_width: float, page_number: int) -> list[dict[str, Any]]:
@@ -303,11 +378,31 @@ def _role_guess(*, text: str, font_size: float, alignment: str | None, font_weig
     if not compact:
         return None
     token_count = len(compact.split())
-    if token_count <= 14 and (compact.endswith(":") or compact.startswith(("נושא", "סעיף", "החלט", "פרוטוקול", "ועדת", "ועדה"))):
+    if token_count <= 14 and (
+        compact.endswith(":")
+        or compact.startswith(("נושא", "סעיף", "החלט", "פרוטוקול", "ועדת", "ועדה"))
+    ):
         return "heading_candidate"
     if token_count <= 14 and (alignment == "center" or font_weight == "bold") and font_size >= 11.5:
         return "heading_candidate"
     return "body"
+
+
+def _qwen_ocr_dpi() -> int:
+    raw_value = os.getenv("QWEN_OCR_DPI")
+    if raw_value:
+        try:
+            return max(72, min(600, int(raw_value)))
+        except ValueError:
+            return DEFAULT_QWEN_OCR_DPI
+    return DEFAULT_QWEN_OCR_DPI
+
+
+def _qwen_ocr_image_format() -> str:
+    value = (os.getenv("QWEN_OCR_IMAGE_FORMAT") or DEFAULT_QWEN_OCR_IMAGE_FORMAT).strip().casefold()
+    if value in {"jpg", "jpeg"}:
+        return "jpeg"
+    return "png"
 
 
 def _load_fitz() -> Any | None:
@@ -315,46 +410,3 @@ def _load_fitz() -> Any | None:
         return importlib.import_module("fitz")
     except Exception:  # noqa: BLE001
         return None
-
-
-def _load_easyocr() -> Any | None:
-    try:
-        return importlib.import_module("easyocr")
-    except Exception:  # noqa: BLE001
-        return None
-
-
-_EASYOCR_READER: Any | None = None
-
-
-def _easyocr_reader(easyocr_module: Any) -> Any | None:
-    global _EASYOCR_READER
-    if _EASYOCR_READER is not None:
-        return _EASYOCR_READER
-    try:
-        _EASYOCR_READER = easyocr_module.Reader(["he", "en"], gpu=False, verbose=False)
-    except Exception:  # noqa: BLE001
-        _EASYOCR_READER = None
-    return _EASYOCR_READER
-
-
-def _pixmap_to_numpy(pix: Any) -> np.ndarray | None:
-    try:
-        mode = "RGBA" if getattr(pix, "alpha", 0) else "RGB"
-        image = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
-        if mode == "RGBA":
-            image = image.convert("RGB")
-        return np.array(image)
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _easyocr_bbox_to_list(value: Any) -> list[float]:
-    if not isinstance(value, (list, tuple)) or len(value) != 4:
-        return []
-    try:
-        xs = [float(point[0]) for point in value]
-        ys = [float(point[1]) for point in value]
-    except Exception:  # noqa: BLE001
-        return []
-    return [min(xs), min(ys), max(xs), max(ys)]

@@ -144,6 +144,7 @@ class ArtifactSearchService:
         artifact_kinds: list[str] | None = None,
         topic_terms: list[str] | None = None,
         document_ids: list[int] | None = None,
+        document_version_ids: list[int] | None = None,
         limit: int = 20,
     ) -> list[SearchHit]:
         normalized_query = normalize_for_search(query)
@@ -160,7 +161,11 @@ class ArtifactSearchService:
             semantic_node_id is not None or bool(normalized_semantic_label)
         )
 
-        candidate_scores = self._collect_candidate_scores(normalized_query, normalized_topic_terms=normalized_topic_terms)
+        candidate_scores = self._collect_candidate_scores(
+            normalized_query,
+            normalized_topic_terms=normalized_topic_terms,
+            source_type=source_type,
+        )
         if not candidate_scores:
             return []
 
@@ -192,7 +197,10 @@ class ArtifactSearchService:
         if topic_annotations_available:
             stmt = stmt.add_columns(ArtifactTopicAnnotation).outerjoin(
                 ArtifactTopicAnnotation,
-                ArtifactTopicAnnotation.artifact_id == RetrievalArtifact.artifact_id,
+                and_(
+                    ArtifactTopicAnnotation.artifact_id == RetrievalArtifact.artifact_id,
+                    ArtifactTopicAnnotation.classifier_route.contains("dictalm"),
+                ),
             )
         if municipality_slug:
             stmt = stmt.where(SourceSite.municipality_slug == municipality_slug)
@@ -225,6 +233,12 @@ class ArtifactSearchService:
             normalized_document_ids = [int(document_id) for document_id in document_ids if int(document_id) > 0]
             if normalized_document_ids:
                 stmt = stmt.where(RetrievalArtifact.document_id.in_(normalized_document_ids))
+        if document_version_ids:
+            normalized_document_version_ids = [
+                int(document_version_id) for document_version_id in document_version_ids if int(document_version_id) > 0
+            ]
+            if normalized_document_version_ids:
+                stmt = stmt.where(RetrievalArtifact.document_version_id.in_(normalized_document_version_ids))
 
         rows = self.session.execute(stmt).all()
         query_trigrams = build_trigrams(normalized_query)
@@ -332,7 +346,10 @@ class ArtifactSearchService:
         if topic_annotations_available:
             stmt = stmt.add_columns(ArtifactTopicAnnotation).outerjoin(
                 ArtifactTopicAnnotation,
-                ArtifactTopicAnnotation.artifact_id == RetrievalArtifact.artifact_id,
+                and_(
+                    ArtifactTopicAnnotation.artifact_id == RetrievalArtifact.artifact_id,
+                    ArtifactTopicAnnotation.classifier_route.contains("dictalm"),
+                ),
             )
         rows = self.session.execute(stmt).all()
         by_id: dict[str, SearchHit] = {}
@@ -366,19 +383,36 @@ class ArtifactSearchService:
             )
         return [by_id[artifact_id] for artifact_id in normalized_ids if artifact_id in by_id]
 
-    def _collect_candidate_scores(self, normalized_query: str, *, normalized_topic_terms: list[str]) -> dict[str, dict[str, float]]:
+    def _collect_candidate_scores(
+        self,
+        normalized_query: str,
+        *,
+        normalized_topic_terms: list[str],
+        source_type: str | None = None,
+    ) -> dict[str, dict[str, float]]:
         candidate_scores: dict[str, dict[str, float]] = {}
         tokens = [token for token in normalized_query.split(" ") if token]
         fts_query = " OR ".join(tokens[:FTS_TOKEN_LIMIT])
         if fts_query:
             try:
-                rows = self.session.execute(
-                    text(
-                        "SELECT artifact_id, bm25(artifact_fts) AS rank FROM artifact_fts "
-                        f"WHERE artifact_fts MATCH :q LIMIT {SEARCH_FTS_CANDIDATE_LIMIT}"
-                    ),
-                    {"q": fts_query},
-                ).mappings().all()
+                if source_type:
+                    rows = self.session.execute(
+                        text(
+                            "SELECT artifact_fts.artifact_id, bm25(artifact_fts) AS rank FROM artifact_fts "
+                            "JOIN retrieval_artifact ON retrieval_artifact.artifact_id = artifact_fts.artifact_id "
+                            "WHERE artifact_fts MATCH :q AND retrieval_artifact.source_kind = :source_type "
+                            f"LIMIT {SEARCH_FTS_CANDIDATE_LIMIT}"
+                        ),
+                        {"q": fts_query, "source_type": source_type},
+                    ).mappings().all()
+                else:
+                    rows = self.session.execute(
+                        text(
+                            "SELECT artifact_id, bm25(artifact_fts) AS rank FROM artifact_fts "
+                            f"WHERE artifact_fts MATCH :q LIMIT {SEARCH_FTS_CANDIDATE_LIMIT}"
+                        ),
+                        {"q": fts_query},
+                    ).mappings().all()
                 for row in rows:
                     candidate_scores.setdefault(str(row["artifact_id"]), {})["fts_rank"] = float(row["rank"])
             except Exception:
@@ -388,26 +422,42 @@ class ArtifactSearchService:
         if query_trigrams:
             params = {f"t{idx}": trigram for idx, trigram in enumerate(query_trigrams)}
             placeholders = ",".join(f":t{idx}" for idx in range(len(query_trigrams)))
-            rows = self.session.execute(
-                text(
-                    "SELECT artifact_id, COUNT(*) AS overlap FROM retrieval_artifact_trigram "
-                    f"WHERE trigram IN ({placeholders}) GROUP BY artifact_id "
-                    f"ORDER BY overlap DESC LIMIT {SEARCH_TRIGRAM_CANDIDATE_LIMIT}"
-                ),
-                params,
-            ).mappings().all()
+            if source_type:
+                rows = self.session.execute(
+                    text(
+                        "SELECT retrieval_artifact_trigram.artifact_id, COUNT(*) AS overlap FROM retrieval_artifact_trigram "
+                        "JOIN retrieval_artifact ON retrieval_artifact.artifact_id = retrieval_artifact_trigram.artifact_id "
+                        f"WHERE trigram IN ({placeholders}) AND retrieval_artifact.source_kind = :source_type "
+                        "GROUP BY retrieval_artifact_trigram.artifact_id "
+                        f"ORDER BY overlap DESC LIMIT {SEARCH_TRIGRAM_CANDIDATE_LIMIT}"
+                    ),
+                    {**params, "source_type": source_type},
+                ).mappings().all()
+            else:
+                rows = self.session.execute(
+                    text(
+                        "SELECT artifact_id, COUNT(*) AS overlap FROM retrieval_artifact_trigram "
+                        f"WHERE trigram IN ({placeholders}) GROUP BY artifact_id "
+                        f"ORDER BY overlap DESC LIMIT {SEARCH_TRIGRAM_CANDIDATE_LIMIT}"
+                    ),
+                    params,
+                ).mappings().all()
             for row in rows:
                 candidate_scores.setdefault(str(row["artifact_id"]), {})["trigram_overlap"] = float(row["overlap"])
 
         query_vector = self.embedding_service.embed_query(normalized_query, query_kind="search")
         if query_vector:
-            embedding_rows = self.session.execute(
-                select(RetrievalArtifactEmbedding.artifact_id, RetrievalArtifactEmbedding.embedding_json).where(
-                    RetrievalArtifactEmbedding.model_provider == self.embedding_service.model_client.provider_name,
-                    RetrievalArtifactEmbedding.model_name == self.embedding_service.model_client.model_name,
-                    RetrievalArtifactEmbedding.dimensions == self.embedding_service.model_client.dimensions,
-                )
-            ).all()
+            embedding_stmt = select(RetrievalArtifactEmbedding.artifact_id, RetrievalArtifactEmbedding.embedding_json).where(
+                RetrievalArtifactEmbedding.model_provider == self.embedding_service.model_client.provider_name,
+                RetrievalArtifactEmbedding.model_name == self.embedding_service.model_client.model_name,
+                RetrievalArtifactEmbedding.dimensions == self.embedding_service.model_client.dimensions,
+            )
+            if source_type:
+                embedding_stmt = embedding_stmt.join(
+                    RetrievalArtifact,
+                    RetrievalArtifact.artifact_id == RetrievalArtifactEmbedding.artifact_id,
+                ).where(RetrievalArtifact.source_kind == source_type)
+            embedding_rows = self.session.execute(embedding_stmt).all()
             embedding_hits: list[tuple[float, str]] = []
             for artifact_id, embedding_json in embedding_rows:
                 vector = _loads_embedding_vector(embedding_json)
@@ -423,12 +473,16 @@ class ArtifactSearchService:
             for topic_term in [normalized_query, *normalized_topic_terms]:
                 if not topic_term:
                     continue
-                topic_rows = self.session.execute(
+                topic_stmt = (
                     select(ArtifactTopicAnnotation.artifact_id, ArtifactTopicAnnotation.primary_topic_norm)
+                    .join(RetrievalArtifact, RetrievalArtifact.artifact_id == ArtifactTopicAnnotation.artifact_id)
                     .where(ArtifactTopicAnnotation.primary_topic_norm.is_not(None))
+                    .where(ArtifactTopicAnnotation.classifier_route.contains("dictalm"))
                     .where(ArtifactTopicAnnotation.primary_topic_norm.contains(topic_term))
-                    .limit(SEARCH_FALLBACK_CONTAINS_LIMIT)
-                ).all()
+                )
+                if source_type:
+                    topic_stmt = topic_stmt.where(RetrievalArtifact.source_kind == source_type)
+                topic_rows = self.session.execute(topic_stmt.limit(SEARCH_FALLBACK_CONTAINS_LIMIT)).all()
                 for artifact_id, _primary_topic_norm in topic_rows:
                     entry = candidate_scores.setdefault(str(artifact_id), {})
                     entry["topic_match"] = max(float(entry.get("topic_match") or 0.0), 1.0)
@@ -436,11 +490,10 @@ class ArtifactSearchService:
         if candidate_scores:
             return candidate_scores
 
-        fallback_rows = self.session.execute(
-            select(RetrievalArtifact.artifact_id)
-            .where(RetrievalArtifact.retrieval_text_norm.contains(normalized_query))
-            .limit(SEARCH_FALLBACK_CONTAINS_LIMIT)
-        ).scalars().all()
+        fallback_stmt = select(RetrievalArtifact.artifact_id).where(RetrievalArtifact.retrieval_text_norm.contains(normalized_query))
+        if source_type:
+            fallback_stmt = fallback_stmt.where(RetrievalArtifact.source_kind == source_type)
+        fallback_rows = self.session.execute(fallback_stmt.limit(SEARCH_FALLBACK_CONTAINS_LIMIT)).scalars().all()
         for artifact_id in fallback_rows:
             candidate_scores[str(artifact_id)] = {"fts_rank": 1.0, "trigram_overlap": 0.0}
         return candidate_scores
@@ -618,13 +671,13 @@ def _loads_json_list(value: str | None) -> list[str]:
 
 
 def _annotation_primary_topic(annotation: ArtifactTopicAnnotation | None) -> str | None:
-    if annotation is None:
+    if annotation is None or not _annotation_is_dictalm_backed(annotation):
         return None
     return sanitize_topic_path_label(annotation.primary_topic_he)
 
 
 def _annotation_secondary_topics(annotation: ArtifactTopicAnnotation | None) -> list[str]:
-    if annotation is None or not annotation.secondary_topics_json:
+    if annotation is None or not _annotation_is_dictalm_backed(annotation) or not annotation.secondary_topics_json:
         return []
     try:
         parsed = json.loads(annotation.secondary_topics_json)
@@ -638,6 +691,10 @@ def _annotation_secondary_topics(annotation: ArtifactTopicAnnotation | None) -> 
         for sanitized in [sanitize_topic_path_label(value)]
         if sanitized and not is_low_quality_topic_label(sanitized)
     ]
+
+
+def _annotation_is_dictalm_backed(annotation: ArtifactTopicAnnotation) -> bool:
+    return "dictalm" in str(annotation.classifier_route or "").casefold()
 
 
 def _loads_embedding_vector(value: str | None) -> list[float] | None:

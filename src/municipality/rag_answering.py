@@ -645,6 +645,15 @@ class RagAnsweringService:
                 "decision_items (array of objects with summary_he, topic_name_he, topic_root_he, topic_subtopic_he, "
                 "topic_confidence, topic_granularity_level, citation_chunk_ids). decision_items should contain concise decision summaries "
                 "(up to two sentences each) and must align one-to-one with claims by order and citation_chunk_ids. "
+                "Every claim must be supported=true and must include a non-empty citation_chunk_ids array copied exactly from "
+                "allowed_citation_chunk_ids or from the context citation_id aliases C1, C2, C3, etc. "
+                "Do not emit unsupported claims. If evidence is partial, answer only the supported part and list limitations. "
+                "Each claim text must closely paraphrase visible evidence words; do not infer outcomes such as closure, relocation, "
+                "ownership transfer, dates, or addresses unless those exact facts appear in the cited context. "
+                "When evidence is an OCR-disordered table fragment, preserve the visible Hebrew terms and say what the protocol shows, "
+                "for example a request/proposal/policy promotion, rather than inventing a final operational outcome. "
+                "Review evidence_hints first; they are copied from contexts and include the citation IDs to use. "
+                "Return at most two claims and at most one decision_item. Keep all strings concise so the JSON completes. "
                 "topic_root_he is protocol-level theme. topic_subtopic_he must be a self-contained noun phrase "
                 "(2-4 words) describing a reusable category-level decision topic (not a mini decision sentence). "
                 "Use object-first taxonomy: prefer the decided object/domain (for example 'הסכמים') over committee context. "
@@ -1266,10 +1275,18 @@ def _answer_payload(
     decision_request_context_by_chunk: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     decision_lines = _extract_decision_lines(retrieval.contexts)
+    citation_alias_by_chunk = {context.chunk_id: f"C{index}" for index, context in enumerate(retrieval.contexts, start=1)}
     return {
         "question": question,
+        "allowed_citation_chunk_ids": [context.chunk_id for context in retrieval.contexts],
+        "evidence_hints": _answer_evidence_hints(
+            question=question,
+            contexts=retrieval.contexts,
+            citation_alias_by_chunk=citation_alias_by_chunk,
+        ),
         "contexts": [
             {
+                "citation_id": citation_alias_by_chunk.get(context.chunk_id),
                 "chunk_id": context.chunk_id,
                 "source_kind": context.source_kind,
                 "citation": context.citation,
@@ -1284,6 +1301,7 @@ def _answer_payload(
         "decision_lines": [
             {
                 "decision_line_id": row.decision_line_id,
+                "citation_id": citation_alias_by_chunk.get(row.chunk_id),
                 "chunk_id": row.chunk_id,
                 "source_kind": row.source_kind,
                 "citation": row.citation,
@@ -1293,9 +1311,17 @@ def _answer_payload(
         ],
         "rules": [
             "Use only listed contexts",
-            "Every major claim must include citation_chunk_ids",
+            "Every claim must include non-empty citation_chunk_ids copied exactly from allowed_citation_chunk_ids or context citation_id aliases",
             "Do not output claims without citation_chunk_ids",
-            "Set supported per claim and set all_supported=false if any claim is unsupported",
+            "Do not output unsupported claims; every emitted claim must be supported=true",
+            "Every claim must be a close paraphrase of visible evidence text from its cited contexts",
+            "Never infer closure, relocation, ownership transfer, dates, addresses, or final outcomes unless those exact facts appear in cited text",
+            "For OCR-disordered evidence, preserve visible terms such as בקשה, הצעה, קידום, מדיניות, להפיכתו, ייחודי, ממלכתי, משולב; do not replace them with invented outcomes",
+            "If the cited context shows only a request/proposal/policy-promotion fragment, answer that the protocol shows that fragment and list missing details as limitations",
+            "Review evidence_hints before contexts; use their citation_id or chunk_id in citation_chunk_ids when they support the claim",
+            "Return at most two claims and at most one decision_item",
+            "Keep the answer and claim text concise to avoid truncated JSON",
+            "Set all_supported=true when all emitted claims are supported by cited contexts",
             "For every claim, map best_decision_line_id from decision_lines when available",
             "Set semantic_similarity_score between 0 and 1 for question-to-decision topical relevance",
             "Return decision_items with concise decision summaries (up to 2 sentences), each with citation_chunk_ids",
@@ -1312,6 +1338,46 @@ def _answer_payload(
             "Never emit placeholder topic labels like 'ללא תיוג סמנטי'",
         ],
     }
+
+
+def _answer_evidence_hints(
+    *,
+    question: str,
+    contexts: list[RagContextChunk],
+    citation_alias_by_chunk: dict[str, str],
+) -> list[dict[str, Any]]:
+    question_tokens = _primary_topic_tokens(question)
+    if not question_tokens:
+        question_tokens = set(_hebrew_tokens(normalize_for_search(question)))
+    hints: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for context in contexts:
+        text = context.chunk_text or context.snippet
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if len(line) < 8:
+                continue
+            line_norm = normalize_for_search(line)
+            line_tokens = set(_hebrew_tokens(line_norm))
+            overlap = sorted(question_tokens & line_tokens)
+            if len(overlap) < 2 and not any(token in line_norm for token in question_tokens):
+                continue
+            key = (context.chunk_id, line)
+            if key in seen:
+                continue
+            seen.add(key)
+            hints.append(
+                {
+                    "citation_id": citation_alias_by_chunk.get(context.chunk_id),
+                    "chunk_id": context.chunk_id,
+                    "citation": context.citation,
+                    "text": line,
+                    "matched_question_terms": overlap,
+                }
+            )
+            if len(hints) >= 8:
+                return hints
+    return hints
 
 
 def _verification_payload(
@@ -1433,7 +1499,7 @@ def _build_extractive_answer_if_confident(
     retrieval: RagRetrievalResult,
     required_source_kinds: list[str],
 ) -> RagAnswerResult | None:
-    if required_source_kinds and any(source_kind != "protocol" for source_kind in required_source_kinds):
+    if required_source_kinds and any(not _is_protocol_like_source_kind(source_kind) for source_kind in required_source_kinds):
         return None
     top_matches = retrieval.debug_info.get("top_decision_matches") if isinstance(retrieval.debug_info, dict) else []
     if not isinstance(top_matches, list) or not top_matches:
@@ -1522,7 +1588,7 @@ def _build_deterministic_answer_fallback(
     llm_error_code: str | None,
     llm_error_text: str | None,
 ) -> RagAnswerResult | None:
-    if required_source_kinds and any(source_kind != "protocol" for source_kind in required_source_kinds):
+    if required_source_kinds and any(not _is_protocol_like_source_kind(source_kind) for source_kind in required_source_kinds):
         return None
     if not retrieval.contexts:
         return None
@@ -1978,12 +2044,11 @@ def _parse_answer_draft(value: str) -> _AnswerDraft | None:
             citation_chunk_ids = claim_payload.get("chunk_ids")
         if not isinstance(citation_chunk_ids, list):
             return None
-        normalized_ids = _normalize_chunk_ids(citation_chunk_ids)
-        if not normalized_ids:
-            return None
-
         supported_raw = claim_payload.get("supported")
         supported = supported_raw if isinstance(supported_raw, bool) else None
+        normalized_ids = _normalize_chunk_ids(citation_chunk_ids)
+        if not normalized_ids and supported is not False:
+            return None
 
         best_decision_line_id = _as_optional_str(claim_payload.get("best_decision_line_id"))
         semantic_similarity_score = _as_float_0_1(claim_payload.get("semantic_similarity_score"))
@@ -2104,7 +2169,9 @@ def _repair_claim_citations(
                     seen.add(raw_chunk_id)
                 continue
 
-            replacement = _closest_chunk_id(raw_chunk_id, known_chunk_ids)
+            replacement = _citation_alias_to_chunk_id(raw_chunk_id, known_chunk_ids) or _closest_chunk_id(
+                raw_chunk_id, known_chunk_ids
+            )
             if replacement is None:
                 if raw_chunk_id not in seen:
                     repaired_ids.append(raw_chunk_id)
@@ -2127,6 +2194,19 @@ def _repair_claim_citations(
         claim.citation_chunk_ids = repaired_ids
 
     return repair_count, repair_events
+
+
+def _citation_alias_to_chunk_id(value: str, candidates: list[str]) -> str | None:
+    normalized = (value or "").strip().upper()
+    if not normalized.startswith("C"):
+        return None
+    try:
+        index = int(normalized[1:])
+    except ValueError:
+        return None
+    if index < 1 or index > len(candidates):
+        return None
+    return candidates[index - 1]
 
 
 def _closest_chunk_id(value: str, candidates: list[str]) -> str | None:
@@ -2415,7 +2495,7 @@ def _normalize_chunk_ids(values: list[Any]) -> list[str]:
 
 
 def _normalize_source_kinds(source_kinds: list[str]) -> list[str]:
-    accepted = {"protocol", "attachment", "other"}
+    accepted = {"protocol", "pdf_first_protocol", "attachment", "other"}
     out: list[str] = []
     seen: set[str] = set()
     for source_kind in source_kinds:
@@ -2424,6 +2504,10 @@ def _normalize_source_kinds(source_kinds: list[str]) -> list[str]:
             out.append(normalized)
             seen.add(normalized)
     return out
+
+
+def _is_protocol_like_source_kind(source_kind: str | None) -> bool:
+    return str(source_kind or "").strip().casefold() in {"protocol", "pdf_first_protocol"}
 
 
 def _topic_mismatch_chunk_ids(
@@ -2442,7 +2526,7 @@ def _topic_mismatch_chunk_ids(
         if context is None:
             continue
         haystack = normalize_for_search(
-            f"{context.document_title} {' '.join(context.section_path)} {context.snippet}"
+            f"{context.document_title} {' '.join(context.section_path)} {context.snippet} {context.chunk_text}"
         )
         if not any(token in haystack for token in topic_tokens):
             mismatched.append(chunk_id)
@@ -2879,7 +2963,7 @@ def _protocol_document_ids_from_contexts(contexts: list[RagContextChunk]) -> lis
     ordered: list[int] = []
     seen: set[int] = set()
     for context in contexts:
-        if context.source_kind != "protocol":
+        if not _is_protocol_like_source_kind(context.source_kind):
             continue
         if context.document_id in seen:
             continue
@@ -2896,7 +2980,7 @@ def _protocol_document_ids_from_chunk_ids(
     seen: set[int] = set()
     for chunk_id in chunk_ids:
         context = context_by_chunk.get(chunk_id)
-        if context is None or context.source_kind != "protocol":
+        if context is None or not _is_protocol_like_source_kind(context.source_kind):
             continue
         if context.document_id in seen:
             continue
@@ -2940,7 +3024,7 @@ def _missing_protocol_coverage_lines(
 
     contexts_by_doc_id: dict[int, list[RagContextChunk]] = {}
     for context in retrieval_contexts:
-        if context.source_kind != "protocol":
+        if not _is_protocol_like_source_kind(context.source_kind):
             continue
         contexts_by_doc_id.setdefault(context.document_id, []).append(context)
 
@@ -4492,7 +4576,7 @@ def _nearby_protocol_contexts_for_section(
     for base in base_contexts:
         by_chunk_id[base.chunk_id] = base
         for candidate in context_by_chunk.values():
-            if candidate.source_kind != "protocol":
+            if not _is_protocol_like_source_kind(candidate.source_kind):
                 continue
             if int(candidate.document_id) != int(base.document_id):
                 continue

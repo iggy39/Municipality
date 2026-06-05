@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Generator, cast
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 import httpx
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, inspect, select
@@ -73,6 +73,9 @@ engine = build_engine()
 SessionLocal = build_session_factory(engine)
 app = FastAPI(title="Municipality API")
 TOPIC_SEMANTIC_CANONICALIZER = SemanticCanonicalizer()
+PDF_FIRST_ASK_SOURCE_TYPES = ["pdf_first_protocol"]
+PDF_FIRST_ASK_DOCUMENT_VERSION_IDS = [21, 22, 23]
+PDF_FIRST_ASK_DOCUMENT_IDS = [21, 22, 23]
 
 
 def get_db() -> Generator:
@@ -158,8 +161,46 @@ class AskRequest(BaseModel):
     semantic_label: str | None = None
     semantic_mode: str = "off"
     retrieval_strategy: str = "auto"
+    document_id: int | None = Field(default=None, ge=1)
+    document_version_id: int | None = Field(default=None, ge=1)
+    pipeline_run_id: str | None = None
     debug_mode: bool = False
     disable_answer_cache: bool = False
+
+
+def _ask_effective_scope(request: AskRequest) -> dict[str, Any]:
+    """Force /ask onto the accepted PDF-first pipeline artifacts only."""
+    allowed_docvers = _env_int_list("RAG_ASK_DOCUMENT_VERSION_IDS") or PDF_FIRST_ASK_DOCUMENT_VERSION_IDS
+    allowed_docs = _env_int_list("RAG_ASK_DOCUMENT_IDS") or PDF_FIRST_ASK_DOCUMENT_IDS
+    selected_docvers = allowed_docvers
+    if request.document_version_id and request.document_version_id in allowed_docvers:
+        selected_docvers = [request.document_version_id]
+    selected_docs = None
+    if request.document_id and request.document_id in allowed_docs:
+        selected_docs = [request.document_id]
+    return {
+        "source_types": list(PDF_FIRST_ASK_SOURCE_TYPES),
+        "required_source_types": list(PDF_FIRST_ASK_SOURCE_TYPES),
+        "document_ids": selected_docs,
+        "document_version_ids": selected_docvers,
+        "forced_pdf_first_scope": True,
+    }
+
+
+def _env_int_list(name: str) -> list[int]:
+    raw = os.getenv(name, "")
+    values = []
+    seen = set()
+    for part in raw.split(","):
+        try:
+            value = int(part.strip())
+        except ValueError:
+            continue
+        if value <= 0 or value in seen:
+            continue
+        values.append(value)
+        seen.add(value)
+    return values
 
 
 def _active_embedding_cache_summary(*, db) -> dict[str, Any]:
@@ -2922,20 +2963,23 @@ def _run_ask(
     ask_request_id = new_ask_request_id()
     question_hash = hash_text(request.question)
     arch_config = RagArchitectureConfig.from_env()
+    effective_scope = _ask_effective_scope(request)
     log_rag_event(
         "rag.ask.request",
         ask_request_id=ask_request_id,
         question_hash=question_hash,
         top_k=request.top_k,
         municipality_slug=request.muni,
-        source_types=request.source_types or [],
-        required_source_types=request.required_source_types or [],
+        source_types=effective_scope["source_types"],
+        required_source_types=effective_scope["required_source_types"],
         year=request.year,
         topic=request.topic,
         semantic_node_id=request.semantic_node_id,
         semantic_label=request.semantic_label,
         semantic_mode=request.semantic_mode,
         retrieval_strategy=request.retrieval_strategy,
+        document_ids=effective_scope["document_ids"],
+        document_version_ids=effective_scope["document_version_ids"],
     )
 
     embedding_service = build_embedding_backend(session=db, arch_config=arch_config)
@@ -2948,13 +2992,15 @@ def _run_ask(
         query=request.question,
         top_k=request.top_k,
         municipality_slug=request.muni,
-        source_kinds=request.source_types,
+        source_kinds=effective_scope["source_types"],
         year=request.year,
         topic=request.topic,
         semantic_node_id=request.semantic_node_id,
         semantic_label=request.semantic_label,
         semantic_mode=request.semantic_mode,
         retrieval_strategy=request.retrieval_strategy,
+        document_ids=effective_scope["document_ids"],
+        document_version_ids=effective_scope["document_version_ids"],
         ask_request_id=ask_request_id,
     )
     retrieval_ms = round((time.perf_counter() - retrieval_started) * 1000.0, 3)
@@ -2978,7 +3024,7 @@ def _run_ask(
     protocol_document_ids = [
         context.document_id
         for context in retrieval_for_answering.contexts
-        if context.source_kind == "protocol"
+        if context.source_kind in {"protocol", "pdf_first_protocol"}
     ]
     protocol_subject_anchors = _load_protocol_subject_anchors(
         db=db,
@@ -3040,7 +3086,7 @@ def _run_ask(
             answer_result = answering_service.compose(
                 question=request.question,
                 retrieval=retrieval_for_answering,
-                required_source_kinds=request.required_source_types,
+                required_source_kinds=effective_scope["required_source_types"],
                 protocol_subject_anchors=protocol_subject_anchors,
                 protocol_semantic_topic_labels=protocol_semantic_topic_labels,
                 decision_request_context_by_chunk=decision_request_context_by_context_id,
@@ -3125,6 +3171,12 @@ def _run_ask(
             "semantic_mode": request.semantic_mode,
             "semantic_node_id": request.semantic_node_id,
             "semantic_label": request.semantic_label,
+            "document_id": request.document_id,
+            "document_version_id": request.document_version_id,
+            "effective_document_ids": effective_scope["document_ids"],
+            "effective_document_version_ids": effective_scope["document_version_ids"],
+            "forced_pdf_first_scope": effective_scope["forced_pdf_first_scope"],
+            "pipeline_run_id": request.pipeline_run_id,
         },
         "model": {
             "provider": answer_result.provider,
@@ -3154,8 +3206,8 @@ def _run_ask(
                     "verify_fallback_if_low",
                     "refuse_if_needed",
                 ],
-                "effective_required_source_types": request.required_source_types
-                or retrieval_result.requested_source_kinds,
+                "effective_required_source_types": effective_scope["required_source_types"],
+                "effective_document_version_ids": effective_scope["document_version_ids"],
             },
         }
 
@@ -3410,6 +3462,7 @@ def ask(request: AskRequest, db=Depends(get_db)) -> dict:
 def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
     started = time.perf_counter()
     arch_config = RagArchitectureConfig.from_env()
+    effective_scope = _ask_effective_scope(request)
     retrieval_service = RagRetrievalService(
         search_service=build_search_backend(session=db, arch_config=arch_config),
         reranker=EmbeddingReranker(build_embedding_backend(session=db, arch_config=arch_config)),
@@ -3418,13 +3471,15 @@ def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
         query=request.question,
         top_k=request.top_k,
         municipality_slug=request.muni,
-        source_kinds=request.source_types,
+        source_kinds=effective_scope["source_types"],
         year=request.year,
         topic=request.topic,
         semantic_node_id=request.semantic_node_id,
         semantic_label=request.semantic_label,
         semantic_mode=request.semantic_mode,
         retrieval_strategy=request.retrieval_strategy,
+        document_ids=effective_scope["document_ids"],
+        document_version_ids=effective_scope["document_version_ids"],
     )
     retrieval_ms = round((time.perf_counter() - started) * 1000.0, 3)
     rerank_summary = _rerank_debug_summary(retrieval_result=retrieval_result)
@@ -3440,6 +3495,12 @@ def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
             "semantic_node_id": request.semantic_node_id,
             "semantic_label": request.semantic_label,
             "retrieval_strategy": request.retrieval_strategy,
+            "document_id": request.document_id,
+            "document_version_id": request.document_version_id,
+            "effective_document_ids": effective_scope["document_ids"],
+            "effective_document_version_ids": effective_scope["document_version_ids"],
+            "forced_pdf_first_scope": effective_scope["forced_pdf_first_scope"],
+            "pipeline_run_id": request.pipeline_run_id,
         },
         "embedding_cache": _active_embedding_cache_summary(db=db),
         "rerank": rerank_summary,
@@ -3465,6 +3526,91 @@ def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
             for context in retrieval_result.contexts
         ],
     }
+
+
+PIPELINE_RUNS_ROOT = Path("rag_eval/runs").resolve()
+
+
+@app.get("/pipeline-runs/{run_id}/artifacts")
+def pipeline_run_artifacts(run_id: str) -> dict:
+    manifest = _load_pipeline_artifact_manifest(run_id)
+    artifacts = []
+    for artifact in manifest.get("artifacts") or []:
+        if not isinstance(artifact, dict):
+            continue
+        key = str(artifact.get("key") or "").strip()
+        if not key:
+            continue
+        artifacts.append(
+            {
+                "key": key,
+                "label": str(artifact.get("label") or key),
+                "kind": str(artifact.get("kind") or "file"),
+                "url": f"/pipeline-runs/{run_id}/artifacts/{key}",
+                "bytes": artifact.get("bytes"),
+                "path": artifact.get("path"),
+            }
+        )
+    return {
+        "run_id": run_id,
+        "title": manifest.get("title"),
+        "document_id": manifest.get("document_id"),
+        "document_version_id": manifest.get("document_version_id"),
+        "artifacts": artifacts,
+    }
+
+
+@app.get("/pipeline-runs/{run_id}/artifacts/{artifact_key}")
+def pipeline_run_artifact_file(run_id: str, artifact_key: str) -> FileResponse:
+    manifest = _load_pipeline_artifact_manifest(run_id)
+    for artifact in manifest.get("artifacts") or []:
+        if not isinstance(artifact, dict):
+            continue
+        if str(artifact.get("key") or "").strip() != artifact_key:
+            continue
+        path = _resolve_pipeline_artifact_path(run_id=run_id, artifact=artifact)
+        media_type = str(artifact.get("content_type") or "application/octet-stream")
+        filename = path.name
+        return FileResponse(path, media_type=media_type, filename=filename)
+    raise HTTPException(status_code=404, detail="pipeline_artifact_not_found")
+
+
+def _load_pipeline_artifact_manifest(run_id: str) -> dict[str, Any]:
+    normalized_run_id = _validate_pipeline_run_id(run_id)
+    manifest_path = PIPELINE_RUNS_ROOT / normalized_run_id / "artifact_manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(status_code=404, detail="pipeline_run_manifest_not_found")
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail="pipeline_run_manifest_invalid_json") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="pipeline_run_manifest_invalid")
+    return payload
+
+
+def _validate_pipeline_run_id(run_id: str) -> str:
+    normalized = str(run_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", normalized):
+        raise HTTPException(status_code=400, detail="pipeline_run_id_invalid")
+    return normalized
+
+
+def _resolve_pipeline_artifact_path(*, run_id: str, artifact: dict[str, Any]) -> Path:
+    normalized_run_id = _validate_pipeline_run_id(run_id)
+    run_root = (PIPELINE_RUNS_ROOT / normalized_run_id).resolve()
+    raw_path = str(artifact.get("path") or "").strip()
+    if not raw_path:
+        raise HTTPException(status_code=404, detail="pipeline_artifact_path_missing")
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = run_root / candidate
+    resolved = candidate.resolve()
+    if not str(resolved).startswith(str(run_root) + os.sep):
+        raise HTTPException(status_code=403, detail="pipeline_artifact_path_forbidden")
+    if not resolved.exists() or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="pipeline_artifact_file_missing")
+    return resolved
 
 
 @app.get("/ask", response_class=HTMLResponse)
@@ -3643,18 +3789,35 @@ def ask_playground_page() -> HTMLResponse:
           <input id="ask-top-k" name="top_k" type="number" min="1" max="50" value="8" />
           <span class="muted">How many chunks retrieval returns before answering (higher can be slower and costlier).</span>
         </div>
+        <div class="field">
+          <label for="ask-document-id">document_id</label>
+          <input id="ask-document-id" name="document_id" type="number" min="1" placeholder="optional" />
+          <span class="muted">Use to lock retrieval to one document.</span>
+        </div>
+        <div class="field">
+          <label for="ask-document-version-id">document_version_id</label>
+          <input id="ask-document-version-id" name="document_version_id" type="number" min="1" placeholder="optional" />
+          <span class="muted">Use for one exact PDF version.</span>
+        </div>
+        <div class="field">
+          <label for="ask-pipeline-run-id">pipeline_run_id</label>
+          <input id="ask-pipeline-run-id" name="pipeline_run_id" type="text" placeholder="optional" />
+          <span class="muted">Loads links to OCR, corrections, extraction, and debug artifacts.</span>
+        </div>
       </section>
       <fieldset class="group">
         <legend>source_types (retrieval filter)</legend>
         <div class="checks">
-          <label><input type="checkbox" name="source_types" value="protocol" checked />protocol</label>
+          <label><input type="checkbox" name="source_types" value="protocol" />protocol</label>
+          <label><input type="checkbox" name="source_types" value="pdf_first_protocol" checked />pdf_first_protocol</label>
           <label><input type="checkbox" name="source_types" value="attachment" />attachment</label>
         </div>
       </fieldset>
       <fieldset class="group">
         <legend>required_source_types (coverage gate)</legend>
         <div class="checks">
-          <label><input type="checkbox" name="required_source_types" value="protocol" checked />protocol</label>
+          <label><input type="checkbox" name="required_source_types" value="protocol" />protocol</label>
+          <label><input type="checkbox" name="required_source_types" value="pdf_first_protocol" checked />pdf_first_protocol</label>
           <label><input type="checkbox" name="required_source_types" value="attachment" />attachment</label>
         </div>
       </fieldset>
@@ -3720,6 +3883,12 @@ def ask_playground_page() -> HTMLResponse:
       <ul id="ask-playground-trace-list"></ul>
     </section>
 
+    <section id="ask-playground-artifacts" class="output hidden">
+      <h3>Pipeline Artifacts</h3>
+      <p id="ask-playground-artifacts-title" class="muted"></p>
+      <ul id="ask-playground-artifacts-list"></ul>
+    </section>
+
     <section class="output">
       <h3>Debug</h3>
       <ul id="ask-playground-meta"></ul>
@@ -3742,6 +3911,9 @@ def ask_playground_page() -> HTMLResponse:
       const topicInput = document.getElementById("ask-topic");
       const yearInput = document.getElementById("ask-year");
       const topKInput = document.getElementById("ask-top-k");
+      const documentIdInput = document.getElementById("ask-document-id");
+      const documentVersionIdInput = document.getElementById("ask-document-version-id");
+      const pipelineRunIdInput = document.getElementById("ask-pipeline-run-id");
       const semanticModeInput = document.getElementById("ask-semantic-mode");
       const semanticNodeIdInput = document.getElementById("ask-semantic-node-id");
       const semanticLabelInput = document.getElementById("ask-semantic-label");
@@ -3765,6 +3937,9 @@ def ask_playground_page() -> HTMLResponse:
       const thresholdsJson = document.getElementById("ask-playground-thresholds-json");
       const tracePanel = document.getElementById("ask-playground-trace");
       const traceList = document.getElementById("ask-playground-trace-list");
+      const artifactsPanel = document.getElementById("ask-playground-artifacts");
+      const artifactsTitle = document.getElementById("ask-playground-artifacts-title");
+      const artifactsList = document.getElementById("ask-playground-artifacts-list");
       const metaList = document.getElementById("ask-playground-meta");
       const rawJson = document.getElementById("ask-playground-json");
       let lastExtendedAnswer = null;
@@ -4133,6 +4308,63 @@ def ask_playground_page() -> HTMLResponse:
         const compact = String(value || "").trim();
         return compact || null;
       };
+      const applyQueryParams = () => {
+        const params = new URLSearchParams(window.location.search || "");
+        const assign = (node, key) => {
+          const value = params.get(key);
+          if (node && value !== null) {
+            node.value = value;
+          }
+        };
+        assign(questionInput, "question");
+        assign(yearInput, "year");
+        assign(documentIdInput, "document_id");
+        assign(documentVersionIdInput, "document_version_id");
+        assign(pipelineRunIdInput, "pipeline_run_id");
+        assign(topicInput, "topic");
+      };
+      applyQueryParams();
+
+      const loadPipelineArtifacts = async (runId) => {
+        resetList(artifactsList);
+        if (artifactsTitle) {
+          artifactsTitle.textContent = "";
+        }
+        if (!runId) {
+          hide(artifactsPanel);
+          return;
+        }
+        try {
+          const response = await fetch(`/pipeline-runs/${encodeURIComponent(runId)}/artifacts`);
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const payload = await response.json();
+          if (artifactsTitle) {
+            artifactsTitle.textContent = `${payload.title || runId} · document_id=${payload.document_id || "-"} · document_version_id=${payload.document_version_id || "-"}`;
+          }
+          for (const artifact of payload.artifacts || []) {
+            const item = document.createElement("li");
+            const link = document.createElement("a");
+            link.href = artifact.url;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.textContent = artifact.label || artifact.key;
+            item.appendChild(link);
+            if (artifact.kind || artifact.bytes) {
+              const meta = document.createElement("span");
+              meta.className = "muted";
+              meta.textContent = ` (${artifact.kind || "file"}${artifact.bytes ? `, ${artifact.bytes} bytes` : ""})`;
+              item.appendChild(meta);
+            }
+            artifactsList.appendChild(item);
+          }
+          show(artifactsPanel);
+        } catch (error) {
+          appendItem(artifactsList, `Could not load artifacts for ${runId}: ${error.message || error}`);
+          show(artifactsPanel);
+        }
+      };
 
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -4156,6 +4388,9 @@ def ask_playground_page() -> HTMLResponse:
         const muni = cleanText(muniInput.value);
         const topic = cleanText(topicInput.value);
         const yearRaw = parseInt(yearInput.value || "", 10);
+        const documentIdRaw = parseInt(documentIdInput.value || "", 10);
+        const documentVersionIdRaw = parseInt(documentVersionIdInput.value || "", 10);
+        const pipelineRunId = cleanText(pipelineRunIdInput.value);
         const semanticNodeIdRaw = parseInt(semanticNodeIdInput.value || "", 10);
         const semanticLabel = cleanText(semanticLabelInput.value);
 
@@ -4174,6 +4409,15 @@ def ask_playground_page() -> HTMLResponse:
         if (Number.isFinite(yearRaw)) {
           payload.year = Math.max(2000, Math.min(2100, yearRaw));
         }
+        if (Number.isFinite(documentIdRaw) && documentIdRaw > 0) {
+          payload.document_id = documentIdRaw;
+        }
+        if (Number.isFinite(documentVersionIdRaw) && documentVersionIdRaw > 0) {
+          payload.document_version_id = documentVersionIdRaw;
+        }
+        if (pipelineRunId) {
+          payload.pipeline_run_id = pipelineRunId;
+        }
         if (Number.isFinite(semanticNodeIdRaw) && semanticNodeIdRaw > 0) {
           payload.semantic_node_id = semanticNodeIdRaw;
         }
@@ -4188,10 +4432,12 @@ def ask_playground_page() -> HTMLResponse:
         hide(citationsPanel);
         hide(thresholdsPanel);
         hide(tracePanel);
+        hide(artifactsPanel);
         hide(extendedPanel);
         resetList(limitationsList);
         resetList(citationsList);
         resetList(traceList);
+        resetList(artifactsList);
         resetList(metaList);
         if (answerSectionsNode) {
           answerSectionsNode.innerHTML = "";
@@ -4233,7 +4479,11 @@ def ask_playground_page() -> HTMLResponse:
           appendItem(metaList, `retrieval_set_id: ${retrieval.retrieval_set_id || "-"}`);
           appendItem(metaList, `retrieval_count: ${retrieval.count || 0}`);
           appendItem(metaList, `retrieved_source_types: ${(retrieval.source_types || []).join(", ") || "-"}`);
+          appendItem(metaList, `document_id: ${retrieval.document_id || "-"}`);
+          appendItem(metaList, `document_version_id: ${retrieval.document_version_id || "-"}`);
+          appendItem(metaList, `pipeline_run_id: ${retrieval.pipeline_run_id || "-"}`);
           appendItem(metaList, `model: ${model.provider || "-"} / ${model.name || "-"}`);
+          await loadPipelineArtifacts(retrieval.pipeline_run_id || pipelineRunId);
 
           const debugPayload = data.debug && typeof data.debug === "object" ? data.debug : null;
           const debugTiming = debugPayload && debugPayload.timing_ms && typeof debugPayload.timing_ms === "object"

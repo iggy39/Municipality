@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from municipality.migrations import apply_all
 from municipality.models import ArtifactTopicAnnotation, Document, DocumentVersion, ExtractedDocument, SourceSite
 from municipality.artifact_search import ArtifactSearchService
+from municipality.rag_llm import RAG_CALL_CLASSIFY, MockRagProvider, RagLlmClient
 from municipality.topic_classifier import ArtifactTopicClassifier
 
 
@@ -89,7 +90,27 @@ def test_topic_classifier_persists_structural_and_primary_topics(tmp_path: Path)
                 }
             ],
         )
-        classifier = ArtifactTopicClassifier(session)
+        llm_client = RagLlmClient(
+            provider=MockRagProvider(
+                responses_by_call_type={
+                    RAG_CALL_CLASSIFY: json.dumps(
+                        {
+                            "items": [
+                                {
+                                    "artifact_id": "art-1",
+                                    "primary_topic_he": "תחבורה ובטיחות > הרחבת חניה ליד בית הספר",
+                                    "secondary_topics": ["אכיפה בשעות הבוקר"],
+                                    "section_summary": "הרחבת חניה ליד בית הספר והוספת אכיפה בשעות הבוקר.",
+                                    "confidence": 0.86,
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                }
+            )
+        )
+        classifier = ArtifactTopicClassifier(session, llm_client=llm_client)
 
         touched = classifier.annotate_document_version(document_version_id=version.id)
         session.commit()
@@ -99,6 +120,7 @@ def test_topic_classifier_persists_structural_and_primary_topics(tmp_path: Path)
         assert row.structural_topic_he is not None
         assert row.primary_topic_he is not None
         assert "חניה" in row.primary_topic_he
+        assert row.classifier_route == "mockprovider_dictalm_refine_batch"
 
 
 def test_topic_cleaning_rejects_structural_admin_headings() -> None:

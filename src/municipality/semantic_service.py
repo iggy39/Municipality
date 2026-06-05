@@ -975,7 +975,11 @@ def _canonicalization_report_to_dict(report: CanonicalizationReport) -> dict:
 def _artifact_records_for_semantic_prompt(session: Session, *, document_version_id: int) -> list[dict[str, Any]]:
     rows = session.execute(
         select(RetrievalArtifact, ArtifactTopicAnnotation)
-        .outerjoin(ArtifactTopicAnnotation, ArtifactTopicAnnotation.artifact_id == RetrievalArtifact.artifact_id)
+        .outerjoin(
+            ArtifactTopicAnnotation,
+            (ArtifactTopicAnnotation.artifact_id == RetrievalArtifact.artifact_id)
+            & (ArtifactTopicAnnotation.classifier_route.contains("dictalm")),
+        )
         .where(RetrievalArtifact.document_version_id == document_version_id)
         .order_by(RetrievalArtifact.ordinal.asc())
     ).all()

@@ -1,0 +1,13 @@
+FROM qwen3.5:122b
+
+# Qwen thinking is prompt-controlled; this keeps /think in the model's system context.
+SYSTEM """
+/think
+Thinking mode is enabled. Reason internally before answering.
+"""
+
+PARAMETER temperature 0.6
+PARAMETER top_k 20
+PARAMETER top_p 0.8
+PARAMETER min_p 0
+PARAMETER repeat_penalty 1.3

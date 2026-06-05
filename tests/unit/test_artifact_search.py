@@ -96,9 +96,9 @@ def test_artifact_search_uses_topic_annotations_for_topic_terms(tmp_path: Path) 
                 secondary_topics_json=json.dumps(["תחבורה עירונית"], ensure_ascii=False),
                 section_summary="קידום פרויקט תחבורה עירונית",
                 classifier_confidence=0.88,
-                classifier_route="deterministic_structural_refine",
-                provider_name=None,
-                model_name=None,
+                classifier_route="ollama_dictalm_refine_batch",
+                provider_name="ollama",
+                model_name="dicta-il/DictaLM-3.0-24B-Thinking:bf16",
             )
         )
         session.commit()
@@ -120,10 +120,23 @@ def test_artifact_search_hides_low_quality_topic_annotations() -> None:
         artifact_id="artifact-1",
         primary_topic_he="החלטות עירוניות",
         secondary_topics_json=json.dumps(["עיקרי ההחלטה", "תחבורה עירונית"], ensure_ascii=False),
+        classifier_route="ollama_dictalm_refine_batch",
     )
 
     assert artifact_search._annotation_primary_topic(annotation) is None
     assert artifact_search._annotation_secondary_topics(annotation) == ["תחבורה עירונית"]
+
+
+def test_artifact_search_ignores_stale_deterministic_topic_annotations() -> None:
+    annotation = ArtifactTopicAnnotation(
+        artifact_id="artifact-1",
+        primary_topic_he="תחבורה עירונית",
+        secondary_topics_json=json.dumps(["חניה עירונית"], ensure_ascii=False),
+        classifier_route="deterministic_structural_refine",
+    )
+
+    assert artifact_search._annotation_primary_topic(annotation) is None
+    assert artifact_search._annotation_secondary_topics(annotation) == []
 
 
 def _seed_artifact_search_fixture(session: Session, service: ArtifactSearchService) -> tuple[int, int]:

@@ -16,6 +16,7 @@ TEXT_FILE_SUFFIXES = {
     ".txt",
 }
 SKIP_DIR_NAMES = {".git", "__pycache__", ".pytest_cache", ".venv", "venv", "local_llm"}
+SKIP_PATH_PREFIXES = (Path("rag_eval/data"),)
 
 BIDI_CONTROL_RE = re.compile(r"[\u200E\u200F\u202A-\u202E\u2066-\u2069]")
 HEBREW_WORD_RE = re.compile(r"[א-ת]{2,}")
@@ -70,6 +71,9 @@ def _iter_text_files() -> list[Path]:
         if path.suffix.lower() not in TEXT_FILE_SUFFIXES:
             continue
         if any(part in SKIP_DIR_NAMES for part in path.parts):
+            continue
+        rel = path.relative_to(ROOT_DIR)
+        if any(rel.is_relative_to(prefix) for prefix in SKIP_PATH_PREFIXES):
             continue
         files.append(path)
     return files
