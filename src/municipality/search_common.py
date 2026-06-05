@@ -60,6 +60,7 @@ class SearchHit:
     chunk_text: str = ""
     section_path: list[str] = field(default_factory=list)
     artifact_kind: str | None = None
+    document_version_id: int | None = None
 
 
 def search_thresholds_snapshot() -> dict[str, Any]:

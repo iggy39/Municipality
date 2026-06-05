@@ -61,6 +61,7 @@ class RagContextChunk:
     secondary_topics: list[str] = field(default_factory=list)
     section_path: list[str] = field(default_factory=list)
     artifact_kind: str | None = None
+    document_version_id: int | None = None
 
 
 @dataclass(slots=True)
@@ -531,6 +532,7 @@ def _to_context(hit) -> RagContextChunk:
         citation=hit.citation,
         source_kind=hit.source_type,
         document_id=hit.document_id,
+        document_version_id=getattr(hit, "document_version_id", None),
         document_title=hit.document_title,
         document_url=hit.document_url,
         municipality_slug=hit.municipality_slug,

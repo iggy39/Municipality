@@ -471,6 +471,7 @@ class RagCitation:
     end_page: int | None
     score: float
     section_path: list[str] = field(default_factory=list)
+    document_version_id: int | None = None
 
 
 @dataclass(slots=True)
@@ -1214,6 +1215,248 @@ class RagAnsweringService:
             covered_source_types=sorted({citation.source_kind for citation in result.citations}),
             claim_count=len(claim_assessments),
             low_score_claim_count=len(low_score_claims),
+        )
+        return result
+
+    def compose_pdf_first(
+        self,
+        *,
+        question: str,
+        retrieval: RagRetrievalResult,
+        ask_request_id: str | None = None,
+    ) -> RagAnswerResult:
+        compose_started = time.perf_counter()
+        if not retrieval.contexts:
+            return self._build_refusal(
+                question=question,
+                retrieval=retrieval,
+                reason_code=REASON_INSUFFICIENT_EVIDENCE,
+                missing_source_kinds=["pdf_first_protocol"],
+                ask_request_id=ask_request_id,
+                scoring={"answer_generation_route": "pdf_first_dictalm", "pdf_first_empty_retrieval": True},
+            )
+        if any(context.source_kind != "pdf_first_protocol" for context in retrieval.contexts):
+            return self._build_refusal(
+                question=question,
+                retrieval=retrieval,
+                reason_code=REASON_INSUFFICIENT_EVIDENCE,
+                missing_source_kinds=["pdf_first_protocol"],
+                ask_request_id=ask_request_id,
+                scoring={"answer_generation_route": "pdf_first_dictalm", "pdf_first_scope_violation": True},
+            )
+
+        payload = _pdf_first_answer_payload(question=question, retrieval=retrieval)
+        started = time.perf_counter()
+        answer_call = self.llm_client.generate(
+            call_type=RAG_CALL_ANSWER,
+            instruction=_pdf_first_answer_instruction(),
+            payload=payload,
+            temperature=0.0,
+            ask_request_id=ask_request_id,
+        )
+        answer_call_ms = _elapsed_ms(started)
+        parsed = _parse_pdf_first_model_payload(answer_call.text or "") if answer_call.text else None
+        context_by_chunk = {context.chunk_id: context for context in retrieval.contexts}
+        validation = _validate_pdf_first_answer(parsed=parsed, context_by_chunk=context_by_chunk) if parsed else None
+        retry_attempted = False
+        retry_succeeded = False
+        retry_reason = None
+        retry_call_ms = 0.0
+        first_validation = validation
+        claim_repair_used = False
+
+        if not answer_call.error_code and (parsed is None or not validation["accepted"]):
+            retry_attempted = True
+            retry_reason = "invalid_json" if parsed is None else "invalid_citations"
+            retry_started = time.perf_counter()
+            retry_call = self.llm_client.generate(
+                call_type=RAG_CALL_ANSWER,
+                instruction=_pdf_first_answer_retry_instruction(),
+                payload=_compact_pdf_first_answer_payload(payload),
+                temperature=0.0,
+                ask_request_id=ask_request_id,
+            )
+            retry_call_ms = _elapsed_ms(retry_started)
+            retry_parsed = _parse_pdf_first_model_payload(retry_call.text or "") if retry_call.text else None
+            retry_validation = (
+                _validate_pdf_first_answer(parsed=retry_parsed, context_by_chunk=context_by_chunk)
+                if retry_parsed
+                else None
+            )
+            if not retry_call.error_code and retry_parsed is not None and retry_validation and retry_validation["accepted"]:
+                answer_call = retry_call
+                parsed = retry_parsed
+                validation = retry_validation
+                retry_succeeded = True
+            elif parsed is None:
+                answer_call = retry_call
+                parsed = retry_parsed
+                validation = retry_validation
+            elif retry_parsed is not None and retry_validation is not None:
+                validation = retry_validation
+
+        if parsed is not None and validation is not None and not validation["accepted"]:
+            repaired_claim = _pdf_first_repair_missing_claim_from_visible_result(
+                parsed=parsed,
+                payload=payload,
+                context_by_chunk=context_by_chunk,
+            )
+            if repaired_claim is not None:
+                repaired_parsed = {**parsed, "answer_he": repaired_claim["text_he"], "claims": [repaired_claim]}
+                repaired_validation = _validate_pdf_first_answer(
+                    parsed=repaired_parsed,
+                    context_by_chunk=context_by_chunk,
+                )
+                if repaired_validation["accepted"]:
+                    parsed = repaired_parsed
+                    validation = repaired_validation
+                    claim_repair_used = True
+
+        if answer_call.error_code or parsed is None:
+            return self._build_refusal(
+                question=question,
+                retrieval=retrieval,
+                reason_code=REASON_ANSWER_GENERATION_FAILED if answer_call.error_code else REASON_INVALID_ANSWER_FORMAT,
+                missing_source_kinds=[],
+                provider=answer_call.provider,
+                model=answer_call.model,
+                ask_request_id=ask_request_id,
+                scoring={
+                    "answer_generation_route": "pdf_first_dictalm",
+                    "answer_external_api_called": _is_external_provider_name(answer_call.provider),
+                    "external_call_count": 1 if _is_external_provider_name(answer_call.provider) else 0,
+                    "answer_call_error_code": answer_call.error_code,
+                    "answer_call_error_text": answer_call.error_text,
+                    "answer_call_empty_text": not bool(answer_call.text),
+                    "invalid_json": parsed is None and bool(answer_call.text),
+                    "pdf_first_retry_attempted": retry_attempted,
+                    "pdf_first_retry_succeeded": retry_succeeded,
+                    "pdf_first_retry_reason": retry_reason,
+                    "pdf_first_claim_repair_used": claim_repair_used,
+                    "timing_ms": {"answer_call": answer_call_ms, "compose_total": _elapsed_ms(compose_started)},
+                },
+            )
+
+        if not validation["accepted"]:
+            return self._build_refusal(
+                question=question,
+                retrieval=retrieval,
+                reason_code=REASON_UNCITED_CLAIMS,
+                missing_source_kinds=[],
+                provider=answer_call.provider,
+                model=answer_call.model,
+                ask_request_id=ask_request_id,
+                scoring={
+                    "answer_generation_route": "pdf_first_dictalm",
+                    "answer_external_api_called": _is_external_provider_name(answer_call.provider),
+                    "external_call_count": 1 if _is_external_provider_name(answer_call.provider) else 0,
+                    "pdf_first_validation": validation,
+                    "pdf_first_first_validation": first_validation,
+                    "pdf_first_retry_attempted": retry_attempted,
+                    "pdf_first_retry_succeeded": retry_succeeded,
+                    "pdf_first_retry_reason": retry_reason,
+                    "pdf_first_claim_repair_used": claim_repair_used,
+                    "timing_ms": {"answer_call": answer_call_ms, "compose_total": _elapsed_ms(compose_started)},
+                },
+            )
+
+        answer_text = _pdf_first_answer_text_from_claims(
+            parsed_answer=_as_optional_str(parsed.get("answer_he")) or "",
+            claims=validation["claims"],
+        )
+        if not answer_text:
+            return self._build_refusal(
+                question=question,
+                retrieval=retrieval,
+                reason_code=REASON_INSUFFICIENT_EVIDENCE,
+                missing_source_kinds=[],
+                provider=answer_call.provider,
+                model=answer_call.model,
+                ask_request_id=ask_request_id,
+                scoring={
+                    "answer_generation_route": "pdf_first_dictalm",
+                    "answer_external_api_called": _is_external_provider_name(answer_call.provider),
+                    "external_call_count": 1 if _is_external_provider_name(answer_call.provider) else 0,
+                    "pdf_first_outcome_type": parsed.get("outcome_type"),
+                    "pdf_first_validation": validation,
+                    "pdf_first_retry_attempted": retry_attempted,
+                    "pdf_first_retry_succeeded": retry_succeeded,
+                    "pdf_first_retry_reason": retry_reason,
+                    "pdf_first_claim_repair_used": claim_repair_used,
+                    "timing_ms": {"answer_call": answer_call_ms, "compose_total": _elapsed_ms(compose_started)},
+                },
+            )
+
+        used_chunk_ids = validation["used_chunk_ids"]
+        citations = _build_citations(retrieval.contexts, used_chunk_ids)
+        topic_name = _pdf_first_topic_for_chunks(chunk_ids=used_chunk_ids, context_by_chunk=context_by_chunk) or _as_optional_str(parsed.get("topic_he")) or "נושא כללי"
+        limitations = _normalize_pdf_first_limitations(parsed.get("limitations"))
+        claim_assessments = [
+            {
+                "text": claim["text_he"],
+                "citation_chunk_ids": claim["supporting_chunk_ids"],
+                "score": _as_float_0_1(parsed.get("confidence")) or 0.0,
+                "semantic_source": "dictalm_pdf_first_judge",
+                "selected_for_answer": True,
+                "quoted_evidence": claim.get("quoted_evidence") or [],
+            }
+            for claim in validation["claims"]
+        ]
+        section = _set_section_topic_fields(
+            {
+                "protocol_title": citations[0].document_title if citations else "פרוטוקול",
+                "topic_name": topic_name,
+                "text": answer_text,
+                "chunk_ids": used_chunk_ids,
+                "topic_route": "pdf_first_step4_5_canonical_topic",
+                "topic_score": 1.0,
+                "outcome_type": parsed.get("outcome_type"),
+            }
+        )
+        result = RagAnswerResult(
+            status="answer",
+            answer=_compose_answer_from_sections([section]),
+            extended_answer=_compose_answer_from_sections([section]),
+            answer_sections=[section],
+            extended_answer_sections=[section],
+            citations=citations,
+            claim_assessments=claim_assessments,
+            limitations=limitations,
+            provider=answer_call.provider,
+            model=answer_call.model,
+            scoring={
+                "answer_generation_route": "pdf_first_dictalm",
+                "answer_external_api_called": _is_external_provider_name(answer_call.provider),
+                "external_call_count": 1 if _is_external_provider_name(answer_call.provider) else 0,
+                "pdf_first_outcome_type": parsed.get("outcome_type"),
+                "pdf_first_confidence": _as_float_0_1(parsed.get("confidence")),
+                "pdf_first_validation": validation,
+                "pdf_first_retry_attempted": retry_attempted,
+                "pdf_first_retry_succeeded": retry_succeeded,
+                "pdf_first_retry_reason": retry_reason,
+                "pdf_first_claim_repair_used": claim_repair_used,
+                "timing_ms": {"answer_call": answer_call_ms, "compose_total": _elapsed_ms(compose_started)},
+            },
+        )
+        if retry_attempted:
+            result.scoring["timing_ms"] = {
+                "answer_call": answer_call_ms,
+                "retry_call": retry_call_ms,
+                "compose_total": _elapsed_ms(compose_started),
+            }
+        log_rag_event(
+            "rag.answering.answer",
+            ask_request_id=ask_request_id,
+            retrieval_set_id=retrieval.retrieval_set_id,
+            citation_count=len(result.citations),
+            citation_chunk_ids=[citation.chunk_id for citation in result.citations],
+            limitation_count=len(result.limitations),
+            provider=result.provider,
+            model=result.model,
+            required_source_types=["pdf_first_protocol"],
+            covered_source_types=sorted({citation.source_kind for citation in result.citations}),
+            claim_count=len(claim_assessments),
+            low_score_claim_count=0,
         )
         return result
 
@@ -2353,6 +2596,7 @@ def _build_citations(contexts: list[RagContextChunk], used_chunk_ids: list[str])
                 end_page=context.end_page,
                 score=context.score,
                 section_path=list(context.section_path),
+                document_version_id=context.document_version_id,
             )
         )
     return citations
@@ -2478,6 +2722,454 @@ def _loads_json_object(value: str) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     return payload
+
+
+def _pdf_first_answer_instruction() -> str:
+    return (
+        "You are a constrained Hebrew municipal protocol judge. Use only the supplied pdf_first_protocol evidence. "
+        "Do not use prior knowledge, legacy decision units, or inferred topics. Interpret outcomes with the model, but every claim must cite chunk_ids. "
+        "Return a strict JSON object only with keys: answer_status ('answer' or 'insufficient_evidence'), topic_he, outcome_type "
+        "('approved','rejected','deferred','discussed','reported','no_outcome','unclear'), answer_he, claims, confidence, limitations. "
+        "claims is an array of objects with text_he, supporting_chunk_ids, quoted_evidence. supporting_chunk_ids must be copied exactly from allowed_chunk_ids. "
+        "quoted_evidence must be short exact Hebrew substrings from the cited raw_pdf_text. If evidence only shows discussion/proposal, do not say approved. "
+        "Inspect chunks with structural_role='vote_or_result' carefully because they often contain the protocol's visible vote/result text. "
+        "Preserve action modality exactly: do not turn 'promote policy', 'discuss', 'report', or 'proposal' into final implementation. "
+        "Use insufficient_evidence only when no supplied chunk can support any cited claim. If details are partial, answer the supported part and list limitations. "
+        "If evidence shows approval of a notice, agreement, trip, or protocol item, answer with that supported outcome and citations. "
+        "When the evidence says the council approved a committee protocol, say it approved the protocol; do not infer it approved every underlying allocation unless that is explicit. "
+        "If an outcome is unclear or absent, say that explicitly in answer_he and cite the relevant evidence. Keep answer_he under 160 Hebrew characters and return at most one claim."
+    )
+
+
+def _pdf_first_answer_retry_instruction() -> str:
+    return (
+        "Return one valid minified JSON object only. Use only the supplied pdf_first_protocol evidence. "
+        "Decide the outcome from the cited evidence, but emit at most one short claim. "
+        "Required keys: answer_status, topic_he, outcome_type, answer_he, claims, confidence, limitations. "
+        "claims must contain one object with text_he, supporting_chunk_ids, quoted_evidence. "
+        "supporting_chunk_ids must be exact chunk_ids from allowed_chunk_ids. quoted_evidence must be exact short substrings. "
+        "Keep answer_he under 120 Hebrew characters. If only proposal/discussion is visible, do not say approved. "
+        "If vote/result text is visible, answer only the outcome supported by that text."
+    )
+
+
+def _pdf_first_answer_payload(*, question: str, retrieval: RagRetrievalResult) -> dict[str, Any]:
+    ranked_contexts = _rank_pdf_first_contexts_for_question(question=question, contexts=retrieval.contexts)
+    rows = []
+    for index, context in enumerate(ranked_contexts, start=1):
+        raw_text = _pdf_first_raw_text(context.chunk_text or context.snippet)
+        visible_decision_cues = _pdf_first_visible_decision_cues(raw_text)
+        rows.append(
+            {
+                "citation_id": f"C{index}",
+                "chunk_id": context.chunk_id,
+                "document_id": context.document_id,
+                "document_title": context.document_title,
+                "page": context.start_page,
+                "source_kind": context.source_kind,
+                "canonical_topic_he": context.primary_topic,
+                "section_path": list(context.section_path),
+                "structural_role": _pdf_first_structural_role(context),
+                "visible_decision_cues": visible_decision_cues,
+                "visible_result_text": _pdf_first_visible_result_text(raw_text),
+                "raw_pdf_text": raw_text,
+            }
+        )
+    return {
+        "question_he": question,
+        "allowed_source_kind": "pdf_first_protocol",
+        "allowed_chunk_ids": [context.chunk_id for context in ranked_contexts],
+        "evidence_chunks": rows,
+    }
+
+
+def _compact_pdf_first_answer_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    chunks = payload.get("evidence_chunks") if isinstance(payload, dict) else []
+    compact_chunks = []
+    for row in chunks if isinstance(chunks, list) else []:
+        if not isinstance(row, dict):
+            continue
+        raw_text = _as_optional_str(row.get("raw_pdf_text")) or ""
+        compact_chunks.append(
+            {
+                "chunk_id": row.get("chunk_id"),
+                "canonical_topic_he": row.get("canonical_topic_he"),
+                "structural_role": row.get("structural_role"),
+                "visible_decision_cues": row.get("visible_decision_cues"),
+                "visible_result_text": row.get("visible_result_text"),
+                "raw_pdf_text": raw_text[:700],
+            }
+        )
+        if len(compact_chunks) >= 5:
+            break
+    return {
+        "question_he": payload.get("question_he"),
+        "allowed_source_kind": "pdf_first_protocol",
+        "allowed_chunk_ids": payload.get("allowed_chunk_ids"),
+        "evidence_chunks": compact_chunks,
+    }
+
+
+def _rank_pdf_first_contexts_for_question(*, question: str, contexts: list[RagContextChunk]) -> list[RagContextChunk]:
+    question_tokens = set(_normalized_topic_tokens(question)) - GENERIC_QUERY_TOKENS - TOPIC_NOISE_TOKENS
+    role_priority = {
+        "vote_or_result": 0,
+        "section_heading": 1,
+        "outline_item": 1,
+        "body": 2,
+        "continuation": 3,
+        "task_row": 4,
+        "metadata": 5,
+    }
+
+    def metrics(context: RagContextChunk) -> tuple[int, int, str]:
+        haystack = " ".join(
+            [
+                str(context.primary_topic or ""),
+                " ".join(context.section_path or []),
+                _pdf_first_raw_text(context.chunk_text or context.snippet),
+            ]
+        )
+        haystack_tokens = set(_normalized_topic_tokens(haystack))
+        overlap = len(question_tokens & haystack_tokens)
+        role = _pdf_first_structural_role(context) or ""
+        cue_count = len(_pdf_first_visible_decision_cues(_pdf_first_raw_text(context.chunk_text or context.snippet)))
+        return overlap, cue_count, role
+
+    def rank_key(context: RagContextChunk) -> tuple[float, float, int, float]:
+        overlap, cue_count, role = metrics(context)
+        return (-float(overlap), -float(cue_count), role_priority.get(role, 9), -float(context.score or 0.0))
+
+    ranked = sorted(contexts, key=rank_key)
+    relevant = [context for context in ranked if metrics(context)[0] > 0 or metrics(context)[1] > 0]
+    if len(relevant) >= 3:
+        return relevant[:10]
+    return ranked[:10]
+
+
+def _pdf_first_visible_decision_cues(raw_text: str) -> list[str]:
+    cues = []
+    normalized = normalize_for_search(raw_text)
+    for cue in ["מאשרים", "מאשר", "מצביעים", "הצביעו", "פה אחד", "ברוב קולות", "בעד", "נגד", "נמנע"]:
+        if cue in normalized and cue not in cues:
+            cues.append(cue)
+    return cues[:8]
+
+
+def _pdf_first_visible_result_text(raw_text: str) -> str | None:
+    compact = " ".join(str(raw_text or "").split()).strip()
+    if not compact:
+        return None
+    normalized = normalize_for_search(compact)
+    cue_positions = [normalized.find(cue) for cue in ["מאשרים", "מאשר", "מצביעים", "הצביעו", "החלטות"] if normalized.find(cue) >= 0]
+    if not cue_positions:
+        return None
+    start = max(0, min(cue_positions) - 80)
+    return compact[start : start + 420]
+
+
+def _pdf_first_raw_text(value: str) -> str:
+    text = str(value or "")
+    marker = "raw_pdf_text:"
+    if marker not in text:
+        return " ".join(text.split()).strip()
+    return " ".join(text.split(marker, 1)[1].split()).strip()
+
+
+def _pdf_first_structural_role(context: RagContextChunk) -> str | None:
+    for label in reversed(context.section_path or []):
+        normalized = str(label or "").strip()
+        if normalized in {"body", "continuation", "outline_item", "section_heading", "vote_or_result", "task_row", "metadata"}:
+            return normalized
+    chunk_text = str(context.chunk_text or "")
+    match = re.search(r"structural_role:\s*([^\n|]+)", chunk_text)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
+def _parse_pdf_first_model_payload(value: str) -> dict[str, Any] | None:
+    stripped = _strip_markdown_code_fence(str(value or ""))
+    parsed = _loads_json_object(stripped)
+    if parsed is not None:
+        return parsed
+    json_slice = _extract_json_object_slice(stripped)
+    if not json_slice:
+        return None
+    return _loads_json_object(json_slice)
+
+
+def _validate_pdf_first_answer(*, parsed: dict[str, Any], context_by_chunk: dict[str, RagContextChunk]) -> dict[str, Any]:
+    claims_raw = parsed.get("claims")
+    if isinstance(claims_raw, list):
+        claims = claims_raw
+    elif isinstance(claims_raw, dict):
+        claims = [claims_raw]
+    else:
+        claims = []
+    accepted_claims: list[dict[str, Any]] = []
+    used_chunk_ids: list[str] = []
+    invalid_claims = []
+    for index, claim in enumerate(claims):
+        if not isinstance(claim, dict):
+            invalid_claims.append({"index": index, "reason": "claim_not_object"})
+            continue
+        text_he = _as_optional_str(claim.get("text_he")) or ""
+        supporting_chunk_ids_raw = claim.get("supporting_chunk_ids")
+        if isinstance(supporting_chunk_ids_raw, str):
+            supporting_chunk_ids_raw = [supporting_chunk_ids_raw]
+        if not isinstance(supporting_chunk_ids_raw, list):
+            supporting_chunk_id = _as_optional_str(claim.get("supporting_chunk_id")) or _as_optional_str(claim.get("chunk_id"))
+            supporting_chunk_ids_raw = [supporting_chunk_id] if supporting_chunk_id else []
+        chunk_ids = _normalize_chunk_ids(supporting_chunk_ids_raw)
+        quoted_evidence_raw = claim.get("quoted_evidence")
+        if isinstance(quoted_evidence_raw, str):
+            quoted_evidence = [quoted_evidence_raw.strip()] if quoted_evidence_raw.strip() else []
+        elif isinstance(quoted_evidence_raw, list):
+            quoted_evidence = [str(item).strip() for item in quoted_evidence_raw if str(item).strip()]
+        else:
+            quoted_evidence = []
+        bad_ids = [chunk_id for chunk_id in chunk_ids if chunk_id not in context_by_chunk]
+        bad_sources = [chunk_id for chunk_id in chunk_ids if chunk_id in context_by_chunk and context_by_chunk[chunk_id].source_kind != "pdf_first_protocol"]
+        bad_quotes = _pdf_first_bad_quotes(quoted_evidence=quoted_evidence, chunk_ids=chunk_ids, context_by_chunk=context_by_chunk)
+        missing_detail_tokens = _pdf_first_missing_claim_detail_tokens(
+            text_he=text_he,
+            chunk_ids=chunk_ids,
+            context_by_chunk=context_by_chunk,
+        )
+        if not text_he or not chunk_ids or bad_ids or bad_sources or len(missing_detail_tokens) > 1:
+            invalid_claims.append(
+                {
+                    "index": index,
+                    "reason": "missing_text_or_invalid_citations",
+                    "bad_chunk_ids": bad_ids,
+                    "bad_source_chunk_ids": bad_sources,
+                    "bad_quotes": bad_quotes,
+                    "missing_detail_tokens": missing_detail_tokens,
+                }
+            )
+            continue
+        accepted_claim = {
+            "text_he": text_he,
+            "supporting_chunk_ids": chunk_ids,
+            "quoted_evidence": quoted_evidence,
+        }
+        accepted_claims.append(accepted_claim)
+        for chunk_id in chunk_ids:
+            if chunk_id not in used_chunk_ids:
+                used_chunk_ids.append(chunk_id)
+    accepted = bool(accepted_claims)
+    return {
+        "accepted": accepted,
+        "claim_count": len(claims),
+        "accepted_claim_count": len(accepted_claims),
+        "invalid_claims": invalid_claims,
+        "used_chunk_ids": used_chunk_ids,
+        "claims": accepted_claims,
+    }
+
+
+def _normalize_pdf_first_limitations(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _pdf_first_answer_text_from_claims(*, parsed_answer: str, claims: list[dict[str, Any]]) -> str:
+    claim_texts = []
+    for claim in claims:
+        if not isinstance(claim, dict):
+            continue
+        text = _as_optional_str(claim.get("text_he"))
+        if text and text not in claim_texts:
+            claim_texts.append(text)
+    if claim_texts:
+        return " ".join(claim_texts)
+    return parsed_answer
+
+
+def _pdf_first_repair_missing_claim_from_visible_result(
+    *,
+    parsed: dict[str, Any],
+    payload: dict[str, Any],
+    context_by_chunk: dict[str, RagContextChunk],
+) -> dict[str, Any] | None:
+    if _as_optional_str(parsed.get("answer_status")) != "answer":
+        return None
+    if isinstance(parsed.get("claims"), list) and parsed.get("claims"):
+        return None
+    outcome_type = _as_optional_str(parsed.get("outcome_type"))
+    if outcome_type in {"no_outcome", "unclear"}:
+        return None
+    chunks = payload.get("evidence_chunks") if isinstance(payload, dict) else []
+    if not isinstance(chunks, list):
+        return None
+    for row in chunks:
+        if not isinstance(row, dict):
+            continue
+        chunk_id = _as_optional_str(row.get("chunk_id"))
+        cues = row.get("visible_decision_cues")
+        if not chunk_id or chunk_id not in context_by_chunk or not isinstance(cues, list) or not cues:
+            continue
+        text = _as_optional_str(row.get("visible_result_text")) or _as_optional_str(row.get("raw_pdf_text"))
+        if not text:
+            continue
+        quote = _pdf_first_short_quote_from_visible_result(text)
+        claim_text = quote or text[:260].strip()
+        return {
+            "text_he": claim_text,
+            "supporting_chunk_ids": [chunk_id],
+            "quoted_evidence": [quote or claim_text],
+        }
+    return None
+
+
+def _pdf_first_short_quote_from_visible_result(value: str) -> str | None:
+    compact = " ".join(str(value or "").split()).strip()
+    if not compact:
+        return None
+    normalized = normalize_for_search(compact)
+    for cue in ["חברי המועצה", "מאשרים", "מצביעים", "הצביעו"]:
+        position = normalized.find(cue)
+        if position >= 0:
+            return _clean_pdf_first_visible_quote(compact[position : position + 180])
+    return _clean_pdf_first_visible_quote(compact[:180])
+
+
+def _clean_pdf_first_visible_quote(value: str) -> str:
+    compact = " ".join(str(value or "").split()).strip()
+    compact = re.sub(r"(בעד|נגד|נמנע(?:ו)?)(?:\d{4,}|\s+\d{4,}).*$", r"\1", compact)
+    compact = re.sub(r"\s+\d{2}/\d{2}/\d{4}$", "", compact)
+    return compact.strip()
+
+
+PDF_FIRST_CLAIM_COVERAGE_EXEMPT_TOKENS = {
+    "אושר",
+    "אושרה",
+    "אושרו",
+    "אישר",
+    "אישרה",
+    "אישרו",
+    "אישור",
+    "אישרה",
+    "הוחלט",
+    "החלטה",
+    "המועצה",
+    "מועצת",
+    "העיר",
+    "פה",
+    "אחד",
+    "בעד",
+    "נגד",
+    "נמנע",
+    "נמנעו",
+    "הצביעו",
+    "מצביעים",
+}
+
+
+def _pdf_first_bad_quotes(
+    *,
+    quoted_evidence: list[str],
+    chunk_ids: list[str],
+    context_by_chunk: dict[str, RagContextChunk],
+) -> list[str]:
+    if not quoted_evidence:
+        return []
+    cited_texts = [
+        _pdf_first_raw_text((context.chunk_text or context.snippet) if context else "")
+        for chunk_id in chunk_ids
+        for context in [context_by_chunk.get(chunk_id)]
+    ]
+    bad = []
+    for quote in quoted_evidence:
+        compact = " ".join(str(quote or "").split()).strip()
+        if compact and not any(compact in text for text in cited_texts):
+            bad.append(compact[:120])
+    return bad
+
+
+def _pdf_first_missing_claim_detail_tokens(
+    *,
+    text_he: str,
+    chunk_ids: list[str],
+    context_by_chunk: dict[str, RagContextChunk],
+) -> list[str]:
+    cited_text = " ".join(
+        _pdf_first_raw_text((context.chunk_text or context.snippet) if context else "")
+        for chunk_id in chunk_ids
+        for context in [context_by_chunk.get(chunk_id)]
+    )
+    cited_norm = normalize_for_search(cited_text)
+    cited_tokens = set(_normalized_topic_tokens(cited_norm))
+    claim_tokens = set(_normalized_topic_tokens(text_he)) - GENERIC_QUERY_TOKENS - TOPIC_NOISE_TOKENS
+    missing = []
+    for token in sorted(claim_tokens):
+        if token in PDF_FIRST_CLAIM_COVERAGE_EXEMPT_TOKENS:
+            continue
+        if _pdf_first_token_is_cited(token=token, cited_norm=cited_norm, cited_tokens=cited_tokens):
+            continue
+        missing.append(token)
+    return missing[:8]
+
+
+def _pdf_first_token_is_cited(*, token: str, cited_norm: str, cited_tokens: set[str]) -> bool:
+    if token in cited_tokens or token in cited_norm:
+        return True
+    if len(token) < 4:
+        return False
+    return any(token in cited_token or cited_token in token for cited_token in cited_tokens if len(cited_token) >= 4)
+
+
+def _pdf_first_topic_for_chunks(*, chunk_ids: list[str], context_by_chunk: dict[str, RagContextChunk]) -> str | None:
+    candidates = []
+    for chunk_id in chunk_ids:
+        context = context_by_chunk.get(chunk_id)
+        topic = _as_optional_str(context.primary_topic if context else None)
+        if topic:
+            candidates.append(topic)
+    best = _best_pdf_first_topic_label(candidates)
+    if best:
+        return best
+    for chunk_id in chunk_ids:
+        context = context_by_chunk.get(chunk_id)
+        for label in context.section_path if context else []:
+            candidate = _as_optional_str(label)
+            if candidate and candidate not in {"body", "continuation", "outline_item", "section_heading", "vote_or_result", "task_row", "metadata"}:
+                candidates.append(candidate)
+    return _best_pdf_first_topic_label(candidates)
+
+
+def _best_pdf_first_topic_label(candidates: list[str]) -> str | None:
+    if not candidates:
+        return None
+    counts: dict[str, int] = {}
+    original: dict[str, str] = {}
+    for candidate in candidates:
+        compact = " ".join(str(candidate or "").split()).strip()
+        if not compact:
+            continue
+        key = normalize_for_search(compact.replace("'", "").replace('"', ""))
+        counts[key] = counts.get(key, 0) + 1
+        previous = original.get(key)
+        if previous is None or _pdf_first_topic_punctuation_penalty(compact) < _pdf_first_topic_punctuation_penalty(previous):
+            original[key] = compact
+    if not counts:
+        return None
+
+    def score(key: str) -> tuple[int, int, int]:
+        label = original[key]
+        punctuation_penalty = _pdf_first_topic_punctuation_penalty(label)
+        return (counts[key], -punctuation_penalty, -len(label))
+
+    best_key = max(counts, key=score)
+    return original[best_key]
+
+
+def _pdf_first_topic_punctuation_penalty(value: str) -> int:
+    return sum(1 for ch in str(value or "") if ch in "'\".,;:/")
 
 
 def _normalize_chunk_ids(values: list[Any]) -> list[str]:

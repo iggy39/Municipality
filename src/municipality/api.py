@@ -27,6 +27,7 @@ from municipality.models import (
     DecisionDocumentLink,
     DecisionRequestContext,
     Document,
+    DocumentVersion,
     Meeting,
     MeetingDocumentLink,
     PipelineRun,
@@ -171,18 +172,11 @@ class AskRequest(BaseModel):
 def _ask_effective_scope(request: AskRequest) -> dict[str, Any]:
     """Force /ask onto the accepted PDF-first pipeline artifacts only."""
     allowed_docvers = _env_int_list("RAG_ASK_DOCUMENT_VERSION_IDS") or PDF_FIRST_ASK_DOCUMENT_VERSION_IDS
-    allowed_docs = _env_int_list("RAG_ASK_DOCUMENT_IDS") or PDF_FIRST_ASK_DOCUMENT_IDS
-    selected_docvers = allowed_docvers
-    if request.document_version_id and request.document_version_id in allowed_docvers:
-        selected_docvers = [request.document_version_id]
-    selected_docs = None
-    if request.document_id and request.document_id in allowed_docs:
-        selected_docs = [request.document_id]
     return {
         "source_types": list(PDF_FIRST_ASK_SOURCE_TYPES),
         "required_source_types": list(PDF_FIRST_ASK_SOURCE_TYPES),
-        "document_ids": selected_docs,
-        "document_version_ids": selected_docvers,
+        "document_ids": None,
+        "document_version_ids": allowed_docvers,
         "forced_pdf_first_scope": True,
     }
 
@@ -436,6 +430,7 @@ def _answer_result_to_cache_payload(answer_result: RagAnswerResult) -> dict[str,
                 "source_kind": citation.source_kind,
                 "citation_label": citation.citation_label,
                 "document_id": citation.document_id,
+                "document_version_id": citation.document_version_id,
                 "document_title": citation.document_title,
                 "document_url": citation.document_url,
                 "start_page": citation.start_page,
@@ -471,6 +466,7 @@ def _answer_result_from_cache_payload(payload: dict[str, Any]) -> RagAnswerResul
                 source_kind=str(row.get("source_kind") or ""),
                 citation_label=row.get("citation_label") if isinstance(row.get("citation_label"), str) else None,
                 document_id=int(row.get("document_id") or 0),
+                document_version_id=_as_optional_int(row.get("document_version_id")),
                 document_title=str(row.get("document_title") or ""),
                 document_url=str(row.get("document_url") or ""),
                 start_page=_as_optional_int(row.get("start_page")),
@@ -524,7 +520,61 @@ def _llm_thresholds_payload(llm_client: RagLlmClient) -> dict:
     }
 
 
+def _pdf_first_llm_debug_payload(llm_client: RagLlmClient) -> dict:
+    provider = llm_client.provider
+    timeout_seconds = getattr(provider, "timeout_seconds", None)
+    num_predict = getattr(provider, "num_predict", None)
+    return {
+        "provider": provider.provider_name,
+        "model": provider.model_name,
+        "call_type": "answer",
+        "temperature": 0.0,
+        "timeout_seconds": timeout_seconds,
+        "ollama_num_predict": num_predict,
+        "local_model": provider.provider_name == "ollama",
+    }
+
+
 def _ask_thresholds_payload(*, request: AskRequest, llm_client: RagLlmClient) -> dict:
+    effective_scope = _ask_effective_scope(request)
+    if effective_scope.get("forced_pdf_first_scope"):
+        return {
+            "debug_payload_kind": "pdf_first_debug",
+            "obsolete_legacy_thresholds_hidden": True,
+            "scope": {
+                "source_types": effective_scope["source_types"],
+                "required_source_types": effective_scope["required_source_types"],
+                "document_ids": effective_scope["document_ids"],
+                "document_version_ids": effective_scope["document_version_ids"],
+                "forced_pdf_first_scope": True,
+            },
+            "retrieval": {
+                "top_k_min": 1,
+                "top_k_max": 50,
+                "top_k_effective": max(1, request.top_k),
+                "source_kind": "pdf_first_protocol",
+                "artifact_kind": "pdf_first_retrieval_chunk",
+            },
+            "answering": {
+                "route": "pdf_first_dictalm",
+                "model_role": "DictaLM judges outcomes and writes cited claims from PDF-first evidence.",
+                "deterministic_role": [
+                    "force PDF-first evidence scope",
+                    "rank and package evidence chunks",
+                    "validate cited chunk ids and cited-claim coverage",
+                    "retry malformed JSON with compact evidence",
+                    "repair missing claims only when DictaLM already returned answer_status=answer and visible vote/result text exists",
+                ],
+                "legacy_rules_disabled": [
+                    "decision marker scoring",
+                    "old decision-unit reconstruction",
+                    "claim score thresholds",
+                    "fallback heuristic weights",
+                    "protocol/attachment coverage rules",
+                ],
+            },
+            "llm": _pdf_first_llm_debug_payload(llm_client),
+        }
     return {
         "request_validation": {
             "top_k_min": 1,
@@ -535,6 +585,12 @@ def _ask_thresholds_payload(*, request: AskRequest, llm_client: RagLlmClient) ->
         "answering": rag_answering_thresholds_snapshot(),
         "llm": _llm_thresholds_payload(llm_client),
     }
+
+
+def _citation_document_url(citation: RagCitation) -> str:
+    if citation.source_kind == "pdf_first_protocol" and citation.document_version_id in PDF_FIRST_ASK_DOCUMENT_VERSION_IDS:
+        return f"/document-versions/{citation.document_version_id}/source.pdf"
+    return citation.document_url
 
 
 def _normalized_answering_trace(scoring: dict | None) -> dict:
@@ -3020,24 +3076,29 @@ def _run_ask(
         contexts=answering_contexts,
         debug_info={**dict(retrieval_result.debug_info), "answer_context_dedupe": context_dedupe_stats},
     )
+    pdf_first_answer_scope = retrieval_result.requested_source_kinds == ["pdf_first_protocol"]
 
-    protocol_document_ids = [
-        context.document_id
-        for context in retrieval_for_answering.contexts
-        if context.source_kind in {"protocol", "pdf_first_protocol"}
-    ]
-    protocol_subject_anchors = _load_protocol_subject_anchors(
-        db=db,
-        protocol_document_ids=protocol_document_ids,
-    )
-    protocol_semantic_topic_labels = _load_protocol_semantic_topic_labels(
-        db=db,
-        protocol_document_ids=protocol_document_ids,
-    )
-    decision_request_context_by_context_id = _load_decision_request_contexts_by_context_id(
-        db=db,
-        contexts=retrieval_for_answering.contexts,
-    )
+    protocol_subject_anchors = {}
+    protocol_semantic_topic_labels = {}
+    decision_request_context_by_context_id = {}
+    if not pdf_first_answer_scope:
+        protocol_document_ids = [
+            context.document_id
+            for context in retrieval_for_answering.contexts
+            if context.source_kind == "protocol"
+        ]
+        protocol_subject_anchors = _load_protocol_subject_anchors(
+            db=db,
+            protocol_document_ids=protocol_document_ids,
+        )
+        protocol_semantic_topic_labels = _load_protocol_semantic_topic_labels(
+            db=db,
+            protocol_document_ids=protocol_document_ids,
+        )
+        decision_request_context_by_context_id = _load_decision_request_contexts_by_context_id(
+            db=db,
+            contexts=retrieval_for_answering.contexts,
+        )
 
     resolved_llm_client = llm_client or _build_ask_llm_client(request=request)
     answering_service = RagAnsweringService(llm_client=resolved_llm_client)
@@ -3045,7 +3106,7 @@ def _run_ask(
     answering_started = time.perf_counter()
     answer_result: RagAnswerResult | None = None
     cache_hit = None
-    if not request.disable_answer_cache:
+    if not request.disable_answer_cache and not pdf_first_answer_scope:
         cache_hit = answer_cache_service.lookup(
             query=request.question,
             retrieval_set_id=retrieval_result.retrieval_set_id,
@@ -3064,11 +3125,13 @@ def _run_ask(
                 "external_call_count": 0,
             }
     if cache_hit is None:
-        low_relevance_gate = _low_relevance_embedding_refusal(
-            embedding_service=embedding_service,
-            question=request.question,
-            retrieval_result=retrieval_for_answering,
-        )
+        low_relevance_gate = None
+        if not pdf_first_answer_scope:
+            low_relevance_gate = _low_relevance_embedding_refusal(
+                embedding_service=embedding_service,
+                question=request.question,
+                retrieval_result=retrieval_for_answering,
+            )
         if low_relevance_gate is not None:
             answer_result = answering_service._build_refusal(
                 question=request.question,
@@ -3081,6 +3144,12 @@ def _run_ask(
                     "answer_external_api_called": False,
                     "external_call_count": 0,
                 },
+            )
+        elif pdf_first_answer_scope:
+            answer_result = answering_service.compose_pdf_first(
+                question=request.question,
+                retrieval=retrieval_for_answering,
+                ask_request_id=ask_request_id,
             )
         else:
             answer_result = answering_service.compose(
@@ -3131,8 +3200,10 @@ def _run_ask(
             "header_path": list(citation.section_path),
             "document": {
                 "id": citation.document_id,
+                "version_id": citation.document_version_id,
                 "title": citation.document_title,
-                "url": citation.document_url,
+                "url": _citation_document_url(citation),
+                "original_url": citation.document_url,
             },
             "score": citation.score,
         }
@@ -3516,8 +3587,24 @@ def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
                 "source_type": context.source_kind,
                 "document": {
                     "id": context.document_id,
+                    "version_id": context.document_version_id,
                     "title": context.document_title,
-                    "url": context.document_url,
+                    "url": _citation_document_url(
+                        RagCitation(
+                            chunk_id=context.chunk_id,
+                            source_kind=context.source_kind,
+                            citation_label=context.citation,
+                            document_id=context.document_id,
+                            document_title=context.document_title,
+                            document_url=context.document_url,
+                            start_page=context.start_page,
+                            end_page=context.end_page,
+                            score=context.score,
+                            section_path=list(context.section_path),
+                            document_version_id=context.document_version_id,
+                        )
+                    ),
+                    "original_url": context.document_url,
                 },
                 "semantic_topic_labels": list(context.semantic_topic_labels),
                 "primary_topic": context.primary_topic,
@@ -3526,6 +3613,30 @@ def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
             for context in retrieval_result.contexts
         ],
     }
+
+
+@app.get("/document-versions/{document_version_id}/source.pdf")
+def document_version_source_pdf(document_version_id: int, db=Depends(get_db)) -> FileResponse:
+    if document_version_id not in PDF_FIRST_ASK_DOCUMENT_VERSION_IDS:
+        raise HTTPException(status_code=404, detail="pdf_first_document_version_not_found")
+    version = db.execute(
+        select(DocumentVersion).where(DocumentVersion.id == document_version_id)
+    ).scalar_one_or_none()
+    if version is None:
+        raise HTTPException(status_code=404, detail="document_version_not_found")
+    storage_uri = str(version.storage_uri or "").strip()
+    if not storage_uri:
+        raise HTTPException(status_code=404, detail="document_version_storage_missing")
+    candidate = Path(storage_uri)
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    resolved = candidate.resolve()
+    workspace_root = Path.cwd().resolve()
+    if not str(resolved).startswith(str(workspace_root) + os.sep):
+        raise HTTPException(status_code=403, detail="document_version_storage_forbidden")
+    if not resolved.exists() or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="document_version_file_missing")
+    return FileResponse(resolved, media_type="application/pdf", filename=resolved.name)
 
 
 PIPELINE_RUNS_ROOT = Path("rag_eval/runs").resolve()
@@ -3765,22 +3876,22 @@ def ask_playground_page() -> HTMLResponse:
 <body>
   <article class="card">
     <h1>Ask Playground</h1>
-    <p class="muted">General UI for <code>POST /ask</code>. Fill optional filters and inspect full debug thresholds for retrieval, answering, and LLM stages.</p>
+    <p class="muted">General UI for <code>POST /ask</code>. Fill optional filters and inspect PDF-first retrieval, answering, citation validation, and LLM debug data.</p>
     <form id="ask-playground-form" class="ask-form">
       <div class="field">
         <label for="ask-question">Question (Hebrew recommended)</label>
         <textarea id="ask-question" name="question" required placeholder="מה הוחלט בעיר?">מה הוחלט בעיר?</textarea>
       </div>
       <section class="grid">
-        <div class="field">
+        <div class="field hidden">
           <label for="ask-muni">muni</label>
           <input id="ask-muni" name="muni" type="text" value="ashdod" />
         </div>
-        <div class="field">
+        <div class="field hidden">
           <label for="ask-topic">topic</label>
           <input id="ask-topic" class="he-input" name="topic" type="text" placeholder="optional" />
         </div>
-        <div class="field">
+        <div class="field hidden">
           <label for="ask-year">year</label>
           <input id="ask-year" name="year" type="number" min="2000" max="2100" placeholder="optional" />
         </div>
@@ -3789,23 +3900,23 @@ def ask_playground_page() -> HTMLResponse:
           <input id="ask-top-k" name="top_k" type="number" min="1" max="50" value="8" />
           <span class="muted">How many chunks retrieval returns before answering (higher can be slower and costlier).</span>
         </div>
-        <div class="field">
+        <div class="field hidden">
           <label for="ask-document-id">document_id</label>
           <input id="ask-document-id" name="document_id" type="number" min="1" placeholder="optional" />
-          <span class="muted">Use to lock retrieval to one document.</span>
+          <span class="muted">Ignored. PDF-first /ask always uses accepted doc versions 21, 22, 23.</span>
         </div>
-        <div class="field">
+        <div class="field hidden">
           <label for="ask-document-version-id">document_version_id</label>
           <input id="ask-document-version-id" name="document_version_id" type="number" min="1" placeholder="optional" />
-          <span class="muted">Use for one exact PDF version.</span>
+          <span class="muted">Ignored. PDF-first /ask always uses accepted doc versions 21, 22, 23.</span>
         </div>
-        <div class="field">
+        <div class="field hidden">
           <label for="ask-pipeline-run-id">pipeline_run_id</label>
           <input id="ask-pipeline-run-id" name="pipeline_run_id" type="text" placeholder="optional" />
-          <span class="muted">Loads links to OCR, corrections, extraction, and debug artifacts.</span>
+          <span class="muted">Not used by PDF-first /ask.</span>
         </div>
       </section>
-      <fieldset class="group">
+      <fieldset class="group hidden">
         <legend>source_types (retrieval filter)</legend>
         <div class="checks">
           <label><input type="checkbox" name="source_types" value="protocol" />protocol</label>
@@ -3813,7 +3924,7 @@ def ask_playground_page() -> HTMLResponse:
           <label><input type="checkbox" name="source_types" value="attachment" />attachment</label>
         </div>
       </fieldset>
-      <fieldset class="group">
+      <fieldset class="group hidden">
         <legend>required_source_types (coverage gate)</legend>
         <div class="checks">
           <label><input type="checkbox" name="required_source_types" value="protocol" />protocol</label>
@@ -3821,7 +3932,7 @@ def ask_playground_page() -> HTMLResponse:
           <label><input type="checkbox" name="required_source_types" value="attachment" />attachment</label>
         </div>
       </fieldset>
-      <section class="grid">
+      <section class="grid hidden">
         <div class="field">
           <label for="ask-semantic-mode">semantic_mode</label>
           <select id="ask-semantic-mode" name="semantic_mode">
@@ -3840,8 +3951,8 @@ def ask_playground_page() -> HTMLResponse:
         </div>
       </section>
       <div class="actions">
-        <label class="muted"><input id="ask-debug-mode" type="checkbox" checked /> debug mode (show thresholds)</label>
-        <label class="muted"><input id="ask-show-extended" type="checkbox" /> show extended answer</label>
+        <label class="muted"><input id="ask-debug-mode" type="checkbox" checked /> debug mode (show PDF-first debug)</label>
+        <label class="muted hidden"><input id="ask-show-extended" type="checkbox" /> show extended answer</label>
         <button type="submit">Send Ask Request</button>
         <span id="ask-playground-status" class="muted" aria-live="polite"></span>
       </div>
@@ -3874,12 +3985,12 @@ def ask_playground_page() -> HTMLResponse:
     </section>
 
     <section id="ask-playground-thresholds" class="output hidden">
-      <h3>Thresholds and calculation rules</h3>
+      <h3>PDF-first debug</h3>
       <pre id="ask-playground-thresholds-json"></pre>
     </section>
 
     <section id="ask-playground-trace" class="output hidden">
-      <h3>Similarity / Fallback Trace</h3>
+      <h3>PDF-first validation</h3>
       <ul id="ask-playground-trace-list"></ul>
     </section>
 
@@ -4379,51 +4490,12 @@ def ask_playground_page() -> HTMLResponse:
         const payload = {
           question: question,
           top_k: topK,
-          semantic_mode: semanticModeInput.value || "off",
+          muni: "ashdod",
+          semantic_mode: "off",
+          source_types: ["pdf_first_protocol"],
+          required_source_types: ["pdf_first_protocol"],
           debug_mode: Boolean(debugModeInput && debugModeInput.checked),
         };
-
-        const sourceTypes = getCheckedValues("source_types");
-        const requiredSourceTypes = getCheckedValues("required_source_types");
-        const muni = cleanText(muniInput.value);
-        const topic = cleanText(topicInput.value);
-        const yearRaw = parseInt(yearInput.value || "", 10);
-        const documentIdRaw = parseInt(documentIdInput.value || "", 10);
-        const documentVersionIdRaw = parseInt(documentVersionIdInput.value || "", 10);
-        const pipelineRunId = cleanText(pipelineRunIdInput.value);
-        const semanticNodeIdRaw = parseInt(semanticNodeIdInput.value || "", 10);
-        const semanticLabel = cleanText(semanticLabelInput.value);
-
-        if (sourceTypes.length > 0) {
-          payload.source_types = sourceTypes;
-        }
-        if (requiredSourceTypes.length > 0) {
-          payload.required_source_types = requiredSourceTypes;
-        }
-        if (muni) {
-          payload.muni = muni;
-        }
-        if (topic) {
-          payload.topic = topic;
-        }
-        if (Number.isFinite(yearRaw)) {
-          payload.year = Math.max(2000, Math.min(2100, yearRaw));
-        }
-        if (Number.isFinite(documentIdRaw) && documentIdRaw > 0) {
-          payload.document_id = documentIdRaw;
-        }
-        if (Number.isFinite(documentVersionIdRaw) && documentVersionIdRaw > 0) {
-          payload.document_version_id = documentVersionIdRaw;
-        }
-        if (pipelineRunId) {
-          payload.pipeline_run_id = pipelineRunId;
-        }
-        if (Number.isFinite(semanticNodeIdRaw) && semanticNodeIdRaw > 0) {
-          payload.semantic_node_id = semanticNodeIdRaw;
-        }
-        if (semanticLabel) {
-          payload.semantic_label = semanticLabel;
-        }
 
         statusNode.textContent = "Submitting ask request...";
         hide(answerPanel);
@@ -4479,11 +4551,12 @@ def ask_playground_page() -> HTMLResponse:
           appendItem(metaList, `retrieval_set_id: ${retrieval.retrieval_set_id || "-"}`);
           appendItem(metaList, `retrieval_count: ${retrieval.count || 0}`);
           appendItem(metaList, `retrieved_source_types: ${(retrieval.source_types || []).join(", ") || "-"}`);
-          appendItem(metaList, `document_id: ${retrieval.document_id || "-"}`);
-          appendItem(metaList, `document_version_id: ${retrieval.document_version_id || "-"}`);
-          appendItem(metaList, `pipeline_run_id: ${retrieval.pipeline_run_id || "-"}`);
+          appendItem(metaList, `effective_document_version_ids: ${(retrieval.effective_document_version_ids || []).join(", ") || "-"}`);
+          appendItem(metaList, `forced_pdf_first_scope: ${retrieval.forced_pdf_first_scope === true ? "yes" : "no"}`);
           appendItem(metaList, `model: ${model.provider || "-"} / ${model.name || "-"}`);
-          await loadPipelineArtifacts(retrieval.pipeline_run_id || pipelineRunId);
+          const scoring = data.scoring && typeof data.scoring === "object" ? data.scoring : {};
+          appendItem(metaList, `answer_generation_route: ${scoring.answer_generation_route || "-"}`);
+          hide(artifactsPanel);
 
           const debugPayload = data.debug && typeof data.debug === "object" ? data.debug : null;
           const debugTiming = debugPayload && debugPayload.timing_ms && typeof debugPayload.timing_ms === "object"
@@ -4519,20 +4592,24 @@ def ask_playground_page() -> HTMLResponse:
             ? debugPayload.answering_trace
             : null;
           if (trace) {
-            appendItem(traceList, `semantic_scoring_source: ${trace.semantic_scoring_source || "-"}`);
-            appendItem(traceList, `verify_route: ${trace.verify_route || "-"}`);
-            appendItem(traceList, `deterministic_would_refuse: ${trace.deterministic_would_refuse === true ? "yes" : "no"}`);
-            appendItem(traceList, `fallback_verify_attempted: ${trace.fallback_verify_attempted === true ? "yes" : "no"}`);
-            appendItem(traceList, `fallback_provider: ${trace.fallback_provider || "-"}`);
-            appendItem(traceList, `similarity_external_api_called: ${trace.similarity_external_api_called === true ? "yes" : "no"}`);
-            appendItem(traceList, `answer_external_api_called: ${trace.answer_external_api_called === true ? "yes" : "no"}`);
-            appendItem(traceList, `external_call_count: ${trace.external_call_count ?? "-"}`);
-            appendItem(traceList, `fallback_overrode_deterministic_low: ${trace.fallback_overrode_deterministic_low === true ? "yes" : "no"}`);
+            appendItem(traceList, `answer_generation_route: ${trace.answer_generation_route || "-"}`);
+            appendItem(traceList, `pdf_first_retry_attempted: ${trace.pdf_first_retry_attempted === true ? "yes" : "no"}`);
+            appendItem(traceList, `pdf_first_retry_succeeded: ${trace.pdf_first_retry_succeeded === true ? "yes" : "no"}`);
+            appendItem(traceList, `pdf_first_retry_reason: ${trace.pdf_first_retry_reason || "-"}`);
+            appendItem(traceList, `pdf_first_claim_repair_used: ${trace.pdf_first_claim_repair_used === true ? "yes" : "no"}`);
+            const pdfFirstValidation = trace.pdf_first_validation && typeof trace.pdf_first_validation === "object"
+              ? trace.pdf_first_validation
+              : null;
+            if (pdfFirstValidation) {
+              appendItem(traceList, `pdf_first_validation.accepted: ${pdfFirstValidation.accepted === true ? "yes" : "no"}`);
+              appendItem(traceList, `pdf_first_validation.accepted_claim_count: ${pdfFirstValidation.accepted_claim_count ?? "-"}`);
+              appendItem(traceList, `pdf_first_validation.used_chunk_ids: ${(pdfFirstValidation.used_chunk_ids || []).join(", ") || "-"}`);
+            }
             const stageTiming = trace.timing_ms && typeof trace.timing_ms === "object" ? trace.timing_ms : null;
             if (stageTiming) {
               appendItem(
                 traceList,
-                `timing_ms: answer_call=${stageTiming.answer_call ?? "-"}, deterministic_similarity=${stageTiming.deterministic_similarity ?? "-"}, fallback_verify=${stageTiming.fallback_verify ?? "-"}, compose_total=${stageTiming.compose_total ?? "-"}`,
+                `timing_ms: answer_call=${stageTiming.answer_call ?? "-"}, retry_call=${stageTiming.retry_call ?? "-"}, compose_total=${stageTiming.compose_total ?? "-"}`,
               );
             }
             show(tracePanel);
@@ -4648,7 +4725,13 @@ def ask_playground_page() -> HTMLResponse:
 </body>
 </html>
 """
-    return HTMLResponse(html_page)
+    return HTMLResponse(
+        html_page,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 @app.get("/semantic/tree")
@@ -5274,7 +5357,7 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
         <ul id="ask-citations-list"></ul>
       </section>
       <section id="ask-thresholds-panel" class="ask-output hidden">
-        <h3>Debug thresholds</h3>
+        <h3>PDF-first debug</h3>
         <pre id="ask-thresholds-json"></pre>
       </section>
     </section>

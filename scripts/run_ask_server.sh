@@ -88,5 +88,5 @@ if [ "$RESTORE_EGG_INFO" -eq 1 ]; then
 fi
 
 echo "Starting Ask server at http://$HOST:$PORT/ask"
-echo "Scoped 2025 PDF UI: http://$HOST:$PORT/ui/ask?question=%D7%9E%D7%94%20%D7%94%D7%95%D7%97%D7%9C%D7%98%20%D7%9C%D7%92%D7%91%D7%99%20%D7%A2%D7%AA%D7%99%D7%93%20%D7%91%D7%99%D7%AA%20%D7%A1%D7%A4%D7%A8%20%D7%99%D7%93%20%D7%A9%D7%91%D7%AA%D7%90%D7%99%3F&document_id=21&document_version_id=21&pipeline_run_id=ashdod_2025_single_pdf"
+echo "Scoped 2025 PDF UI: http://$HOST:$PORT/ui/ask?question=%D7%9E%D7%94%20%D7%94%D7%95%D7%97%D7%9C%D7%98%20%D7%9C%D7%92%D7%91%D7%99%20%D7%A2%D7%AA%D7%99%D7%93%20%D7%91%D7%99%D7%AA%20%D7%A1%D7%A4%D7%A8%20%D7%99%D7%93%20%D7%A9%D7%91%D7%AA%D7%90%D7%99%3F"
 exec "$VENV_DIR/bin/python" -m uvicorn municipality.api:app --host "$HOST" --port "$PORT"
