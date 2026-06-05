@@ -2,23 +2,30 @@
 
 All agents working in this repository MUST follow this file.
 
-## Goal
-Build a research-grade MVP that ingests municipality protocol documents and attachments,
+## Communication
+- Print minimal information unless the user explicitly asks for more detail.
+- Always show estimated build/execution time before starting implementation or running commands.
+- Prefer concise status updates, concise findings, and concise verification output.
+- Ask targeted follow-up questions whenever requirements, context, or implementation choices are unclear.
 
-## Code Standards
-- Keep imports clean: no missing, unresolved, or unused imports.
+## Project Goal
+Build a research-grade MVP for ingesting municipality protocol documents and attachments.
+Do not assume fixed document structure, wording, language, schema, or municipality-specific rules.
 
-## Operating Rules
+## Solution Principles
+- Prefer generic, reusable solutions over logic tailored to one document, municipality, or text pattern.
+- Do not hardcode assumptions about protocol layout, terminology, metadata, or attachment structure.
+- If unsure, pause and ask the user. If documentation or best practices are needed, research them before proceeding.
 
-1. Build Mode Protocol
-   - Assume the initial plan/architecture may be imperfect.
-   - If context is ambiguous or missing, pause and ask the user targeted follow-up questions.
-   - Do not make silent assumptions.
+## AI Model Preferences
+- Prefer local Ollama models for AI tasks.
+- Use `qwen3.5:122b` for general AI tasks.
+- Use `dictaLM` for Hebrew-language tasks.
+- Use `mistral-small3.1` for vision tasks.
 
-2. Handling Implementation Uncertainty
-   - If unsure about the best implementation, state the uncertainty to the user first.
-   - Only then (if needed) research best practices and proceed.
-
-3. Plan Mode Clarification Depth
-   - In Plan Mode, ask as many targeted follow-up questions as needed to remove ambiguity.
-   - Do not proceed while any requirement remains vague.
+## Verification
+- Before implementation, present concise verification options appropriate to the task and ask the user to choose when non-obvious.
+- Verify each stage before proceeding to the next.
+- Tests alone are not enough.
+- Act as a judge: run or demonstrate the feature with representative input and print concise input/output evidence to the console.
+- Keep verification output concise unless debugging requires more detail.
