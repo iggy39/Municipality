@@ -58,6 +58,12 @@ from municipality.rag_observability import (
     should_sample_audit,
 )
 from municipality.rag_retrieval import RagContextChunk, RagRetrievalResult, RagRetrievalService
+from municipality.rag_dashboard_mock import (
+    apply_mock_rag_dashboard_interaction,
+    get_mock_rag_dashboard_evidence,
+    get_mock_rag_dashboard_payload,
+)
+from municipality.rag_dashboard_ui import render_rag_dashboard_page
 from municipality.search import search_thresholds_snapshot
 from municipality.semantic_canonicalization import SemanticCanonicalizer
 from municipality.topic_label_quality import is_low_quality_topic_label
@@ -3421,6 +3427,30 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/ui/rag-dashboard/mock")
+def rag_dashboard_mock() -> dict[str, Any]:
+    return get_mock_rag_dashboard_payload()
+
+
+@app.get("/api/ui/rag-dashboard/evidence/{evidence_id}")
+def rag_dashboard_evidence(evidence_id: str) -> dict[str, Any]:
+    evidence = get_mock_rag_dashboard_evidence(evidence_id)
+    if evidence is None:
+        raise HTTPException(status_code=404, detail="rag_dashboard_evidence_not_found")
+    return evidence
+
+
+@app.post("/api/ui/rag-dashboard/interaction")
+def rag_dashboard_interaction(payload: dict[str, Any]) -> dict[str, Any]:
+    next_payload = apply_mock_rag_dashboard_interaction(
+        state=payload.get("state") if isinstance(payload, dict) else None,
+        interaction=payload.get("interaction") if isinstance(payload, dict) else None,
+    )
+    if next_payload is None:
+        raise HTTPException(status_code=404, detail="rag_dashboard_interaction_not_found")
+    return next_payload
+
+
 @app.post("/crawl/run")
 def crawl_run(muni: str, root_url: str, db=Depends(get_db)) -> dict[str, int]:
     service = PipelineService(
@@ -3727,6 +3757,18 @@ def _resolve_pipeline_artifact_path(*, run_id: str, artifact: dict[str, Any]) ->
 @app.get("/ask", response_class=HTMLResponse)
 @app.get("/ui/ask", response_class=HTMLResponse)
 def ask_playground_page() -> HTMLResponse:
+    return HTMLResponse(
+        render_rag_dashboard_page(),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
+
+
+@app.get("/debug", response_class=HTMLResponse)
+@app.get("/ui/debug", response_class=HTMLResponse)
+def debug_playground_page() -> HTMLResponse:
     html_page = """
 <!doctype html>
 <html lang="en" dir="ltr">
