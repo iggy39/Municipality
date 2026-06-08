@@ -14,6 +14,8 @@ LOW_QUALITY_TOPIC_EXACT = {
     normalize_for_search("עיקרי ההחלטה"),
     normalize_for_search("תוכן ההחלטה"),
     normalize_for_search("נושא ההחלטה"),
+    normalize_for_search("נושא כללי"),
+    normalize_for_search("ללא תיוג סמנטי"),
     normalize_for_search("מכותבים"),
     normalize_for_search("מכותבים תוכן ההחלטה"),
 }

@@ -41,6 +41,32 @@ DETERMINISTIC_FALLBACK_MODEL_NAME = "retrieval_fallback_v1"
 VERIFY_FALLBACK_PROVIDER_EXTERNAL = "external"
 VERIFY_FALLBACK_PROVIDER_LOCAL = "local"
 DETERMINISTIC_SIMILARITY_SOURCE = "deterministic_similarity"
+PDF_FIRST_SOURCE_KIND_ORDER = ["pdf_first_protocol", "pdf_first_attachment", "pdf_first_v4_protocol", "pdf_first_v4_attachment"]
+PDF_FIRST_SOURCE_KINDS = set(PDF_FIRST_SOURCE_KIND_ORDER)
+PDF_FIRST_PROTOCOL_SOURCE_KINDS = {"protocol", "pdf_first_protocol", "pdf_first_v4_protocol"}
+PDF_FIRST_ATTACHMENT_SOURCE_KINDS = {"attachment", "pdf_first_attachment", "pdf_first_v4_attachment"}
+PDF_FIRST_BROAD_TOPIC_LABELS = {
+    "סדר יום ושאילתות",
+    "עדכוני ראש העיר",
+    "הצעות לסדר",
+    "הקצאות ושימושים",
+    "הסכמים והתקשרויות",
+    "תמיכות",
+    "תקציב וכספים",
+    "תכנון ובנייה",
+    "תחבורה ובטיחות",
+    "חינוך",
+    "רווחה ושירותים חברתיים",
+    "תרבות וספורט",
+    "תשתיות וסביבה",
+    "דת ושירותי דת",
+    "מנהל עירוני ומינויים",
+    "ביטחון ואכיפה",
+    "אישורי נסיעות",
+    "שמירה והיטלים",
+    "נכסים ומרכזים מסחריים",
+    "כוח אדם ועובדים",
+}
 
 CLAIM_SCORE_HIGH_MIN = 0.67
 CLAIM_SCORE_MEDIUM_MIN = 0.34
@@ -1072,7 +1098,8 @@ class RagAnsweringService:
                 ask_request_id=ask_request_id,
             )
 
-        missing_sources = sorted(set(required_sources) - {citation.source_kind for citation in citations})
+        cited_groups = {_source_kind_group(citation.source_kind) for citation in citations}
+        missing_sources = sorted({_source_kind_group(source_kind) for source_kind in required_sources if _source_kind_group(source_kind) not in cited_groups})
         if missing_sources:
             return self._build_refusal(
                 question=question,
@@ -1231,16 +1258,16 @@ class RagAnsweringService:
                 question=question,
                 retrieval=retrieval,
                 reason_code=REASON_INSUFFICIENT_EVIDENCE,
-                missing_source_kinds=["pdf_first_protocol"],
+                missing_source_kinds=list(PDF_FIRST_SOURCE_KIND_ORDER),
                 ask_request_id=ask_request_id,
                 scoring={"answer_generation_route": "pdf_first_dictalm", "pdf_first_empty_retrieval": True},
             )
-        if any(context.source_kind != "pdf_first_protocol" for context in retrieval.contexts):
+        if any(context.source_kind not in PDF_FIRST_SOURCE_KINDS for context in retrieval.contexts):
             return self._build_refusal(
                 question=question,
                 retrieval=retrieval,
                 reason_code=REASON_INSUFFICIENT_EVIDENCE,
-                missing_source_kinds=["pdf_first_protocol"],
+                missing_source_kinds=list(PDF_FIRST_SOURCE_KIND_ORDER),
                 ask_request_id=ask_request_id,
                 scoring={"answer_generation_route": "pdf_first_dictalm", "pdf_first_scope_violation": True},
             )
@@ -1338,6 +1365,27 @@ class RagAnsweringService:
             )
 
         if not validation["accepted"]:
+            context_overview_fallback = _build_pdf_first_context_overview_fallback(
+                question=question,
+                retrieval=retrieval,
+                provider=answer_call.provider,
+                model=answer_call.model,
+                scoring={
+                    "answer_generation_route": "pdf_first_context_extract_fallback",
+                    "answer_external_api_called": _is_external_provider_name(answer_call.provider),
+                    "external_call_count": 1 if _is_external_provider_name(answer_call.provider) else 0,
+                    "pdf_first_validation": validation,
+                    "pdf_first_first_validation": first_validation,
+                    "pdf_first_retry_attempted": retry_attempted,
+                    "pdf_first_retry_succeeded": retry_succeeded,
+                    "pdf_first_retry_reason": retry_reason,
+                    "pdf_first_claim_repair_used": claim_repair_used,
+                    "pdf_first_extract_fallback_reason": "invalid_model_citations",
+                    "timing_ms": {"answer_call": answer_call_ms, "compose_total": _elapsed_ms(compose_started)},
+                },
+            )
+            if context_overview_fallback is not None:
+                return context_overview_fallback
             return self._build_refusal(
                 question=question,
                 retrieval=retrieval,
@@ -1388,8 +1436,56 @@ class RagAnsweringService:
             )
 
         used_chunk_ids = validation["used_chunk_ids"]
+        if _pdf_first_model_answer_undercovered_overview(retrieval=retrieval, used_chunk_ids=used_chunk_ids):
+            context_overview_fallback = _build_pdf_first_context_overview_fallback(
+                question=question,
+                retrieval=retrieval,
+                provider=answer_call.provider,
+                model=answer_call.model,
+                scoring={
+                    "answer_generation_route": "pdf_first_context_extract_fallback",
+                    "answer_external_api_called": _is_external_provider_name(answer_call.provider),
+                    "external_call_count": 1 if _is_external_provider_name(answer_call.provider) else 0,
+                    "pdf_first_outcome_type": parsed.get("outcome_type"),
+                    "pdf_first_confidence": _as_float_0_1(parsed.get("confidence")),
+                    "pdf_first_validation": validation,
+                    "pdf_first_first_validation": first_validation,
+                    "pdf_first_retry_attempted": retry_attempted,
+                    "pdf_first_retry_succeeded": retry_succeeded,
+                    "pdf_first_retry_reason": retry_reason,
+                    "pdf_first_claim_repair_used": claim_repair_used,
+                    "pdf_first_extract_fallback_reason": "overview_undercovered_model_answer",
+                    "pdf_first_model_used_chunk_ids": list(used_chunk_ids),
+                    "timing_ms": {"answer_call": answer_call_ms, "compose_total": _elapsed_ms(compose_started)},
+                },
+            )
+            if context_overview_fallback is not None:
+                if retry_attempted:
+                    context_overview_fallback.scoring["timing_ms"] = {
+                        "answer_call": answer_call_ms,
+                        "retry_call": retry_call_ms,
+                        "compose_total": _elapsed_ms(compose_started),
+                    }
+                return context_overview_fallback
+
         citations = _build_citations(retrieval.contexts, used_chunk_ids)
-        topic_name = _pdf_first_topic_for_chunks(chunk_ids=used_chunk_ids, context_by_chunk=context_by_chunk) or _as_optional_str(parsed.get("topic_he")) or "נושא כללי"
+        topic_context = next((context_by_chunk[chunk_id] for chunk_id in used_chunk_ids if chunk_id in context_by_chunk), None)
+        topic_evidence_text = (
+            _pdf_first_raw_text(topic_context.chunk_text or topic_context.snippet)
+            if topic_context is not None
+            else answer_text
+        )
+        topic_payload = (
+            _resolve_pdf_first_context_topic(context=topic_context, evidence_text=topic_evidence_text)
+            if topic_context is not None
+            else None
+        )
+        topic_name = (
+            (topic_payload["topic_name"] if topic_payload else None)
+            or _pdf_first_topic_for_chunks(chunk_ids=used_chunk_ids, context_by_chunk=context_by_chunk)
+            or _as_optional_str(parsed.get("topic_he"))
+            or _pdf_first_fallback_topic_from_context(topic_context)
+        )
         limitations = _normalize_pdf_first_limitations(parsed.get("limitations"))
         claim_assessments = [
             {
@@ -1406,9 +1502,11 @@ class RagAnsweringService:
             {
                 "protocol_title": citations[0].document_title if citations else "פרוטוקול",
                 "topic_name": topic_name,
+                "topic_display": topic_payload["topic_display"] if topic_payload else None,
+                "topic_evidence": topic_payload["topic_evidence"] if topic_payload else None,
                 "text": answer_text,
                 "chunk_ids": used_chunk_ids,
-                "topic_route": "pdf_first_step4_5_canonical_topic",
+                "topic_route": topic_payload["topic_route"] if topic_payload else "pdf_first_step4_5_canonical_topic",
                 "topic_score": 1.0,
                 "outcome_type": parsed.get("outcome_type"),
             }
@@ -1453,7 +1551,8 @@ class RagAnsweringService:
             limitation_count=len(result.limitations),
             provider=result.provider,
             model=result.model,
-            required_source_types=["pdf_first_protocol"],
+            required_source_types=[kind for kind in PDF_FIRST_SOURCE_KIND_ORDER if kind in retrieval.source_kinds]
+            or list(PDF_FIRST_SOURCE_KIND_ORDER),
             covered_source_types=sorted({citation.source_kind for citation in result.citations}),
             claim_count=len(claim_assessments),
             low_score_claim_count=0,
@@ -2608,10 +2707,12 @@ def _insufficient_evidence_reason(
     required_source_kinds: list[str],
 ) -> tuple[str | None, list[str]]:
     if not contexts:
-        return REASON_INSUFFICIENT_EVIDENCE, required_source_kinds
+        missing_groups = sorted({_source_kind_group(source_kind) for source_kind in required_source_kinds if _source_kind_group(source_kind)})
+        return REASON_INSUFFICIENT_EVIDENCE, missing_groups
 
-    found_sources = {context.source_kind for context in contexts}
-    missing = sorted(set(required_source_kinds) - found_sources)
+    found_groups = {_source_kind_group(context.source_kind) for context in contexts}
+    required_groups = [_source_kind_group(source_kind) for source_kind in required_source_kinds]
+    missing = sorted({group for group in required_groups if group and group not in found_groups})
     if not missing:
         return None, []
     return _reason_code_for_missing_sources(missing), missing
@@ -2634,7 +2735,11 @@ def _hebrew_refusal_message(*, reason_code: str, missing_source_kinds: list[str]
     }:
         missing_labels = {
             "protocol": "פרוטוקול",
+            "pdf_first_protocol": "פרוטוקול",
+            "pdf_first_v4_protocol": "פרוטוקול",
             "attachment": "נספח",
+            "pdf_first_attachment": "נספח",
+            "pdf_first_v4_attachment": "נספח",
             "other": "מקור נוסף",
         }
         missing_text = ", ".join(missing_labels.get(source_kind, source_kind) for source_kind in missing_source_kinds)
@@ -2726,7 +2831,7 @@ def _loads_json_object(value: str) -> dict[str, Any] | None:
 
 def _pdf_first_answer_instruction() -> str:
     return (
-        "You are a constrained Hebrew municipal protocol judge. Use only the supplied pdf_first_protocol evidence. "
+        "You are a constrained Hebrew municipal evidence judge. Use only the supplied PDF-first evidence chunks. "
         "Do not use prior knowledge, legacy decision units, or inferred topics. Interpret outcomes with the model, but every claim must cite chunk_ids. "
         "Return a strict JSON object only with keys: answer_status ('answer' or 'insufficient_evidence'), topic_he, outcome_type "
         "('approved','rejected','deferred','discussed','reported','no_outcome','unclear'), answer_he, claims, confidence, limitations. "
@@ -2743,7 +2848,7 @@ def _pdf_first_answer_instruction() -> str:
 
 def _pdf_first_answer_retry_instruction() -> str:
     return (
-        "Return one valid minified JSON object only. Use only the supplied pdf_first_protocol evidence. "
+        "Return one valid minified JSON object only. Use only the supplied PDF-first evidence chunks. "
         "Decide the outcome from the cited evidence, but emit at most one short claim. "
         "Required keys: answer_status, topic_he, outcome_type, answer_he, claims, confidence, limitations. "
         "claims must contain one object with text_he, supporting_chunk_ids, quoted_evidence. "
@@ -2777,7 +2882,7 @@ def _pdf_first_answer_payload(*, question: str, retrieval: RagRetrievalResult) -
         )
     return {
         "question_he": question,
-        "allowed_source_kind": "pdf_first_protocol",
+        "allowed_source_kinds": list(PDF_FIRST_SOURCE_KIND_ORDER),
         "allowed_chunk_ids": [context.chunk_id for context in ranked_contexts],
         "evidence_chunks": rows,
     }
@@ -2804,7 +2909,7 @@ def _compact_pdf_first_answer_payload(payload: dict[str, Any]) -> dict[str, Any]
             break
     return {
         "question_he": payload.get("question_he"),
-        "allowed_source_kind": "pdf_first_protocol",
+        "allowed_source_kinds": payload.get("allowed_source_kinds") or list(PDF_FIRST_SOURCE_KIND_ORDER),
         "allowed_chunk_ids": payload.get("allowed_chunk_ids"),
         "evidence_chunks": compact_chunks,
     }
@@ -2876,6 +2981,388 @@ def _pdf_first_raw_text(value: str) -> str:
     return " ".join(text.split(marker, 1)[1].split()).strip()
 
 
+def _build_pdf_first_context_overview_fallback(
+    *,
+    question: str,
+    retrieval: RagRetrievalResult,
+    provider: str | None,
+    model: str | None,
+    scoring: dict[str, Any],
+) -> RagAnswerResult | None:
+    if not _pdf_first_overview_scope_applies(retrieval):
+        return None
+
+    selected_contexts = _pdf_first_overview_contexts(retrieval=retrieval)
+    if not selected_contexts:
+        return None
+
+    sections: list[dict[str, Any]] = []
+    claim_assessments: list[dict[str, Any]] = []
+    used_chunk_ids: list[str] = []
+    for context in selected_contexts:
+        enrichment_contexts = _pdf_first_reference_enrichment_contexts(retrieval=retrieval, context=context)
+        evidence_groups = [(item, [context.chunk_id, item.chunk_id]) for item in enrichment_contexts] or [(context, [context.chunk_id])]
+        for evidence_context, chunk_ids in evidence_groups:
+            raw_text = _pdf_first_best_evidence_text(evidence_context)
+            text = _clean_pdf_first_visible_quote(raw_text[:520])
+            if not text:
+                continue
+            topic_payload = _resolve_pdf_first_context_topic(context=evidence_context, evidence_text=text)
+            section = _set_section_topic_fields(
+                {
+                    "protocol_title": context.document_title,
+                    "topic_name": topic_payload["topic_name"],
+                    "topic_display": topic_payload["topic_display"],
+                    "topic_evidence": topic_payload["topic_evidence"],
+                    "text": text,
+                    "chunk_ids": chunk_ids,
+                    "topic_route": topic_payload["topic_route"],
+                    "topic_score": 0.72,
+                    "outcome_type": "discussed",
+                }
+            )
+            sections.append(section)
+            for chunk_id in chunk_ids:
+                if chunk_id not in used_chunk_ids:
+                    used_chunk_ids.append(chunk_id)
+            claim_assessments.append(
+                {
+                    "text": text,
+                    "citation_chunk_ids": chunk_ids,
+                    "score": 0.72,
+                    "semantic_source": "pdf_first_context_extract_fallback",
+                    "selected_for_answer": True,
+                    "quoted_evidence": [text],
+                }
+            )
+
+    if not sections or not used_chunk_ids:
+        return None
+    answer = _compose_answer_from_sections(sections)
+    if not answer:
+        return None
+    return RagAnswerResult(
+        status="answer",
+        answer=answer,
+        extended_answer=answer,
+        answer_sections=sections,
+        extended_answer_sections=sections,
+        citations=_build_citations(retrieval.contexts, used_chunk_ids),
+        claim_assessments=claim_assessments,
+        limitations=["התשובה נבנתה כתקציר חילוצי מתוך קטעים שנשלפו, משום שמחולל התשובה לא החזיר כיסוי מספק לכל הנושאים שנשלפו."],
+        provider=provider,
+        model=model,
+        scoring=dict(scoring),
+    )
+
+
+def _pdf_first_model_answer_undercovered_overview(*, retrieval: RagRetrievalResult, used_chunk_ids: list[str]) -> bool:
+    if not _pdf_first_overview_scope_applies(retrieval):
+        return False
+    selected_contexts = _pdf_first_overview_contexts(retrieval=retrieval)
+    if len(selected_contexts) < 2:
+        return False
+    selected_chunk_ids = {context.chunk_id for context in selected_contexts}
+    covered_count = len(selected_chunk_ids & set(used_chunk_ids))
+    required_count = min(3, len(selected_chunk_ids))
+    return covered_count < required_count
+
+
+def _pdf_first_overview_scope_applies(retrieval: RagRetrievalResult) -> bool:
+    ask_scope = retrieval.debug_info.get("ask_scope") if isinstance(retrieval.debug_info, dict) else None
+    if not isinstance(ask_scope, dict):
+        return False
+    date_scope = ask_scope.get("date_scope")
+    retrieval_query = ask_scope.get("retrieval_query")
+    if not isinstance(date_scope, dict) or not bool(date_scope.get("applied")):
+        return False
+    if not isinstance(retrieval_query, dict) or not bool(retrieval_query.get("expanded")):
+        return False
+    return True
+
+
+def _pdf_first_overview_contexts(*, retrieval: RagRetrievalResult, limit: int = 5) -> list[RagContextChunk]:
+    selected_contexts: list[RagContextChunk] = []
+    seen_texts: set[str] = set()
+    enrichment_detail_ids = _pdf_first_reference_enrichment_detail_ids(retrieval)
+    for context in retrieval.contexts:
+        if context.source_kind not in PDF_FIRST_SOURCE_KINDS:
+            continue
+        if context.chunk_id in enrichment_detail_ids:
+            continue
+        role = _pdf_first_structural_role(context) or ""
+        if role == "metadata":
+            continue
+        raw_text = _pdf_first_best_evidence_text(context)
+        compact = _clean_pdf_first_visible_quote(raw_text[:360])
+        normalized = normalize_for_search(compact)
+        if len(compact) < 24 or not normalized or normalized in seen_texts:
+            continue
+        seen_texts.add(normalized)
+        selected_contexts.append(context)
+        if len(selected_contexts) >= limit:
+            break
+    return selected_contexts
+
+
+def _resolve_pdf_first_context_topic(*, context: RagContextChunk, evidence_text: str) -> dict[str, Any]:
+    root = _first_pdf_first_topic_label(
+        [
+            *context.semantic_topic_labels,
+            context.primary_topic,
+            _pdf_first_context_topic_from_path(context),
+            *_pdf_first_canonical_topics_from_text(context.chunk_text or context.snippet),
+        ],
+        allow_broad=True,
+    )
+
+    candidates: list[dict[str, Any]] = []
+    for label in _pdf_first_visible_topic_candidates(evidence_text):
+        candidates.append({"label": label, "route": "visible_cited_text", "score": 1.0})
+    for label in _pdf_first_canonical_topics_from_text(context.chunk_text or context.snippet):
+        candidates.append({"label": label, "route": "chunk_canonical_topic", "score": 0.78})
+    for label in [context.primary_topic, *context.secondary_topics, *context.semantic_topic_labels, _pdf_first_context_topic_from_path(context)]:
+        candidates.append({"label": label, "route": "stored_topic_evidence", "score": 0.62})
+
+    best = _best_pdf_first_topic_candidate(candidates, root_label=root or "")
+    if root is None:
+        root = best["label"] if best else _pdf_first_fallback_topic_from_context(context)
+    display = best["label"] if best else root
+    route = best["route"] if best else "stored_root_topic"
+    if root is None or display is None:
+        return {
+            "topic_name": None,
+            "topic_display": None,
+            "topic_route": "pdf_first_context_extract_fallback:no_supported_topic",
+            "topic_evidence": {
+                "root": None,
+                "display": None,
+                "route": "no_supported_topic",
+                "broad_root": False,
+                "root_relation": "no_supported_topic",
+                "candidates": [],
+            },
+        }
+    root_relation = _pdf_first_root_display_relation(root=root, display=display)
+    if root_relation == "equivalent_root_child_collapsed":
+        topic_name = display
+    elif root_relation == "supported_root_child":
+        topic_name = f"{root} > {display}"
+    elif root_relation == "unrelated_broad_root_suppressed":
+        topic_name = display
+    elif route == "visible_cited_text" and _pdf_first_topic_equivalence_key(display) != _pdf_first_topic_equivalence_key(root):
+        topic_name = display
+        root_relation = "visible_topic_overrode_unrelated_stored_root"
+    else:
+        topic_name = root
+        display = root
+
+    return {
+        "topic_name": topic_name,
+        "topic_display": display,
+        "topic_route": f"pdf_first_context_extract_fallback:{route}",
+        "topic_evidence": {
+            "root": root,
+            "display": display,
+            "route": route,
+            "broad_root": _is_pdf_first_broad_topic_label(root),
+            "root_relation": root_relation,
+            "candidates": [
+                {"label": candidate["label"], "route": candidate["route"], "score": candidate["score"]}
+                for candidate in _rank_pdf_first_topic_candidates(candidates, root_label=root)[:6]
+            ],
+        },
+    }
+
+
+def _first_pdf_first_topic_label(values: list[str | None], *, allow_broad: bool) -> str | None:
+    for value in values:
+        label = _clean_pdf_first_topic_label(value)
+        if not label:
+            continue
+        if not allow_broad and _is_pdf_first_broad_topic_label(label):
+            continue
+        return label
+    return None
+
+
+def _best_pdf_first_topic_candidate(candidates: list[dict[str, Any]], *, root_label: str) -> dict[str, Any] | None:
+    ranked = _rank_pdf_first_topic_candidates(candidates, root_label=root_label)
+    return ranked[0] if ranked else None
+
+
+def _rank_pdf_first_topic_candidates(candidates: list[dict[str, Any]], *, root_label: str) -> list[dict[str, Any]]:
+    ranked: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    root_norm = _pdf_first_topic_equivalence_key(root_label)
+    for candidate in candidates:
+        label = _clean_pdf_first_topic_label(candidate.get("label"))
+        if not label:
+            continue
+        norm = _pdf_first_topic_equivalence_key(label)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        score = float(candidate.get("score") or 0.0)
+        if _is_pdf_first_broad_topic_label(label):
+            score -= 0.35
+        if norm == root_norm:
+            score -= 0.2
+        if len(_hebrew_tokens(label)) >= 3:
+            score += 0.08
+        ranked.append({"label": label, "route": str(candidate.get("route") or "unknown"), "score": round(score, 4)})
+    ranked.sort(key=lambda item: item["score"], reverse=True)
+    return ranked
+
+
+def _pdf_first_visible_topic_candidates(value: str) -> list[str]:
+    compact = " ".join(str(value or "").split())
+    if not compact:
+        return []
+    patterns = [
+        r"שאיל(?:תא|תה)\s+[^.;\n]{0,120}?בנושא\s+[\"'׳״”]*([^\"'׳״”();.\n]{3,120})",
+        r"פרוטוקול\s+מישיבת\s+([^.;:\n]{3,120})",
+        r"פרוטוקול\s+ועדת\s+([^.;:\n]{3,120})",
+        r"החלטות\s+([^.;:\n]{3,140}?)(?=\s+מחליטים|\s+מאשרים|$)",
+        r"((?:הסכם|דיון חוזר לאישור הסכם|אישור הסכם)(?:\s+רשות|\s+שכירות)?\s+בין\s+עיריית\s+[^.;:,\n]{8,140}?)(?=\s+מחליטים|\s+הנושאים|\s+\*|\s+–|,|$)",
+    ]
+    candidates: list[str] = []
+    if "שאילת" in normalize_for_search(compact):
+        candidates.append("שאילתות")
+    for pattern in patterns:
+        for match in re.finditer(pattern, compact):
+            raw = match.group(1)
+            label = _clean_pdf_first_topic_label(raw)
+            if label and label not in candidates:
+                candidates.append(label)
+    return candidates
+
+
+def _pdf_first_canonical_topics_from_text(value: str) -> list[str]:
+    topics: list[str] = []
+    for match in re.finditer(r"canonical_topic_label_he:\s*([^\n]+)", str(value or "")):
+        label = _clean_pdf_first_topic_label(match.group(1))
+        if label and label not in topics:
+            topics.append(label)
+    return topics
+
+
+def _clean_pdf_first_topic_label(value: Any) -> str | None:
+    label = " ".join(str(value or "").replace("‫", " ").replace("‬", " ").split()).strip()
+    if not label:
+        return None
+    label = re.sub(r"^סעיף\s*\d+\s*[:.)-]*\s*", "", label).strip()
+    label = re.sub(r"^[\d\s'.:()\-–]+", "", label).strip()
+    label = re.sub(r"^פרוטוקול\s+מישיבת\s+", "", label).strip()
+    label = re.sub(r"^מישיבת\s+", "", label).strip()
+    label = re.sub(r"^פרוטוקול\s+", "", label).strip()
+    label = re.sub(r"^אישור\s+(?=הסכם\b)", "", label).strip()
+    label = re.sub(r"(?<=[\u0590-\u05FF])\d+(?=\s|$)", "", label).strip()
+    label = re.sub(r"\s+\d+$", "", label).strip()
+    label = re.sub(r"\s+[\u0590-\u05FF]$", "", label).strip()
+    label = re.split(r"\s+מס\s*\d|\s+מס\d|\s+מיום\s*\d|\s+מחליטים\b|\s+מאשרים\b", label, maxsplit=1)[0].strip()
+    label = re.split(r"\s+[–-]\s+", label, maxsplit=1)[0].strip()
+    label = label.strip(" .,:;()[]{}\"'׳״-–")
+    label = re.sub(r"\s+", " ", label).strip()
+    tokens = _topic_label_tokens(label)
+    if len(tokens) < 2 and _normalize_topic_label(label) not in {normalize_for_search("שאילתות")}:
+        return None
+    if len(label) > 90:
+        label = " ".join(label.split()[:10]).strip()
+    if is_low_quality_topic_label(label):
+        return None
+    return label or None
+
+
+def _is_pdf_first_broad_topic_label(value: str | None) -> bool:
+    normalized = _normalize_topic_label(value)
+    return normalized in {_normalize_topic_label(label) for label in PDF_FIRST_BROAD_TOPIC_LABELS}
+
+
+def _normalize_topic_label(value: str | None) -> str:
+    return normalize_for_search(value or "")
+
+
+def _topic_label_tokens(value: str) -> list[str]:
+    return [token for token in HEBREW_TOKEN_RE.findall(value or "") if len(token) >= 2]
+
+
+def _pdf_first_topic_equivalence_key(value: str | None) -> str:
+    label = _clean_pdf_first_topic_label(value) or str(value or "")
+    label = re.sub(r"^מישיבת\s+", "", label).strip()
+    label = re.sub(r"^פרוטוקול\s+מישיבת\s+", "", label).strip()
+    label = label.replace("'", " ").replace("׳", " ").replace("\"", " ").replace("״", " ")
+    return normalize_for_search(re.sub(r"[^\u0590-\u05FF0-9]+", " ", label))
+
+
+def _pdf_first_root_display_relation(*, root: str, display: str) -> str:
+    root_key = _pdf_first_topic_equivalence_key(root)
+    display_key = _pdf_first_topic_equivalence_key(display)
+    if not root_key or not display_key:
+        return "stored_root_topic"
+    if root_key == display_key:
+        return "equivalent_root_child_collapsed"
+    root_tokens = set(_topic_label_tokens(root_key))
+    display_tokens = set(_topic_label_tokens(display_key))
+    token_overlap = root_tokens & display_tokens
+    if token_overlap:
+        return "supported_root_child"
+    if _is_pdf_first_broad_topic_label(root):
+        return "unrelated_broad_root_suppressed"
+    return "stored_root_topic"
+
+
+def _pdf_first_best_evidence_text(context: RagContextChunk) -> str:
+    chunk_text = str(context.chunk_text or context.snippet or "")
+    summary = _pdf_first_summary_text(chunk_text)
+    raw = _pdf_first_raw_text(chunk_text)
+    if summary and len(summary) >= max(80, len(raw) // 2):
+        return summary
+    return raw or summary
+
+
+def _pdf_first_summary_text(value: str) -> str | None:
+    match = re.search(r"summary_he:\s*(.*?)(?:\n\w[\w_]*:|$)", str(value or ""), flags=re.DOTALL)
+    if not match:
+        return None
+    return " ".join(match.group(1).split()).strip() or None
+
+
+def _pdf_first_reference_enrichment_contexts(*, retrieval: RagRetrievalResult, context: RagContextChunk) -> list[RagContextChunk]:
+    enrichments = retrieval.debug_info.get("pdf_first_reference_enrichments") if isinstance(retrieval.debug_info, dict) else None
+    if not isinstance(enrichments, dict):
+        return []
+    chunk_ids = enrichments.get(context.chunk_id)
+    if not isinstance(chunk_ids, list):
+        return []
+    context_by_id = {item.chunk_id: item for item in retrieval.contexts}
+    out: list[RagContextChunk] = []
+    for chunk_id in chunk_ids:
+        enriched = context_by_id.get(str(chunk_id))
+        if enriched is not None and enriched.source_kind in PDF_FIRST_SOURCE_KINDS:
+            out.append(enriched)
+    return out
+
+
+def _pdf_first_reference_enrichment_detail_ids(retrieval: RagRetrievalResult) -> set[str]:
+    enrichments = retrieval.debug_info.get("pdf_first_reference_enrichments") if isinstance(retrieval.debug_info, dict) else None
+    if not isinstance(enrichments, dict):
+        return set()
+    out: set[str] = set()
+    for chunk_ids in enrichments.values():
+        if isinstance(chunk_ids, list):
+            out.update(str(chunk_id) for chunk_id in chunk_ids if str(chunk_id))
+    return out
+
+
+def _pdf_first_context_topic_from_path(context: RagContextChunk) -> str | None:
+    for label in context.section_path or []:
+        normalized = str(label or "").strip()
+        if normalized and normalized not in {"body", "continuation", "outline_item", "section_heading", "vote_or_result", "task_row", "metadata"}:
+            return normalized
+    return None
+
+
 def _pdf_first_structural_role(context: RagContextChunk) -> str | None:
     for label in reversed(context.section_path or []):
         normalized = str(label or "").strip()
@@ -2930,7 +3417,11 @@ def _validate_pdf_first_answer(*, parsed: dict[str, Any], context_by_chunk: dict
         else:
             quoted_evidence = []
         bad_ids = [chunk_id for chunk_id in chunk_ids if chunk_id not in context_by_chunk]
-        bad_sources = [chunk_id for chunk_id in chunk_ids if chunk_id in context_by_chunk and context_by_chunk[chunk_id].source_kind != "pdf_first_protocol"]
+        bad_sources = [
+            chunk_id
+            for chunk_id in chunk_ids
+            if chunk_id in context_by_chunk and context_by_chunk[chunk_id].source_kind not in PDF_FIRST_SOURCE_KINDS
+        ]
         bad_quotes = _pdf_first_bad_quotes(quoted_evidence=quoted_evidence, chunk_ids=chunk_ids, context_by_chunk=context_by_chunk)
         missing_detail_tokens = _pdf_first_missing_claim_detail_tokens(
             text_he=text_he,
@@ -3130,6 +3621,8 @@ def _pdf_first_topic_for_chunks(*, chunk_ids: list[str], context_by_chunk: dict[
         topic = _as_optional_str(context.primary_topic if context else None)
         if topic:
             candidates.append(topic)
+        if context is not None:
+            candidates.extend(context.semantic_topic_labels)
     best = _best_pdf_first_topic_label(candidates)
     if best:
         return best
@@ -3140,6 +3633,23 @@ def _pdf_first_topic_for_chunks(*, chunk_ids: list[str], context_by_chunk: dict[
             if candidate and candidate not in {"body", "continuation", "outline_item", "section_heading", "vote_or_result", "task_row", "metadata"}:
                 candidates.append(candidate)
     return _best_pdf_first_topic_label(candidates)
+
+
+def _pdf_first_fallback_topic_from_context(context: RagContextChunk | None) -> str | None:
+    if context is None:
+        return None
+    for value in [
+        *context.semantic_topic_labels,
+        context.primary_topic,
+        *context.secondary_topics,
+        _pdf_first_context_topic_from_path(context),
+        *_pdf_first_visible_topic_candidates(context.chunk_text or context.snippet),
+        context.document_title,
+    ]:
+        label = _clean_pdf_first_topic_label(value)
+        if label and normalize_for_search(label) != normalize_for_search("נושא כללי"):
+            return label
+    return None
 
 
 def _best_pdf_first_topic_label(candidates: list[str]) -> str | None:
@@ -3187,7 +3697,7 @@ def _normalize_chunk_ids(values: list[Any]) -> list[str]:
 
 
 def _normalize_source_kinds(source_kinds: list[str]) -> list[str]:
-    accepted = {"protocol", "pdf_first_protocol", "attachment", "other"}
+    accepted = {"protocol", "pdf_first_protocol", "pdf_first_attachment", "pdf_first_v4_protocol", "pdf_first_v4_attachment", "attachment", "other"}
     out: list[str] = []
     seen: set[str] = set()
     for source_kind in source_kinds:
@@ -3199,7 +3709,16 @@ def _normalize_source_kinds(source_kinds: list[str]) -> list[str]:
 
 
 def _is_protocol_like_source_kind(source_kind: str | None) -> bool:
-    return str(source_kind or "").strip().casefold() in {"protocol", "pdf_first_protocol"}
+    return str(source_kind or "").strip().casefold() in (PDF_FIRST_PROTOCOL_SOURCE_KINDS | PDF_FIRST_ATTACHMENT_SOURCE_KINDS)
+
+
+def _source_kind_group(source_kind: str | None) -> str:
+    normalized = str(source_kind or "").strip().casefold()
+    if normalized in PDF_FIRST_PROTOCOL_SOURCE_KINDS:
+        return "protocol"
+    if normalized in PDF_FIRST_ATTACHMENT_SOURCE_KINDS:
+        return "attachment"
+    return normalized
 
 
 def _topic_mismatch_chunk_ids(
@@ -4509,6 +5028,10 @@ def _topic_path_parts(topic_name: str | None) -> tuple[str, str | None]:
 
 def _set_section_topic_fields(section: dict[str, Any]) -> dict[str, Any]:
     topic_name = _as_optional_str(section.get("topic_name")) or ""
+    if _is_generic_topic_placeholder(topic_name):
+        topic_name = ""
+        section["topic_name"] = None
+        section["topic_display"] = None
     topic_root, topic_child = _topic_path_parts(topic_name)
     section["topic_root"] = topic_root or None
     section["topic_child"] = topic_child or None
@@ -4516,8 +5039,15 @@ def _set_section_topic_fields(section: dict[str, Any]) -> dict[str, Any]:
 
 
 def _topic_display_label(topic_name: str | None) -> str:
+    if _is_generic_topic_placeholder(topic_name):
+        return ""
     root, child = _topic_path_parts(topic_name)
     return child or root
+
+
+def _is_generic_topic_placeholder(value: str | None) -> bool:
+    normalized = normalize_for_search(value or "")
+    return normalized in {"", normalize_for_search("נושא כללי"), normalize_for_search("ללא תיוג סמנטי")}
 
 
 def _decision_request_context_for_section(
@@ -4956,12 +5486,14 @@ def _resolve_section_topic_name(
                 min_tokens=1,
                 drop_noise_tokens=True,
             )
-            or "נושא כללי"
+            or _clean_topic_candidate(section_text, max_tokens=4, min_tokens=2, drop_noise_tokens=True)
+            or "פרוטוקול"
         )
     if is_low_quality_topic_label(object_root):
         object_root = (
             _clean_topic_candidate(protocol_title, max_tokens=6, min_tokens=1, drop_noise_tokens=True)
-            or "נושא כללי"
+            or _clean_topic_candidate(section_text, max_tokens=4, min_tokens=2, drop_noise_tokens=True)
+            or "פרוטוקול"
         )
 
     decision_context_topic = _decision_context_subject_topic(decision_request_context)
@@ -5842,7 +6374,7 @@ def _protocol_root_topic(*, protocol_title: str, fallback_topic: str) -> str:
         return " ".join(filtered[:6])
 
     fallback = _clean_topic_candidate(fallback_topic, max_tokens=6, min_tokens=1)
-    return fallback or "נושא כללי"
+    return fallback or "פרוטוקול"
 
 
 def _topic_phrase_candidates_from_text(text: str) -> list[str]:
@@ -6105,11 +6637,14 @@ def _compose_answer_from_sections(answer_sections: list[dict[str, Any]]) -> str:
     parts: list[str] = []
     for section in answer_sections:
         title = _as_optional_str(section.get("protocol_title")) or "פרוטוקול"
-        topic = _topic_display_label(_as_optional_str(section.get("topic_name")) or "נושא כללי") or "נושא כללי"
+        topic = _topic_display_label(_as_optional_str(section.get("topic_name")))
         text = _as_optional_str(section.get("text"))
         if not text:
             continue
-        parts.append(f"{title}\nנושא: {topic}\n{text}")
+        if topic:
+            parts.append(f"{title}\nנושא: {topic}\n{text}")
+        else:
+            parts.append(f"{title}\n{text}")
     return "\n\n".join(parts).strip()
 
 
@@ -6146,7 +6681,7 @@ def _default_topic_name(question: str) -> str:
     tokens = sorted(_primary_topic_tokens(question))
     if tokens:
         return " ".join(tokens)
-    return question.strip() or "נושא כללי"
+    return question.strip() or "שאלה"
 
 
 def _compose_answer_from_decision_lines(lines: list[_DecisionEvidenceLine]) -> str:

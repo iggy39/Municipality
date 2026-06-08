@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine, delete
 from sqlalchemy.orm import Session
 
@@ -20,6 +21,7 @@ from municipality.search import SearchService
 BOOTSTRAP_CASE_ID = "m4-t00-bootstrap-real-life-001"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP_EVAL_SET_PATH = PROJECT_ROOT / "eval" / "gold" / "m4_rag_eval_set.json"
+pytestmark = pytest.mark.skip(reason="Legacy mixed-source bootstrap retired; /ask now uses PDF-first artifacts only.")
 
 
 def test_m4_bootstrap_case_retrieval_returns_mixed_source_citation_context() -> None:

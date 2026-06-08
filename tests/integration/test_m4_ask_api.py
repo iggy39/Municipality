@@ -8,34 +8,100 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from municipality.api import AskRequest, _run_ask, ask_playground_page, topic_tree_cache
-from municipality.chunking import build_chunks
+from municipality.api import (
+    AskRequest,
+    _ask_effective_scope,
+    _enrich_pdf_first_reference_contexts,
+    _run_ask,
+    ask_playground_page,
+    debug_playground_page,
+    topic_tree_cache,
+)
+from municipality.chunking import build_chunks, normalize_for_search
 from municipality.extraction import parse_extracted_text
 from municipality.migrations import apply_all
-from municipality.models import (
-    ArtifactSemanticLink,
-    Document,
-    DocumentVersion,
-    ExtractedDocument,
-    RetrievalArtifact,
-    SemanticNode,
-    SourceSite,
-)
+from municipality.models import Document, DocumentVersion, ExtractedDocument, RetrievalArtifact, SourceSite
 from municipality.rag_llm import MockRagProvider, RagLlmConfig, build_rag_llm_client
+from municipality.rag_retrieval import RagContextChunk
 from municipality.search import SearchService
 
 
-HE_PROTOCOL_TEXT = "הוחלט לאשר צעדי בטיחות בדרכים ברחבי העיר."
-HE_ATTACHMENT_TEXT = "מועצת העיר אישרה הסכם מול עמותת לגישור חברה ויהדות."
+HE_PDF_FIRST_TEXT = "הוחלט לאשר צעדי בטיחות בדרכים ברחבי העיר."
+PDF_FIRST_SOURCE_TYPES = ["pdf_first_protocol", "pdf_first_attachment"]
 
 
-def test_m4_ask_ui_playground_exposes_debug_threshold_panels() -> None:
+def test_m4_ask_ui_playground_exposes_rtl_dashboard() -> None:
     page = ask_playground_page()
+    assert isinstance(page, HTMLResponse)
+
+    body = bytes(page.body).decode("utf-8")
+    assert 'lang="he"' in body
+    assert 'dir="rtl"' in body
+    assert 'id="ask-playground-form"' in body
+    assert 'class="SearchHeader"' in body
+    assert 'class="startDiscoveryPanel panelCard"' in body
+    assert 'class="mainCivicWorkspace"' in body
+    assert 'class="endDetailDrawer panelCard"' in body
+    assert "מה הוחלט לגבי תכנית רובע טו?" in body
+    assert "חיפושים פופולריים" in body
+    assert "מסננים" in body
+    assert "מנהל" in body
+    assert "תשובה" in body
+    assert "תקציר" in body
+    assert "החלטות עיקריות" in body
+    assert "נושאים קשורים" in body
+    assert "מגבלות" in body
+    assert "מקרא" in body
+    assert "ציר זמן" in body
+    assert "תכנון ובנייה" in body
+    assert 'id="filter-modal" class="filterDialog" hidden' in body
+    assert 'id="popular-popover" class="popularPopover" hidden' in body
+    assert ".questionSearch input" in body
+    assert "height: 62px;" in body
+    assert "text-align: right;" in body
+    assert "padding-inline-start: 24px;" in body
+    assert "padding-inline-end: 58px;" in body
+    assert ".decisionRow" in body
+    assert "grid-template-columns: auto minmax(0, 1fr) auto;" in body
+    assert ".sourceLink" in body
+    assert "white-space: nowrap;" in body
+    assert "align-items: center;" in body
+    assert "אישור להפקדה בתנאים" in body
+    assert "נקבעו תנאים להמשך קידום התכנית והפקדתה." in body
+    assert "נדרש עדכון בדו״ח ההשפעה על הסביבה לפני שלב ההפקדה הסופית." in body
+    assert "הצגת התכנית לציבור ושמיעת ההתנגדויות בכפוף לפרסום הודעה כדין." in body
+    assert 'id="ask-debug-mode"' in body
+    assert 'id="ask-playground-thresholds"' in body
+    assert 'id="ask-playground-thresholds-json"' in body
+    assert 'id="ask-show-extended"' in body
+    assert 'id="ask-playground-extended-panel"' in body
+    assert 'id="ask-playground-answer-sections"' in body
+    assert 'id="ask-playground-provider-warning"' in body
+    assert "isAlmostEqualText" in body
+    assert "hasMeaningfulExtraInfo" in body
+    assert "topic-root" in body
+    assert "topic-child" in body
+    assert "debug mode (show PDF-first debug)" in body
+    assert 'fetch("/ask"' in body
+    assert "debug_mode" in body
+    assert "ראיות ומקורות" not in body
+    assert "מקציר" not in body
+    assert "שאלה אחת במרכז" not in body
+    assert "POC" not in body
+    assert "scopeChip" not in body
+    assert "source_types (retrieval filter)" not in body
+    assert "required_source_types (coverage gate)" not in body
+    assert '"/topic/tree/cache"' not in body
+
+
+def test_m4_debug_ui_exposes_previous_ask_playground() -> None:
+    page = debug_playground_page()
     assert isinstance(page, HTMLResponse)
 
     body = bytes(page.body).decode("utf-8")
     assert 'lang="en"' in body
     assert 'dir="ltr"' in body
+    assert "Ask Playground" in body
     assert 'id="ask-playground-form"' in body
     assert 'id="ask-debug-mode"' in body
     assert 'id="ask-playground-thresholds"' in body
@@ -48,54 +114,40 @@ def test_m4_ask_ui_playground_exposes_debug_threshold_panels() -> None:
     assert "hasMeaningfulExtraInfo" in body
     assert "topic-root" in body
     assert "topic-child" in body
-    assert "debug mode (show thresholds)" in body
+    assert "debug mode (show PDF-first debug)" in body
     assert 'fetch("/ask"' in body
     assert "debug_mode" in body
+    assert "source_types (retrieval filter)" not in body
+    assert "required_source_types (coverage gate)" not in body
     assert '"/topic/tree/cache"' not in body
 
 
-def test_m4_ask_api_returns_answer_with_citation_contract(tmp_path: Path) -> None:
-    db_path = tmp_path / "m4_ask_answer.db"
+def test_m4_ask_api_returns_pdf_first_answer_with_citation_contract(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "m4_pdf_first_ask_answer.db"
     engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
     apply_all(engine, Path("migrations"))
 
     with Session(engine) as session:
-        protocol_chunk_id, attachment_chunk_id = _seed_mixed_source_chunks(session)
+        chunk_id, document_version_id = _seed_pdf_first_chunk(session)
+        monkeypatch.setenv("RAG_ASK_DOCUMENT_VERSION_IDS", str(document_version_id))
 
         provider = MockRagProvider(
             responses_by_call_type={
                 "answer": json.dumps(
                     {
-                        "answer": "אושרו צעדי בטיחות, ובנוסף אושר הסכם עירוני.",
-                        "limitations": ["מבוסס על שני קטעים נשלפים"],
+                        "answer_status": "answer",
+                        "topic_he": "בטיחות בדרכים",
+                        "outcome_type": "approved",
+                        "answer_he": "הוחלט לאשר צעדי בטיחות בדרכים.",
                         "claims": [
                             {
-                                "text": "אושרו צעדי בטיחות",
-                                "citation_chunk_ids": [protocol_chunk_id],
-                            },
-                            {
-                                "text": "אושר הסכם עירוני",
-                                "citation_chunk_ids": [attachment_chunk_id],
-                            },
+                                "text_he": "הוחלט לאשר צעדי בטיחות בדרכים",
+                                "supporting_chunk_ids": [chunk_id],
+                                "quoted_evidence": "הוחלט לאשר צעדי בטיחות בדרכים",
+                            }
                         ],
-                    },
-                    ensure_ascii=False,
-                ),
-                "verify": json.dumps(
-                    {
-                        "all_supported": True,
-                        "claims": [
-                            {
-                                "text": "אושרו צעדי בטיחות",
-                                "supported": True,
-                                "citation_chunk_ids": [protocol_chunk_id],
-                            },
-                            {
-                                "text": "אושר הסכם עירוני",
-                                "supported": True,
-                                "citation_chunk_ids": [attachment_chunk_id],
-                            },
-                        ],
+                        "confidence": 0.92,
+                        "limitations": ["מבוסס על קטע PDF-first אחד"],
                     },
                     ensure_ascii=False,
                 ),
@@ -109,8 +161,6 @@ def test_m4_ask_api_returns_answer_with_citation_contract(tmp_path: Path) -> Non
             request=AskRequest(
                 question="מה אושר בעיר?",
                 top_k=8,
-                source_types=["protocol", "attachment"],
-                required_source_types=["protocol", "attachment"],
                 semantic_mode="off",
                 debug_mode=True,
             ),
@@ -123,195 +173,118 @@ def test_m4_ask_api_returns_answer_with_citation_contract(tmp_path: Path) -> Non
         assert payload["status"] == "answer"
         assert payload["answer"]
         assert payload["extended_answer"]
-        assert isinstance(payload["answer_sections"], list)
         assert payload["answer_sections"]
-        assert isinstance(payload["extended_answer_sections"], list)
         assert payload["extended_answer_sections"]
-        assert len(payload["extended_answer_sections"]) == len(payload["answer_sections"])
-        assert all("topic_root" in row for row in payload["answer_sections"])
-        assert all("topic_child" in row for row in payload["answer_sections"])
         assert payload["refusal"] is None
-        assert payload["citations"]
-        assert isinstance(payload["retrieval"]["retrieval_set_id"], str)
-        assert payload["retrieval"]["retrieval_set_id"]
-        assert payload["retrieval"]["semantic_mode"] == "off"
-        assert payload["retrieval"]["semantic_node_id"] is None
-        assert payload["retrieval"]["semantic_label"] is None
-        assert {row["source_type"] for row in payload["citations"]} == {"protocol", "attachment"}
-        assert all(row["document"]["id"] for row in payload["citations"])
-        assert all(row["document"]["title"] for row in payload["citations"])
-        assert all(row["document"]["url"] for row in payload["citations"])
-        assert all(row["start_page"] is not None for row in payload["citations"])
-        assert all(row["end_page"] is not None for row in payload["citations"])
-        assert isinstance(payload["limitations"], list)
-        assert payload["debug"]["enabled"] is True
+        assert {row["source_type"] for row in payload["citations"]} == {"pdf_first_protocol"}
+        assert payload["citations"][0]["chunk_id"] == chunk_id
+        assert payload["citations"][0]["document"]["version_id"] == document_version_id
+        assert payload["retrieval"]["requested_source_types"] == PDF_FIRST_SOURCE_TYPES
+        assert payload["retrieval"]["forced_pdf_first_scope"] is True
+        assert payload["retrieval"]["effective_document_version_ids"] == [document_version_id]
+        assert payload["scoring"]["answer_generation_route"] == "pdf_first_dictalm"
         thresholds = payload["debug"]["thresholds"]
-        assert isinstance(payload["debug"].get("answering_trace"), dict)
-        assert payload["debug"]["answering_trace"].items() >= payload["scoring"].items()
-        assert "similarity_external_api_called" in payload["debug"]["answering_trace"]
-        assert "timing_ms" in payload["debug"]["answering_trace"]
-        assert isinstance(payload["debug"].get("timing_ms"), dict)
-        assert thresholds["request_validation"]["top_k_min"] == 1
-        assert thresholds["request_validation"]["top_k_max"] == 50
-        assert "retrieval" in thresholds
-        assert "answering" in thresholds
-        assert "llm" in thresholds
+        assert thresholds["debug_payload_kind"] == "pdf_first_debug"
+        assert thresholds["obsolete_legacy_thresholds_hidden"] is True
+        assert payload["debug"]["retrieval_trace"]["pdf_first_direct"] is True
 
 
-def test_m4_ask_api_returns_refusal_with_reason_code_when_source_missing(tmp_path: Path) -> None:
-    db_path = tmp_path / "m4_ask_refusal.db"
+def test_m4_ask_api_returns_pdf_first_refusal_when_scope_has_no_chunks(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "m4_pdf_first_ask_refusal.db"
     engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
     apply_all(engine, Path("migrations"))
+    monkeypatch.setenv("RAG_ASK_DOCUMENT_VERSION_IDS", "999")
 
     with Session(engine) as session:
-        _seed_mixed_source_chunks(session)
-
         llm_client = build_rag_llm_client(
             config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}),
             provider=MockRagProvider(),
         )
         payload = _run_ask(
-            request=AskRequest(
-                question="מה אושר בעיר?",
-                top_k=8,
-                source_types=["protocol"],
-                required_source_types=["protocol", "attachment"],
-                semantic_mode="off",
-            ),
+            request=AskRequest(question="מה אושר בעיר?", top_k=8, semantic_mode="off", debug_mode=True),
             db=session,
             llm_client=llm_client,
         )
 
-        assert isinstance(payload["ask_request_id"], str)
-        assert payload["ask_request_id"]
         assert payload["status"] == "refusal"
         assert payload["answer"] is None
-        assert payload["extended_answer"] is None
-        assert payload["answer_sections"] == []
-        assert payload["extended_answer_sections"] == []
         assert payload["citations"] == []
-        assert isinstance(payload["retrieval"]["retrieval_set_id"], str)
-        assert payload["retrieval"]["retrieval_set_id"]
-        assert payload["retrieval"]["semantic_mode"] == "off"
-        assert payload["retrieval"]["semantic_node_id"] is None
-        assert payload["retrieval"]["semantic_label"] is None
+        assert payload["retrieval"]["requested_source_types"] == PDF_FIRST_SOURCE_TYPES
+        assert payload["retrieval"]["forced_pdf_first_scope"] is True
         assert payload["refusal"] is not None
-        assert payload["refusal"]["reason_code"] == "MISSING_ATTACHMENT_EVIDENCE"
-        assert "אין מספיק ראיות" in (payload["refusal"]["message_he"] or "")
-        assert payload["refusal"]["missing_source_types"] == ["attachment"]
+        assert payload["refusal"]["reason_code"] == "INSUFFICIENT_EVIDENCE"
+        assert payload["refusal"]["missing_source_types"] == PDF_FIRST_SOURCE_TYPES
 
 
-def test_m4_ask_api_returns_mockup_answer_with_provider_warning_when_provider_fails(tmp_path: Path) -> None:
-    db_path = tmp_path / "m4_ask_provider_warning.db"
+def test_m4_ask_scope_resolves_numeric_question_date_to_pdf_first_document(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "m4_pdf_first_ask_date_scope.db"
     engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
     apply_all(engine, Path("migrations"))
+    monkeypatch.delenv("RAG_ASK_DOCUMENT_VERSION_IDS", raising=False)
 
     with Session(engine) as session:
-        _seed_mixed_source_chunks(session)
-
-        llm_client = build_rag_llm_client(
-            config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}),
-            provider=MockRagProvider(configured=False),
-        )
-        payload = _run_ask(
-            request=AskRequest(
-                question="אילו החלטות בטיחות בדרכים התקבלו?",
-                top_k=8,
-                source_types=["protocol"],
-                required_source_types=["protocol"],
-                semantic_mode="off",
-                debug_mode=True,
-            ),
-            db=session,
-            llm_client=llm_client,
-        )
-
-        assert payload["status"] == "answer"
-        assert payload["answer_mode"] == "mockup"
-        assert payload["provider_warning"] is not None
-        assert payload["provider_warning"]["mock_mode"] is True
-        assert payload["provider_warning"]["error_code"] == "MODEL_NOT_CONFIGURED"
-        assert payload["answer_sections"]
-        assert payload["citations"]
-        assert payload["scoring"].get("degraded_upstream_failure") is True
-        assert payload["limitations"]
-        assert "ספק התשובה אינו זמין" in payload["limitations"][0]
-
-
-def test_m4_ask_api_semantic_filter_preserves_citation_first_refusal(tmp_path: Path) -> None:
-    db_path = tmp_path / "m4_ask_semantic_filter.db"
-    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
-    apply_all(engine, Path("migrations"))
-
-    with Session(engine) as session:
-        protocol_chunk_id, _attachment_chunk_id = _seed_mixed_source_chunks(session)
-
-        protocol_chunk = session.execute(
-            select(RetrievalArtifact).where(RetrievalArtifact.artifact_id == protocol_chunk_id)
-        ).scalar_one()
-        protocol_document = session.execute(
-            select(Document).where(Document.id == protocol_chunk.document_id)
-        ).scalar_one()
-
-        semantic_node = SemanticNode(
-            source_site_id=protocol_document.source_site_id,
-            node_key_hash="9" * 40,
-            node_kind="topic",
-            semantic_type="road_safety",
-            pref_label_he="בטיחות בדרכים",
-            pref_label_norm="בטיחות בדרכים",
-            parent_node_id=None,
-            depth=0,
-            specificity_score=0.81,
-            confidence=0.91,
-            support_count=1,
-            status="active",
-            first_seen_document_version_id=protocol_chunk.document_version_id,
-            last_seen_document_version_id=protocol_chunk.document_version_id,
-            metadata_json=json.dumps({"seed": True}),
-            updated_at=datetime.utcnow(),
-        )
-        session.add(semantic_node)
+        site = SourceSite(municipality_slug="ashdod", name="Ashdod", root_url="https://example.local")
+        session.add(site)
         session.flush()
-
-        session.add(
-            ArtifactSemanticLink(
-                artifact_id=protocol_chunk_id,
-                semantic_node_id=semantic_node.id,
-                confidence=0.95,
-                source_mention_id=None,
-                metadata_json=json.dumps({"seed": True}),
-            )
+        target_docver = _seed_pdf_first_scope_artifact(
+            session,
+            site_id=site.id,
+            title="ישיבת-מועצה-2-22-מיום-02-02-22-pdfua",
+            canonical_url="https://example.local/regular-2-22-02-02-22.pdf",
+            source_kind="pdf_first_protocol",
+            meeting_date="02/02/2022",
+        )
+        _seed_pdf_first_scope_artifact(
+            session,
+            site_id=site.id,
+            title="ישיבת-מועצה-3-22-מיום-02-03-22-pdfua",
+            canonical_url="https://example.local/regular-3-22-02-03-22.pdf",
+            source_kind="pdf_first_protocol",
+            meeting_date="02/03/2022",
         )
         session.commit()
 
-        llm_client = build_rag_llm_client(
-            config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}),
-            provider=MockRagProvider(),
-        )
-        payload = _run_ask(
-            request=AskRequest(
-                question="מה אושר בעיר?",
-                top_k=8,
-                source_types=["protocol", "attachment"],
-                required_source_types=["protocol", "attachment"],
-                semantic_mode="filter",
-                semantic_label="בטיחות",
-            ),
+        scope = _ask_effective_scope(
+            AskRequest(question="מה נדון בישיבת מועצה מיום 2.2.2022?", muni="ashdod"),
             db=session,
-            llm_client=llm_client,
         )
 
-        assert payload["status"] == "refusal"
-        assert payload["answer"] is None
-        assert payload["citations"] == []
-        assert payload["retrieval"]["semantic_mode"] == "filter"
-        assert payload["retrieval"]["semantic_label"] == "בטיחות"
-        assert payload["retrieval"]["semantic_node_id"] is None
-        assert payload["retrieval"]["source_types"] == ["protocol"]
-        assert payload["refusal"] is not None
-        assert payload["refusal"]["reason_code"] == "MISSING_ATTACHMENT_EVIDENCE"
-        assert payload["refusal"]["missing_source_types"] == ["attachment"]
+    assert scope["source_types"] == PDF_FIRST_SOURCE_TYPES
+    assert scope["document_version_ids"] == [target_docver]
+    assert scope["scope_reason"] == "question_date_match"
+    assert scope["date_scope"]["applied"] is True
+    assert scope["date_scope"]["extracted_dates"] == ["2022-02-02"]
+
+
+def test_m4_ask_scope_blocks_unmatched_numeric_question_date(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "m4_pdf_first_ask_date_no_match.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    apply_all(engine, Path("migrations"))
+    monkeypatch.delenv("RAG_ASK_DOCUMENT_VERSION_IDS", raising=False)
+
+    with Session(engine) as session:
+        site = SourceSite(municipality_slug="ashdod", name="Ashdod", root_url="https://example.local")
+        session.add(site)
+        session.flush()
+        _seed_pdf_first_scope_artifact(
+            session,
+            site_id=site.id,
+            title="ישיבת-מועצה-2-22-מיום-02-02-22-pdfua",
+            canonical_url="https://example.local/regular-2-22-02-02-22.pdf",
+            source_kind="pdf_first_protocol",
+            meeting_date="02/02/2022",
+        )
+        session.commit()
+
+        scope = _ask_effective_scope(
+            AskRequest(question="מה נדון בישיבת מועצה מיום 31.12.2099?", muni="ashdod"),
+            db=session,
+        )
+
+    assert scope["document_version_ids"] == []
+    assert scope["scope_reason"] == "question_date_no_match"
+    assert scope["date_scope"]["applied"] is False
+    assert scope["date_scope"]["extracted_dates"] == ["2099-12-31"]
 
 
 def test_topic_tree_cache_endpoint_is_retired() -> None:
@@ -323,92 +296,387 @@ def test_topic_tree_cache_endpoint_is_retired() -> None:
     assert payload["replacement_endpoint"] == "/semantic/tree"
 
 
-def _seed_mixed_source_chunks(session: Session) -> tuple[str, str]:
+def test_pdf_first_reference_enrichment_links_matching_attachment_only(tmp_path: Path) -> None:
+    db_path = tmp_path / "m4_pdf_first_reference_enrichment.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    apply_all(engine, Path("migrations"))
+
+    with Session(engine) as session:
+        site = SourceSite(municipality_slug="ashdod", name="Ashdod", root_url="https://example.local")
+        session.add(site)
+        session.flush()
+        protocol_doc, protocol_version = _seed_document_with_version(
+            session,
+            site_id=site.id,
+            external_id="doc:protocol-reference",
+            title="פרוטוקול מועצה",
+            doc_kind="protocol_full",
+        )
+        attachment_doc, attachment_version = _seed_document_with_version(
+            session,
+            site_id=site.id,
+            external_id="doc:attachment-reference",
+            title="נספח ועדת נכסים",
+            doc_kind="attachment",
+        )
+        unrelated_doc, unrelated_version = _seed_document_with_version(
+            session,
+            site_id=site.id,
+            external_id="doc:attachment-unrelated",
+            title="נספח ועדת נכסים אחר",
+            doc_kind="attachment",
+        )
+        protocol_extracted_id = _insert_extracted_document(
+            session,
+            document_version_id=protocol_version.id,
+            raw_text="פרוטוקול מישיבת ועדת נכסים מס1/22 מיום 17.1.22 - מצ\"ל",
+        )
+        attachment_extracted_id = _insert_extracted_document(
+            session,
+            document_version_id=attachment_version.id,
+            raw_text="פרוטוקול מישיבת ועדת נכסים מס1/22 מיום 17.1.22 פירוט שימוש בנכס עירוני מחליטים לאשר שימוש בנכס",
+        )
+        unrelated_extracted_id = _insert_extracted_document(
+            session,
+            document_version_id=unrelated_version.id,
+            raw_text="פרוטוקול מישיבת ועדת נכסים מס2/22 מיום 14.2.22 פירוט אחר",
+        )
+        _insert_pdf_first_artifact(
+            session,
+            artifact_id="pf-protocol-reference",
+            document_id=protocol_doc.id,
+            document_version_id=protocol_version.id,
+            extracted_document_id=protocol_extracted_id,
+            source_kind="pdf_first_protocol",
+            title="ועדת נכסים",
+            body="פרוטוקול מישיבת ועדת נכסים מס1/22 מיום 17.1.22 - מצ\"ל",
+        )
+        _insert_pdf_first_artifact(
+            session,
+            artifact_id="pf-attachment-reference",
+            document_id=attachment_doc.id,
+            document_version_id=attachment_version.id,
+            extracted_document_id=attachment_extracted_id,
+            source_kind="pdf_first_attachment",
+            title="ועדת נכסים",
+            body="פרוטוקול מישיבת ועדת נכסים מס1/22 מיום 17.1.22 פירוט שימוש בנכס עירוני מחליטים לאשר שימוש בנכס",
+        )
+        _insert_pdf_first_artifact(
+            session,
+            artifact_id="pf-attachment-unrelated",
+            document_id=unrelated_doc.id,
+            document_version_id=unrelated_version.id,
+            extracted_document_id=unrelated_extracted_id,
+            source_kind="pdf_first_attachment",
+            title="ועדת נכסים",
+            body="פרוטוקול מישיבת ועדת נכסים מס2/22 מיום 14.2.22 פירוט אחר",
+        )
+        session.commit()
+
+        protocol_context = RagContextChunk(
+            chunk_id="pf-protocol-reference",
+            score=0.9,
+            snippet="פרוטוקול מישיבת ועדת נכסים מס1/22 מיום 17.1.22 - מצ\"ל",
+            citation="p.1",
+            source_kind="pdf_first_protocol",
+            document_id=protocol_doc.id,
+            document_version_id=protocol_version.id,
+            document_title=protocol_doc.title_he,
+            document_url=f"/document-versions/{protocol_version.id}/source.pdf",
+            municipality_slug="ashdod",
+            start_page=1,
+            end_page=1,
+            chunk_text="raw_pdf_text: פרוטוקול מישיבת ועדת נכסים מס1/22 מיום 17.1.22 - מצ\"ל",
+            primary_topic="ועדת נכסים",
+            section_path=["ועדת נכסים", "outline_item"],
+            artifact_kind="pdf_first_retrieval_chunk",
+        )
+        contexts, debug = _enrich_pdf_first_reference_contexts(
+            db=session,
+            contexts=[protocol_context],
+            municipality_slug="ashdod",
+            allowed_document_version_ids=None,
+        )
+
+    assert debug["applied"] is True
+    assert debug["enrichment_map"] == {"pf-protocol-reference": ["pf-attachment-reference"]}
+    assert [context.chunk_id for context in contexts] == ["pf-protocol-reference", "pf-attachment-reference"]
+    assert contexts[1].source_kind == "pdf_first_attachment"
+    assert contexts[1].chunk_id != "pf-attachment-unrelated"
+
+
+def test_pdf_first_reference_enrichment_links_same_protocol_detail_by_subject(tmp_path: Path) -> None:
+    db_path = tmp_path / "m4_pdf_first_same_protocol_detail.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    apply_all(engine, Path("migrations"))
+
+    with Session(engine) as session:
+        site = SourceSite(municipality_slug="ashdod", name="Ashdod", root_url="https://example.local")
+        session.add(site)
+        session.flush()
+        protocol_doc, protocol_version = _seed_document_with_version(
+            session,
+            site_id=site.id,
+            external_id="doc:protocol-question-detail",
+            title="פרוטוקול מועצה",
+            doc_kind="protocol_full",
+        )
+        extracted_id = _insert_extracted_document(
+            session,
+            document_version_id=protocol_version.id,
+            raw_text="שאילתא של ד\"ר לחמני בנושא \"מינוי מועצה דתית\" - מצ\"ל",
+        )
+        _insert_pdf_first_artifact(
+            session,
+            artifact_id="pf-question-header",
+            document_id=protocol_doc.id,
+            document_version_id=protocol_version.id,
+            extracted_document_id=extracted_id,
+            source_kind="pdf_first_protocol",
+            title="שאילתות",
+            body="שאילתא של ד\"ר לחמני בנושא \"מינוי מועצה דתית\" - מצ\"ל",
+        )
+        _insert_pdf_first_artifact(
+            session,
+            artifact_id="pf-question-detail",
+            document_id=protocol_doc.id,
+            document_version_id=protocol_version.id,
+            extracted_document_id=extracted_id,
+            source_kind="pdf_first_protocol",
+            title="דת ושירותי דת",
+            body=(
+                "שאילתא של ד\"ר לחמני בנושא \"מינוי מועצה דתית\" גב' דינה בר אולפן מקריאה "
+                "את תשובת ראש העיר לשאילתא של ד\"ר לחמני בנושא \"מינוי מועצה דתית\""
+            ),
+        )
+        _insert_pdf_first_artifact(
+            session,
+            artifact_id="pf-question-unrelated",
+            document_id=protocol_doc.id,
+            document_version_id=protocol_version.id,
+            extracted_document_id=extracted_id,
+            source_kind="pdf_first_protocol",
+            title="שאילתות",
+            body="שאילתה של עו\"ד גלבר בנושא \"תקציב מכבי אשדוד\" תשובת ראש העיר",
+        )
+        session.commit()
+
+        protocol_context = RagContextChunk(
+            chunk_id="pf-question-header",
+            score=0.9,
+            snippet="שאילתא של ד\"ר לחמני בנושא \"מינוי מועצה דתית\" - מצ\"ל",
+            citation="p.1",
+            source_kind="pdf_first_protocol",
+            document_id=protocol_doc.id,
+            document_version_id=protocol_version.id,
+            document_title=protocol_doc.title_he,
+            document_url=f"/document-versions/{protocol_version.id}/source.pdf",
+            municipality_slug="ashdod",
+            start_page=1,
+            end_page=1,
+            chunk_text="raw_pdf_text: שאילתא של ד\"ר לחמני בנושא \"מינוי מועצה דתית\" - מצ\"ל",
+            primary_topic="שאילתות",
+            section_path=["שאילתות", "outline_item"],
+            artifact_kind="pdf_first_retrieval_chunk",
+        )
+        contexts, debug = _enrich_pdf_first_reference_contexts(
+            db=session,
+            contexts=[protocol_context],
+            municipality_slug="ashdod",
+            allowed_document_version_ids=None,
+        )
+
+    assert debug["applied"] is True
+    assert debug["enrichment_map"] == {"pf-question-header": ["pf-question-detail"]}
+    assert [context.chunk_id for context in contexts] == ["pf-question-header", "pf-question-detail"]
+    assert contexts[1].source_kind == "pdf_first_protocol"
+    assert contexts[1].chunk_id != "pf-question-unrelated"
+
+
+def _seed_pdf_first_chunk(session: Session) -> tuple[str, int]:
     site = SourceSite(municipality_slug="ashdod", name="Ashdod", root_url="https://example.local")
     session.add(site)
     session.flush()
 
-    protocol_doc = Document(
+    document = Document(
         source_site_id=site.id,
-        document_external_id="doc:m4:ask:protocol",
-        canonical_url="https://example.local/ask-protocol.pdf",
-        title_he="פרוטוקול בטיחות",
+        document_external_id="doc:m4:ask:pdf-first",
+        canonical_url="https://example.local/ask-pdf-first.pdf",
+        title_he="פרוטוקול PDF-first",
         doc_kind="protocol_full",
         mime_hint="application/pdf",
         last_seen_at=datetime.utcnow(),
     )
-    attachment_doc = Document(
-        source_site_id=site.id,
-        document_external_id="doc:m4:ask:attachment",
-        canonical_url="https://example.local/ask-attachment.pdf",
-        title_he="נספח הסכם",
-        doc_kind="attachment",
+    session.add(document)
+    session.flush()
+
+    version = DocumentVersion(
+        document_id=document.id,
+        sha256="1" * 64,
+        byte_size=10,
+        storage_uri="tree/ashdod/ask-pdf-first.pdf",
+        fetched_http_status=200,
+        fetched_mime="application/pdf",
+    )
+    session.add(version)
+    session.flush()
+
+    extracted_id = _insert_extracted_document(session, document_version_id=version.id, raw_text=HE_PDF_FIRST_TEXT)
+    _index_pdf_first_chunks(
+        SearchService(session),
+        document_id=document.id,
+        document_version_id=version.id,
+        extracted_document_id=extracted_id,
+        raw_text=HE_PDF_FIRST_TEXT,
+    )
+
+    chunk_id = session.execute(
+        select(RetrievalArtifact.artifact_id)
+        .where(RetrievalArtifact.document_version_id == version.id)
+        .where(RetrievalArtifact.source_kind == "pdf_first_protocol")
+        .order_by(RetrievalArtifact.ordinal.asc())
+    ).scalars().first()
+    if chunk_id is None:
+        raise AssertionError("seeded PDF-first ask chunk was not created")
+
+    session.commit()
+    return chunk_id, version.id
+
+
+def _seed_document_with_version(
+    session: Session,
+    *,
+    site_id: int,
+    external_id: str,
+    title: str,
+    doc_kind: str,
+) -> tuple[Document, DocumentVersion]:
+    document = Document(
+        source_site_id=site_id,
+        document_external_id=external_id,
+        canonical_url=f"https://example.local/{external_id}.pdf",
+        title_he=title,
+        doc_kind=doc_kind,
         mime_hint="application/pdf",
         last_seen_at=datetime.utcnow(),
     )
-    session.add_all([protocol_doc, attachment_doc])
+    session.add(document)
     session.flush()
-
-    protocol_ver = DocumentVersion(
-        document_id=protocol_doc.id,
-        sha256="1" * 64,
+    version = DocumentVersion(
+        document_id=document.id,
+        sha256=(external_id.replace(":", "") * 64)[:64],
         byte_size=10,
-        storage_uri="tree/ashdod/ask-protocol.pdf",
+        storage_uri=f"tree/ashdod/{external_id}.pdf",
         fetched_http_status=200,
         fetched_mime="application/pdf",
     )
-    attachment_ver = DocumentVersion(
-        document_id=attachment_doc.id,
-        sha256="2" * 64,
+    session.add(version)
+    session.flush()
+    return document, version
+
+
+def _insert_pdf_first_artifact(
+    session: Session,
+    *,
+    artifact_id: str,
+    document_id: int,
+    document_version_id: int,
+    extracted_document_id: int,
+    source_kind: str,
+    title: str,
+    body: str,
+) -> None:
+    retrieval_text = f"canonical_topic_label_he: {title}\nstructural_role: outline_item\nraw_pdf_text: {body}"
+    artifact = RetrievalArtifact(
+        artifact_id=artifact_id,
+        document_id=document_id,
+        document_version_id=document_version_id,
+        extracted_document_id=extracted_document_id,
+        section_id=None,
+        source_kind=source_kind,
+        artifact_kind="pdf_first_retrieval_chunk",
+        ordinal=1,
+        title_he=title,
+        committee_name=None,
+        meeting_date=None,
+        header_path_json=json.dumps([title, "outline_item"], ensure_ascii=False),
+        body_text=body,
+        retrieval_text=retrieval_text,
+        retrieval_text_norm=normalize_for_search(retrieval_text),
+        start_offset=0,
+        end_offset=len(body),
+        start_page=1,
+        end_page=1,
+        citation_label="p.1",
+        trigram_count=1,
+        metadata_json=None,
+    )
+    session.add(artifact)
+    session.flush()
+
+
+def _seed_pdf_first_scope_artifact(
+    session: Session,
+    *,
+    site_id: int,
+    title: str,
+    canonical_url: str,
+    source_kind: str,
+    meeting_date: str,
+) -> int:
+    document = Document(
+        source_site_id=site_id,
+        document_external_id=f"doc:{title}",
+        canonical_url=canonical_url,
+        title_he=title,
+        doc_kind="protocol_full",
+        mime_hint="application/pdf",
+        last_seen_at=datetime.utcnow(),
+    )
+    session.add(document)
+    session.flush()
+    version = DocumentVersion(
+        document_id=document.id,
+        sha256=(str(document.id) * 64)[:64],
         byte_size=10,
-        storage_uri="tree/ashdod/ask-attachment.pdf",
+        storage_uri=f"tree/ashdod/{title}.pdf",
         fetched_http_status=200,
         fetched_mime="application/pdf",
     )
-    session.add_all([protocol_ver, attachment_ver])
+    session.add(version)
     session.flush()
-
-    protocol_extracted_id = _insert_extracted_document(session, document_version_id=protocol_ver.id, raw_text=HE_PROTOCOL_TEXT)
-    attachment_extracted_id = _insert_extracted_document(
+    extracted_id = _insert_extracted_document(
         session,
-        document_version_id=attachment_ver.id,
-        raw_text=HE_ATTACHMENT_TEXT,
+        document_version_id=version.id,
+        raw_text=HE_PDF_FIRST_TEXT,
     )
-
-    search_service = SearchService(session)
-    _index_chunks(
-        search_service,
-        document_id=protocol_doc.id,
-        document_version_id=protocol_ver.id,
-        extracted_document_id=protocol_extracted_id,
-        raw_text=HE_PROTOCOL_TEXT,
-        source_kind="protocol",
+    artifact = RetrievalArtifact(
+        artifact_id=f"scope-{version.id}",
+        document_id=document.id,
+        document_version_id=version.id,
+        extracted_document_id=extracted_id,
+        section_id=None,
+        source_kind=source_kind,
+        artifact_kind="pdf_first_retrieval_chunk",
+        ordinal=1,
+        title_he="scope fixture",
+        committee_name=None,
+        meeting_date=meeting_date,
+        header_path_json=json.dumps(["scope fixture"]),
+        body_text=HE_PDF_FIRST_TEXT,
+        retrieval_text=HE_PDF_FIRST_TEXT,
+        retrieval_text_norm=HE_PDF_FIRST_TEXT,
+        start_offset=0,
+        end_offset=len(HE_PDF_FIRST_TEXT),
+        start_page=1,
+        end_page=1,
+        citation_label="p.1",
+        trigram_count=1,
+        metadata_json=None,
     )
-    _index_chunks(
-        search_service,
-        document_id=attachment_doc.id,
-        document_version_id=attachment_ver.id,
-        extracted_document_id=attachment_extracted_id,
-        raw_text=HE_ATTACHMENT_TEXT,
-        source_kind="attachment",
-    )
-
-    protocol_chunk = session.execute(
-        select(RetrievalArtifact.artifact_id)
-        .where(RetrievalArtifact.document_version_id == protocol_ver.id)
-        .order_by(RetrievalArtifact.ordinal.asc())
-    ).scalars().first()
-    attachment_chunk = session.execute(
-        select(RetrievalArtifact.artifact_id)
-        .where(RetrievalArtifact.document_version_id == attachment_ver.id)
-        .order_by(RetrievalArtifact.ordinal.asc())
-    ).scalars().first()
-
-    if protocol_chunk is None or attachment_chunk is None:
-        raise AssertionError("seeded M4 ask chunks were not created")
-
-    session.commit()
-    return protocol_chunk, attachment_chunk
+    session.add(artifact)
+    session.flush()
+    return int(version.id)
 
 
 def _insert_extracted_document(session: Session, *, document_version_id: int, raw_text: str) -> int:
@@ -445,26 +713,29 @@ def _insert_extracted_document(session: Session, *, document_version_id: int, ra
     return row.id
 
 
-def _index_chunks(
+def _index_pdf_first_chunks(
     search_service: SearchService,
     *,
     document_id: int,
     document_version_id: int,
     extracted_document_id: int,
     raw_text: str,
-    source_kind: str,
 ) -> None:
     full_text, _pages, citation_map = parse_extracted_text(raw_text)
     chunks = build_chunks(
         document_version_id=document_version_id,
         text=full_text,
         citation_map=citation_map,
-        source_kind=source_kind,
+        source_kind="pdf_first_protocol",
     )
+    for chunk in chunks:
+        chunk["artifact_kind"] = "pdf_first_retrieval_chunk"
+        chunk["title_he"] = "בטיחות בדרכים"
+        chunk["header_path_json"] = json.dumps(["בטיחות בדרכים", "vote_or_result"], ensure_ascii=False)
     search_service.replace_document_chunks(
         document_id=document_id,
         document_version_id=document_version_id,
         extracted_document_id=extracted_document_id,
-        source_kind=source_kind,
+        source_kind="pdf_first_protocol",
         chunks=chunks,
     )

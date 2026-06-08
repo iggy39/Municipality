@@ -7,13 +7,13 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Generator, cast
+from typing import Any, Generator
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 import httpx
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, inspect, select
+from sqlalchemy import and_, func, inspect, or_, select
 
 from municipality.chunking import normalize_for_search
 from municipality.db import build_engine, build_session_factory
@@ -32,7 +32,6 @@ from municipality.models import (
     MeetingDocumentLink,
     PipelineRun,
     PipelineRunStep,
-    RagAnswerCache,
     RetrievalArtifact,
     SemanticAlias,
     SemanticCandidateReject,
@@ -46,7 +45,6 @@ from municipality.models import (
 from municipality.pipeline import PipelineService
 from municipality.processing import ProcessingService
 from municipality.rag_arch import RagArchitectureConfig
-from municipality.rag_answer_cache import RagAnswerCacheService, is_degraded_answer_cache_payload
 from municipality.rag_answering import RagAnswerResult, RagAnsweringService, RagCitation, rag_answering_thresholds_snapshot
 from municipality.rag_backend import build_embedding_backend, build_search_backend
 from municipality.rag_llm import RagLlmClient, RagLlmConfig, build_rag_llm_client
@@ -66,7 +64,6 @@ from municipality.rag_dashboard_mock import (
 from municipality.rag_dashboard_ui import render_rag_dashboard_page
 from municipality.search import search_thresholds_snapshot
 from municipality.semantic_canonicalization import SemanticCanonicalizer
-from municipality.topic_label_quality import is_low_quality_topic_label
 
 
 def _default_html_fetcher(url: str) -> str:
@@ -80,9 +77,10 @@ engine = build_engine()
 SessionLocal = build_session_factory(engine)
 app = FastAPI(title="Municipality API")
 TOPIC_SEMANTIC_CANONICALIZER = SemanticCanonicalizer()
-PDF_FIRST_ASK_SOURCE_TYPES = ["pdf_first_protocol"]
-PDF_FIRST_ASK_DOCUMENT_VERSION_IDS = [21, 22, 23]
-PDF_FIRST_ASK_DOCUMENT_IDS = [21, 22, 23]
+PDF_FIRST_ASK_SOURCE_TYPES = ["pdf_first_protocol", "pdf_first_attachment", "pdf_first_v4_protocol", "pdf_first_v4_attachment"]
+PDF_FIRST_PROTOCOL_SOURCE_TYPES = {"pdf_first_protocol", "pdf_first_v4_protocol"}
+PDF_FIRST_ATTACHMENT_SOURCE_TYPES = {"pdf_first_attachment", "pdf_first_v4_attachment"}
+PDF_FIRST_RETRIEVAL_ARTIFACT_KINDS = {"pdf_first_retrieval_chunk", "pdf_first_v4_retrieval_chunk"}
 
 
 def get_db() -> Generator:
@@ -138,18 +136,47 @@ def _loads_json(value: str | None) -> dict | list | None:
     return None
 
 
-def _semantic_node_payload(node: SemanticNode, *, child_count: int = 0) -> dict:
+def _semantic_node_payload(
+    node: SemanticNode,
+    *,
+    child_count: int = 0,
+    child_ids: list[int] | None = None,
+    sibling_ids: list[int] | None = None,
+    path_ids: list[int] | None = None,
+    sort_order: int | None = None,
+) -> dict:
+    metadata = _loads_json(node.metadata_json)
+    metadata_dict = metadata if isinstance(metadata, dict) else {}
     return {
         "id": node.id,
         "label": node.pref_label_he,
+        "label_he": node.pref_label_he,
+        "pref_label_he": node.pref_label_he,
         "label_norm": node.pref_label_norm,
         "kind": node.node_kind,
         "semantic_type": node.semantic_type,
         "depth": node.depth,
         "parent_id": node.parent_node_id,
+        "child_ids": child_ids or [],
+        "sibling_ids": sibling_ids or [],
+        "path_ids": path_ids or [node.id],
+        "sort_order": sort_order if sort_order is not None else 0,
+        "generated_label": node.pref_label_he,
+        "curated_label": metadata_dict.get("curated_label"),
+        "origin": metadata_dict.get("provenance") or metadata_dict.get("origin"),
+        "curation_status": metadata_dict.get("curation_status") or ("approved" if node.status == "active" else node.status),
+        "hidden_from_public": bool(metadata_dict.get("hidden_from_public") or node.status != "active"),
+        "category_ids": [metadata_dict.get("root_topic_id")] if metadata_dict.get("root_topic_id") else [],
+        "primary_category_id": metadata_dict.get("root_topic_id"),
         "specificity_score": node.specificity_score,
         "confidence": node.confidence,
         "support_count": node.support_count,
+        "mention_count": node.support_count,
+        "decision_count": 0,
+        "recent_activity_at": None,
+        "time_rollup": {},
+        "decision_rollups": {},
+        "evidence_refs": [],
         "status": node.status,
         "child_count": child_count,
     }
@@ -160,8 +187,6 @@ class AskRequest(BaseModel):
     model_name: str | None = None
     muni: str | None = None
     top_k: int = Field(default=8, ge=1, le=50)
-    source_types: list[str] | None = None
-    required_source_types: list[str] | None = None
     year: int | None = None
     topic: str | None = None
     semantic_node_id: int | None = None
@@ -172,19 +197,559 @@ class AskRequest(BaseModel):
     document_version_id: int | None = Field(default=None, ge=1)
     pipeline_run_id: str | None = None
     debug_mode: bool = False
-    disable_answer_cache: bool = False
 
 
-def _ask_effective_scope(request: AskRequest) -> dict[str, Any]:
+def _ask_effective_scope(request: AskRequest, *, db=None) -> dict[str, Any]:
     """Force /ask onto the accepted PDF-first pipeline artifacts only."""
-    allowed_docvers = _env_int_list("RAG_ASK_DOCUMENT_VERSION_IDS") or PDF_FIRST_ASK_DOCUMENT_VERSION_IDS
+    allowed_docvers = _pdf_first_allowed_document_version_ids()
+    requested_docver = int(request.document_version_id) if request.document_version_id else None
+    requested_doc_id = int(request.document_id) if request.document_id else None
+    document_version_ids = list(allowed_docvers) if allowed_docvers is not None else None
+    scope_reason = "env_allowed_document_versions" if allowed_docvers is not None else "all_pdf_first_document_versions"
+    date_scope = _empty_pdf_first_date_scope_debug(question=request.question)
+
+    if requested_docver is not None:
+        if allowed_docvers is None or requested_docver in allowed_docvers:
+            document_version_ids = [requested_docver]
+            scope_reason = "request_document_version_id"
+        else:
+            document_version_ids = []
+            scope_reason = "request_document_version_id_outside_allowed_scope"
+    elif db is not None:
+        date_scope = _resolve_pdf_first_date_scope(
+            db=db,
+            request=request,
+            allowed_document_version_ids=allowed_docvers,
+        )
+        if date_scope["applied"]:
+            document_version_ids = list(date_scope["document_version_ids"])
+            scope_reason = "question_date_match"
+        elif date_scope.get("extracted_dates") and date_scope.get("reason") == "no_matching_pdf_first_document":
+            document_version_ids = []
+            scope_reason = "question_date_no_match"
+
     return {
         "source_types": list(PDF_FIRST_ASK_SOURCE_TYPES),
         "required_source_types": list(PDF_FIRST_ASK_SOURCE_TYPES),
-        "document_ids": None,
-        "document_version_ids": allowed_docvers,
+        "document_ids": [requested_doc_id] if requested_doc_id is not None else None,
+        "document_version_ids": document_version_ids,
         "forced_pdf_first_scope": True,
+        "scope_reason": scope_reason,
+        "date_scope": date_scope,
     }
+
+
+NUMERIC_DATE_RE = re.compile(r"(?<!\d)(\d{1,2})[./-](\d{1,2})[./-](\d{2}|\d{4})(?!\d)")
+
+
+def _empty_pdf_first_date_scope_debug(*, question: str) -> dict[str, Any]:
+    extracted = _extract_numeric_date_specs(question)
+    return {
+        "applied": False,
+        "reason": "no_numeric_date" if not extracted else "not_resolved",
+        "extracted_dates": [date["iso"] for date in extracted],
+        "document_version_ids": [],
+        "candidates": [],
+    }
+
+
+def _extract_numeric_date_specs(value: str | None) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for match in NUMERIC_DATE_RE.finditer(value or ""):
+        day = int(match.group(1))
+        month = int(match.group(2))
+        year = int(match.group(3))
+        if year < 100:
+            year += 2000
+        if not (1 <= day <= 31 and 1 <= month <= 12 and 1900 <= year <= 2100):
+            continue
+        iso = f"{year:04d}-{month:02d}-{day:02d}"
+        if iso in seen:
+            continue
+        seen.add(iso)
+        yy = year % 100
+        variants = set()
+        for sep in (".", "/", "-"):
+            variants.update(
+                {
+                    f"{day}{sep}{month}{sep}{year}",
+                    f"{day:02d}{sep}{month:02d}{sep}{year}",
+                    f"{day}{sep}{month}{sep}{yy:02d}",
+                    f"{day:02d}{sep}{month:02d}{sep}{yy:02d}",
+                }
+            )
+        out.append({"iso": iso, "day": day, "month": month, "year": year, "variants": sorted(variants, key=len, reverse=True)})
+    return out
+
+
+def _resolve_pdf_first_date_scope(
+    *,
+    db,
+    request: AskRequest,
+    allowed_document_version_ids: list[int] | None,
+) -> dict[str, Any]:
+    extracted = _extract_numeric_date_specs(request.question)
+    if not extracted:
+        return _empty_pdf_first_date_scope_debug(question=request.question)
+
+    stmt = (
+        select(
+            RetrievalArtifact.document_version_id,
+            RetrievalArtifact.document_id,
+            RetrievalArtifact.source_kind,
+            Document.title_he,
+            Document.canonical_url,
+            DocumentVersion.storage_uri,
+            func.group_concat(func.distinct(RetrievalArtifact.meeting_date)),
+        )
+        .select_from(RetrievalArtifact)
+        .join(Document, RetrievalArtifact.document_id == Document.id)
+        .join(DocumentVersion, RetrievalArtifact.document_version_id == DocumentVersion.id)
+        .join(SourceSite, Document.source_site_id == SourceSite.id)
+        .where(RetrievalArtifact.source_kind.in_(PDF_FIRST_ASK_SOURCE_TYPES))
+        .group_by(
+            RetrievalArtifact.document_version_id,
+            RetrievalArtifact.document_id,
+            RetrievalArtifact.source_kind,
+            Document.title_he,
+            Document.canonical_url,
+            DocumentVersion.storage_uri,
+        )
+    )
+    if request.muni:
+        stmt = stmt.where(SourceSite.municipality_slug == request.muni)
+    if request.document_id:
+        stmt = stmt.where(RetrievalArtifact.document_id == int(request.document_id))
+    if allowed_document_version_ids is not None:
+        stmt = stmt.where(RetrievalArtifact.document_version_id.in_(allowed_document_version_ids))
+
+    candidates = []
+    matched_docvers: dict[int, dict[str, Any]] = {}
+    for row in db.execute(stmt).all():
+        document_version_id, document_id, source_kind, title, canonical_url, storage_uri, meeting_dates = row
+        searchable_document_text = " ".join(str(part or "") for part in (title, canonical_url, storage_uri))
+        searchable_meeting_dates = str(meeting_dates or "")
+        reasons: list[str] = []
+        matched_iso = None
+        for date_spec in extracted:
+            variants = list(date_spec["variants"])
+            if any(variant in searchable_document_text for variant in variants):
+                reasons.append("document_metadata_date_match")
+                matched_iso = date_spec["iso"]
+            if _date_text_matches_iso(searchable_meeting_dates, date_spec["iso"]):
+                reasons.append("artifact_meeting_date_match")
+                matched_iso = date_spec["iso"]
+        if not reasons:
+            continue
+        docver_id = int(document_version_id)
+        candidate = matched_docvers.setdefault(
+            docver_id,
+            {
+                "document_version_id": docver_id,
+                "document_id": int(document_id),
+                "source_types": [],
+                "matched_date": matched_iso,
+                "reasons": [],
+                "title": str(title or ""),
+            },
+        )
+        candidate["source_types"].append(str(source_kind))
+        for reason in reasons:
+            if reason not in candidate["reasons"]:
+                candidate["reasons"].append(reason)
+
+    candidates = sorted(matched_docvers.values(), key=lambda item: item["document_version_id"])
+    metadata_candidates = [
+        candidate for candidate in candidates if "document_metadata_date_match" in set(candidate.get("reasons") or [])
+    ]
+    if metadata_candidates:
+        candidates = metadata_candidates
+    if not candidates:
+        return {
+            "applied": False,
+            "reason": "no_matching_pdf_first_document",
+            "extracted_dates": [date["iso"] for date in extracted],
+            "document_version_ids": [],
+            "candidates": [],
+        }
+
+    matched_ids = [int(candidate["document_version_id"]) for candidate in candidates]
+    return {
+        "applied": True,
+        "reason": "matched_pdf_first_document_date",
+        "extracted_dates": [date["iso"] for date in extracted],
+        "document_version_ids": matched_ids,
+        "candidates": candidates,
+    }
+
+
+def _date_text_matches_iso(value: str, iso: str) -> bool:
+    return any(date_spec["iso"] == iso for date_spec in _extract_numeric_date_specs(value))
+
+
+def _ask_retrieval_query(*, request: AskRequest, effective_scope: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    date_scope = effective_scope.get("date_scope") if isinstance(effective_scope.get("date_scope"), dict) else {}
+    if not bool(date_scope.get("applied")) or not _is_meeting_overview_question(request.question):
+        return request.question, {"expanded": False, "reason": None, "query": request.question}
+    expanded_query = f"{request.question} נושאים לדיון החלטות סעיפים"
+    return expanded_query, {"expanded": True, "reason": "date_scoped_meeting_overview", "query": expanded_query}
+
+
+def _is_meeting_overview_question(question: str) -> bool:
+    normalized = normalize_for_search(question)
+    if not normalized:
+        return False
+    has_overview_marker = any(marker in normalized for marker in ("נדון", "נדונו", "נידון", "נושאים", "סעיפים", "החלטות"))
+    has_meeting_marker = any(marker in normalized for marker in ("ישיבה", "ישיבת", "מועצה", "פרוטוקול"))
+    return has_overview_marker and has_meeting_marker
+
+
+def _enrich_pdf_first_reference_contexts(
+    *,
+    db,
+    contexts: list[RagContextChunk],
+    municipality_slug: str | None,
+    allowed_document_version_ids: list[int] | None,
+) -> tuple[list[RagContextChunk], dict[str, Any]]:
+    if not contexts:
+        return contexts, {"applied": False, "enrichment_map": {}, "candidate_count": 0, "linked_count": 0}
+
+    context_ids = {context.chunk_id for context in contexts}
+    enriched_contexts = list(contexts)
+    enrichment_map: dict[str, list[str]] = {}
+    candidate_count = 0
+    for context in contexts:
+        if context.source_kind not in PDF_FIRST_PROTOCOL_SOURCE_TYPES:
+            continue
+        specs = _pdf_first_reference_specs_for_context(context)
+        if not specs:
+            continue
+        for spec in specs[:3]:
+            matches = _find_pdf_first_reference_matches(
+                db=db,
+                spec=spec,
+                protocol_context=context,
+                municipality_slug=municipality_slug or context.municipality_slug,
+                allowed_document_version_ids=allowed_document_version_ids,
+            )
+            candidate_count += len(matches)
+            if not matches:
+                continue
+            best = matches[0]
+            if best.chunk_id in context_ids:
+                continue
+            context_ids.add(best.chunk_id)
+            enriched_contexts.append(best)
+            enrichment_map.setdefault(context.chunk_id, []).append(best.chunk_id)
+            if len(enrichment_map.get(context.chunk_id, [])) >= 5:
+                break
+
+    return enriched_contexts, {
+        "applied": bool(enrichment_map),
+        "enrichment_map": enrichment_map,
+        "candidate_count": candidate_count,
+        "linked_count": sum(len(values) for values in enrichment_map.values()),
+    }
+
+
+def _pdf_first_reference_specs_for_context(context: RagContextChunk) -> list[dict[str, Any]]:
+    text = _api_pdf_first_raw_text(context.chunk_text or context.snippet)
+    if not text:
+        return []
+    compact = " ".join(text.split())
+    specs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    protocol_pattern = re.compile(
+        r"פרוטוקול\s+מישיבת\s+(.{3,120}?)(?=\s+מס\s*\d|\s+מס\d|\s+מיום\s*\d|[.;\n]|$)"
+    )
+    for match in protocol_pattern.finditer(compact):
+        start = match.start()
+        tail = compact[start : start + 180]
+        label = _api_clean_pdf_first_reference_label(match.group(1))
+        if not label:
+            continue
+        number_match = re.search(r"מס\s*([0-9]+(?:/[0-9]+)?)", tail)
+        date_match = re.search(r"מיום\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4})", tail)
+        key = f"protocol:{_api_topic_equivalence_key(label)}:{number_match.group(1) if number_match else ''}:{date_match.group(1) if date_match else ''}"
+        if key in seen:
+            continue
+        seen.add(key)
+        specs.append(
+            {
+                "kind": "committee_protocol",
+                "label": label,
+                "number": number_match.group(1) if number_match else None,
+                "date": date_match.group(1) if date_match else None,
+                "requires_disambiguator": True,
+            }
+        )
+
+    agreement_pattern = re.compile(
+        r"((?:הסכם|אישור\s+הסכם|דיון\s+חוזר\s+לאישור\s+הסכם)[^.;\n]{8,160}?)(?=\s+מצ\"?ל|\s+\*|[.;\n]|$)"
+    )
+    for match in agreement_pattern.finditer(compact):
+        label = _api_clean_pdf_first_reference_label(match.group(1))
+        if not label:
+            continue
+        key = f"agreement:{_api_topic_equivalence_key(label)}"
+        if key in seen:
+            continue
+        seen.add(key)
+        specs.append({"kind": "agreement", "label": label, "number": None, "date": None, "requires_disambiguator": False})
+    question_pattern = re.compile(
+        r"שאיל(?:תא|תה)\s+[^.;\n]{0,120}?בנושא\s+[\"'׳״”]*([^\"'׳״”();.\n]{3,120})"
+    )
+    for match in question_pattern.finditer(compact):
+        start = match.start()
+        tail = compact[start : start + 180]
+        label = _api_clean_pdf_first_reference_label(match.group(1))
+        if not label:
+            continue
+        date_match = re.search(r"[(:\-–]\s*([0-9]{1,2}[./-][0-9]{1,2}[./-][0-9]{2,4})\s*[):\-–]", tail)
+        requester_match = re.search(r"שאיל(?:תא|תה)\s+של\s+([^\"'׳״”]{2,60}?)(?=\s+בנושא)", tail)
+        requester = _api_clean_pdf_first_reference_label(requester_match.group(1)) if requester_match else None
+        key = f"question:{_api_topic_equivalence_key(label)}:{_api_topic_equivalence_key(requester)}:{date_match.group(1) if date_match else ''}"
+        if key in seen:
+            continue
+        seen.add(key)
+        specs.append(
+            {
+                "kind": "question",
+                "label": label,
+                "number": None,
+                "date": date_match.group(1) if date_match else None,
+                "requester": requester,
+                "requires_disambiguator": False,
+            }
+        )
+    return specs
+
+
+def _find_pdf_first_reference_matches(
+    *,
+    db,
+    spec: dict[str, Any],
+    protocol_context: RagContextChunk,
+    municipality_slug: str | None,
+    allowed_document_version_ids: list[int] | None,
+) -> list[RagContextChunk]:
+    label = str(spec.get("label") or "").strip()
+    label_tokens = _api_topic_tokens(label)
+    if len(label_tokens) < 2:
+        return []
+    strongest_tokens = sorted(label_tokens, key=len, reverse=True)[:3]
+    stmt = (
+        select(RetrievalArtifact, Document, DocumentVersion, SourceSite)
+        .join(Document, RetrievalArtifact.document_id == Document.id)
+        .join(DocumentVersion, RetrievalArtifact.document_version_id == DocumentVersion.id)
+        .join(SourceSite, Document.source_site_id == SourceSite.id)
+        .where(RetrievalArtifact.source_kind.in_(PDF_FIRST_ASK_SOURCE_TYPES))
+        .where(RetrievalArtifact.artifact_kind.in_(PDF_FIRST_RETRIEVAL_ARTIFACT_KINDS))
+        .where(RetrievalArtifact.artifact_id != protocol_context.chunk_id)
+        .where(
+            or_(
+                RetrievalArtifact.document_version_id == int(protocol_context.document_version_id or 0),
+                RetrievalArtifact.source_kind.in_(PDF_FIRST_ATTACHMENT_SOURCE_TYPES),
+            )
+        )
+    )
+    for token in strongest_tokens[:2]:
+        stmt = stmt.where(RetrievalArtifact.retrieval_text.like(f"%{token}%"))
+    if municipality_slug:
+        stmt = stmt.where(SourceSite.municipality_slug == municipality_slug)
+    if allowed_document_version_ids is not None:
+        stmt = stmt.where(RetrievalArtifact.document_version_id.in_(allowed_document_version_ids))
+    rows = db.execute(stmt.limit(50)).all()
+
+    scored: list[tuple[float, RagContextChunk]] = []
+    for artifact, document, version, site in rows:
+        candidate_text = " ".join(
+            str(part or "")
+            for part in (artifact.title_he, artifact.body_text, artifact.retrieval_text, document.title_he, document.canonical_url)
+        )
+        score = _pdf_first_reference_match_score(
+            spec=spec,
+            candidate_text=candidate_text,
+            source_kind=str(artifact.source_kind),
+            same_document_version=artifact.document_version_id == protocol_context.document_version_id,
+        )
+        if score < 2.5:
+            continue
+        scored.append((score, _api_retrieval_artifact_to_context(artifact, document, version, site, score=score)))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [context for _, context in scored[:3]]
+
+
+def _pdf_first_reference_match_score(
+    *,
+    spec: dict[str, Any],
+    candidate_text: str,
+    source_kind: str,
+    same_document_version: bool,
+) -> float:
+    label = str(spec.get("label") or "")
+    label_key = _api_topic_equivalence_key(label)
+    candidate_key = _api_topic_equivalence_key(candidate_text)
+    label_tokens = set(_api_topic_tokens(label_key))
+    if not label_tokens or not candidate_key:
+        return 0.0
+    overlap = {token for token in label_tokens if token in candidate_key}
+    required_overlap = min(3, max(2, len(label_tokens) // 2))
+    if label_key not in candidate_key and len(overlap) < required_overlap:
+        return 0.0
+
+    score = float(len(overlap))
+    number = str(spec.get("number") or "").strip()
+    date = str(spec.get("date") or "").strip()
+    has_disambiguator = False
+    if number:
+        normalized_number = normalize_for_search(number)
+        if normalized_number and normalized_number in candidate_key:
+            score += 1.5
+            has_disambiguator = True
+    if date:
+        date_specs = _extract_numeric_date_specs(date)
+        if any(_date_text_matches_iso(candidate_text, date_spec["iso"]) for date_spec in date_specs):
+            score += 1.5
+            has_disambiguator = True
+    requester = str(spec.get("requester") or "").strip()
+    if requester:
+        requester_key = _api_topic_equivalence_key(requester)
+        if requester_key and requester_key in candidate_key:
+            score += 1.0
+            has_disambiguator = True
+    if bool(spec.get("requires_disambiguator")) and not has_disambiguator:
+        return 0.0
+    if str(spec.get("kind") or "") == "agreement" and label_key in candidate_key:
+        score += 0.75
+    if str(spec.get("kind") or "") == "question":
+        if label_key in candidate_key:
+            score += 1.0
+        if any(term in candidate_key for term in ("תשובת ראש העיר", "השאלה והתשובה", "מקריאה את תשובת", "לשאילתא", "לשאילתה")):
+            score += 1.0
+    if not _pdf_first_reference_candidate_has_detail_evidence(kind=str(spec.get("kind") or ""), candidate_text=candidate_text):
+        return 0.0
+    if source_kind in PDF_FIRST_ATTACHMENT_SOURCE_TYPES:
+        score += 0.35
+    elif same_document_version:
+        score += 0.2
+    normalized_candidate = normalize_for_search(candidate_text)
+    if "summary_he" in candidate_text:
+        score += 1.0
+    if len(normalized_candidate) > 450:
+        score += 0.75
+    if "מצ ל" in normalized_candidate and len(normalized_candidate) < 280:
+        score -= 0.75
+    return score
+
+
+def _pdf_first_reference_candidate_has_detail_evidence(*, kind: str, candidate_text: str) -> bool:
+    normalized = normalize_for_search(candidate_text)
+    if not normalized:
+        return False
+    detail_markers = (
+        "מחליטים",
+        "הצביעו",
+        "ברוב קולות",
+        "פה אחד",
+        "מקריאה את תשובת",
+        "תשובת ראש העיר",
+        "השאלה והתשובה",
+        "מדובר באישור",
+        "עיקרי ההסכם",
+        "מבקשת שימוש",
+        "האם ",
+    )
+    if any(marker in normalized for marker in detail_markers):
+        return True
+    if kind == "agreement" and len(normalized) >= 450 and "הסכם" in normalized:
+        return True
+    reference_marker_count = normalized.count("מצ ל") + normalized.count("פרוטוקול מישיבת")
+    if reference_marker_count >= 2:
+        return False
+    if "מצ ל" in normalized and len(normalized) < 350:
+        return False
+    return len(normalized) >= 500
+
+
+def _api_retrieval_artifact_to_context(
+    artifact: RetrievalArtifact,
+    document: Document,
+    version: DocumentVersion,
+    site: SourceSite,
+    *,
+    score: float,
+) -> RagContextChunk:
+    try:
+        section_path = json.loads(artifact.header_path_json or "[]")
+    except json.JSONDecodeError:
+        section_path = []
+    if not isinstance(section_path, list):
+        section_path = []
+    return RagContextChunk(
+        chunk_id=str(artifact.artifact_id),
+        score=float(score),
+        snippet=str(artifact.body_text or artifact.retrieval_text or ""),
+        citation=artifact.citation_label,
+        source_kind=str(artifact.source_kind),
+        document_id=int(artifact.document_id),
+        document_version_id=int(artifact.document_version_id),
+        document_title=str(document.title_he or ""),
+        document_url=f"/document-versions/{int(version.id)}/source.pdf",
+        municipality_slug=str(site.municipality_slug or ""),
+        start_offset=artifact.start_offset,
+        end_offset=artifact.end_offset,
+        start_page=artifact.start_page,
+        end_page=artifact.end_page,
+        chunk_index=artifact.ordinal,
+        chunk_text=str(artifact.retrieval_text or artifact.body_text or ""),
+        primary_topic=str(artifact.title_he or "") or None,
+        secondary_topics=[],
+        section_path=[str(item) for item in section_path if str(item).strip()],
+        artifact_kind=artifact.artifact_kind,
+    )
+
+
+def _api_pdf_first_raw_text(value: str) -> str:
+    text = str(value or "")
+    marker = "raw_pdf_text:"
+    if marker not in text:
+        return " ".join(text.split()).strip()
+    return " ".join(text.split(marker, 1)[1].split()).strip()
+
+
+def _api_clean_pdf_first_reference_label(value: str | None) -> str | None:
+    label = " ".join(str(value or "").replace("‫", " ").replace("‬", " ").split()).strip()
+    if not label:
+        return None
+    label = re.sub(r"^סעיף\s*\d+\s*[:.)-]*\s*", "", label).strip()
+    label = re.sub(r"^[\d\s'.:()\-–]+", "", label).strip()
+    label = re.sub(r"^פרוטוקול\s+מישיבת\s+", "", label).strip()
+    label = re.sub(r"^מישיבת\s+", "", label).strip()
+    label = re.sub(r"^פרוטוקול\s+", "", label).strip()
+    label = re.sub(r"^אישור\s+(?=הסכם\b)", "", label).strip()
+    label = re.split(r"\s+מס\s*\d|\s+מס\d|\s+מיום\s*\d|\s+מחליטים\b|\s+מאשרים\b", label, maxsplit=1)[0].strip()
+    label = re.split(r"\s+[–-]\s+", label, maxsplit=1)[0].strip()
+    label = label.strip(" .,:;()[]{}\"'׳״-–")
+    label = re.sub(r"\s+", " ", label).strip()
+    label = re.sub(r"\s+\d+$", "", label).strip()
+    label = re.sub(r"\s+[\u0590-\u05FF]$", "", label).strip()
+    return label if len(_api_topic_tokens(label)) >= 2 else None
+
+
+def _api_topic_equivalence_key(value: str | None) -> str:
+    label = _api_clean_pdf_first_reference_label(value) or str(value or "")
+    label = label.replace("'", " ").replace("׳", " ").replace("\"", " ").replace("״", " ")
+    return normalize_for_search(re.sub(r"[^\u0590-\u05FF0-9/.-]+", " ", label))
+
+
+def _api_topic_tokens(value: str | None) -> list[str]:
+    return [token for token in re.findall(r"[\u0590-\u05FF]{2,}", str(value or "")) if len(token) >= 2]
+
+
+def _pdf_first_allowed_document_version_ids() -> list[int] | None:
+    return _env_int_list("RAG_ASK_DOCUMENT_VERSION_IDS") or None
 
 
 def _env_int_list(name: str) -> list[int]:
@@ -378,127 +943,6 @@ def _collapse_duplicate_answering_contexts(
     return ordered_kept, stats
 
 
-def _low_relevance_embedding_refusal(
-    *,
-    embedding_service: ChunkEmbeddingService,
-    question: str,
-    retrieval_result: RagRetrievalResult,
-) -> dict[str, Any] | None:
-    if not retrieval_result.contexts or not embedding_service.is_enabled():
-        return None
-    normalized_question = normalize_for_search(question)
-    if any(marker in normalized_question for marker in (normalize_for_search(item) for item in ("מה הוחלט", "אילו החלטות", "מה אושר", "מה נדחה"))):
-        return None
-    query_vector = embedding_service.embed_query(question, query_kind="low_relevance_gate")
-    if not query_vector:
-        return None
-    lookup = embedding_service.ensure_embeddings_for_hits(hits=retrieval_result.contexts)
-    vectors_by_chunk = lookup.vectors_by_chunk_id
-    if not vectors_by_chunk:
-        return None
-    chunk_similarities = [
-        _cosine_similarity_api(query_vector, vectors_by_chunk.get(str(context.chunk_id)))
-        for context in retrieval_result.contexts
-        if str(context.chunk_id) in vectors_by_chunk
-    ]
-    if not chunk_similarities:
-        return None
-    decision_matches = retrieval_result.debug_info.get("top_decision_matches") if isinstance(retrieval_result.debug_info, dict) else []
-    top_decision_similarity = 0.0
-    if isinstance(decision_matches, list):
-        for item in decision_matches:
-            if isinstance(item, dict):
-                top_decision_similarity = max(top_decision_similarity, float(item.get("similarity") or 0.0))
-    lexical_max = max(float(context.score or 0.0) for context in retrieval_result.contexts)
-    max_chunk_similarity = max(chunk_similarities)
-    avg_chunk_similarity = sum(chunk_similarities) / max(len(chunk_similarities), 1)
-    if max(max_chunk_similarity, top_decision_similarity) >= 0.18 or lexical_max >= 0.2:
-        return None
-    return {
-        "reason": "low_embedding_relevance",
-        "chunk_max_similarity": round(max_chunk_similarity, 6),
-        "chunk_avg_similarity": round(avg_chunk_similarity, 6),
-        "top_decision_similarity": round(top_decision_similarity, 6),
-        "lexical_max_score": round(lexical_max, 6),
-    }
-
-
-def _answer_result_to_cache_payload(answer_result: RagAnswerResult) -> dict[str, Any]:
-    return {
-        "status": answer_result.status,
-        "answer": answer_result.answer,
-        "extended_answer": answer_result.extended_answer,
-        "answer_sections": list(answer_result.answer_sections),
-        "extended_answer_sections": list(answer_result.extended_answer_sections),
-        "citations": [
-            {
-                "chunk_id": citation.chunk_id,
-                "source_kind": citation.source_kind,
-                "citation_label": citation.citation_label,
-                "document_id": citation.document_id,
-                "document_version_id": citation.document_version_id,
-                "document_title": citation.document_title,
-                "document_url": citation.document_url,
-                "start_page": citation.start_page,
-                "end_page": citation.end_page,
-                "score": citation.score,
-                "header_path": list(citation.section_path),
-            }
-            for citation in answer_result.citations
-        ],
-        "claim_assessments": list(answer_result.claim_assessments),
-        "limitations": list(answer_result.limitations),
-        "refusal_reason_code": answer_result.refusal_reason_code,
-        "refusal_message_he": answer_result.refusal_message_he,
-        "missing_source_kinds": list(answer_result.missing_source_kinds),
-        "provider": answer_result.provider,
-        "model": answer_result.model,
-        "scoring": dict(answer_result.scoring),
-    }
-
-
-def _answer_result_from_cache_payload(payload: dict[str, Any]) -> RagAnswerResult | None:
-    if not isinstance(payload, dict) or payload.get("status") != "answer":
-        return None
-    raw_citations = payload.get("citations")
-    citations_payload = cast(list[Any], raw_citations) if isinstance(raw_citations, list) else []
-    citations: list[RagCitation] = []
-    for row in citations_payload:
-        if not isinstance(row, dict):
-            continue
-        citations.append(
-            RagCitation(
-                chunk_id=str(row.get("chunk_id") or ""),
-                source_kind=str(row.get("source_kind") or ""),
-                citation_label=row.get("citation_label") if isinstance(row.get("citation_label"), str) else None,
-                document_id=int(row.get("document_id") or 0),
-                document_version_id=_as_optional_int(row.get("document_version_id")),
-                document_title=str(row.get("document_title") or ""),
-                document_url=str(row.get("document_url") or ""),
-                start_page=_as_optional_int(row.get("start_page")),
-                end_page=_as_optional_int(row.get("end_page")),
-                score=float(row.get("score") or 0.0),
-                section_path=[str(item).strip() for item in list(row.get("header_path") or []) if str(item).strip()],
-            )
-        )
-    return RagAnswerResult(
-        status="answer",
-        answer=payload.get("answer") if isinstance(payload.get("answer"), str) else None,
-        extended_answer=payload.get("extended_answer") if isinstance(payload.get("extended_answer"), str) else None,
-        answer_sections=list(payload.get("answer_sections") or []),
-        extended_answer_sections=list(payload.get("extended_answer_sections") or []),
-        citations=citations,
-        claim_assessments=list(payload.get("claim_assessments") or []),
-        limitations=list(payload.get("limitations") or []),
-        refusal_reason_code=None,
-        refusal_message_he=None,
-        missing_source_kinds=[],
-        provider=payload.get("provider") if isinstance(payload.get("provider"), str) else None,
-        model=payload.get("model") if isinstance(payload.get("model"), str) else None,
-        scoring=dict(payload.get("scoring") or {}),
-    )
-
-
 def _cosine_similarity_api(left: list[float] | None, right: list[float] | None) -> float:
     if not left or not right or len(left) != len(right):
         return 0.0
@@ -541,8 +985,8 @@ def _pdf_first_llm_debug_payload(llm_client: RagLlmClient) -> dict:
     }
 
 
-def _ask_thresholds_payload(*, request: AskRequest, llm_client: RagLlmClient) -> dict:
-    effective_scope = _ask_effective_scope(request)
+def _ask_thresholds_payload(*, request: AskRequest, llm_client: RagLlmClient, effective_scope: dict[str, Any] | None = None) -> dict:
+    effective_scope = effective_scope or _ask_effective_scope(request)
     if effective_scope.get("forced_pdf_first_scope"):
         return {
             "debug_payload_kind": "pdf_first_debug",
@@ -553,13 +997,15 @@ def _ask_thresholds_payload(*, request: AskRequest, llm_client: RagLlmClient) ->
                 "document_ids": effective_scope["document_ids"],
                 "document_version_ids": effective_scope["document_version_ids"],
                 "forced_pdf_first_scope": True,
+                "scope_reason": effective_scope.get("scope_reason"),
+                "date_scope": effective_scope.get("date_scope"),
             },
             "retrieval": {
                 "top_k_min": 1,
                 "top_k_max": 50,
                 "top_k_effective": max(1, request.top_k),
-                "source_kind": "pdf_first_protocol",
-                "artifact_kind": "pdf_first_retrieval_chunk",
+                "source_kinds": list(PDF_FIRST_ASK_SOURCE_TYPES),
+                "artifact_kinds": sorted(PDF_FIRST_RETRIEVAL_ARTIFACT_KINDS),
             },
             "answering": {
                 "route": "pdf_first_dictalm",
@@ -594,7 +1040,10 @@ def _ask_thresholds_payload(*, request: AskRequest, llm_client: RagLlmClient) ->
 
 
 def _citation_document_url(citation: RagCitation) -> str:
-    if citation.source_kind == "pdf_first_protocol" and citation.document_version_id in PDF_FIRST_ASK_DOCUMENT_VERSION_IDS:
+    allowed_docvers = _pdf_first_allowed_document_version_ids()
+    if citation.source_kind in PDF_FIRST_ASK_SOURCE_TYPES and citation.document_version_id and (
+        allowed_docvers is None or citation.document_version_id in allowed_docvers
+    ):
         return f"/document-versions/{citation.document_version_id}/source.pdf"
     return citation.document_url
 
@@ -752,7 +1201,7 @@ def _split_topic_path(topic_name: str | None) -> tuple[str, str]:
         return parts[0], " > ".join(parts[1:])
     if parts:
         return parts[0], "החלטה כללית"
-    return "נושא כללי", "החלטה כללית"
+    return "ללא תיוג סמנטי", "החלטה כללית"
 
 
 TOPIC_VARIANT_DETAIL_TOKENS = {
@@ -2442,229 +2891,6 @@ def _headline_candidates_from_chunk_text(text: str) -> list[str]:
     return out
 
 
-def _load_protocol_subject_anchors(
-    *,
-    db,
-    protocol_document_ids: list[int],
-) -> dict[int, list[str]]:
-    normalized_ids: set[int] = set()
-    for doc_id in protocol_document_ids:
-        try:
-            normalized = int(doc_id)
-        except (TypeError, ValueError):
-            continue
-        if normalized > 0:
-            normalized_ids.add(normalized)
-
-    unique_document_ids = sorted(normalized_ids)
-    if not unique_document_ids:
-        return {}
-
-    artifact_rows = db.execute(
-        select(
-            RetrievalArtifact.document_id,
-            RetrievalArtifact.ordinal,
-            RetrievalArtifact.header_path_json,
-            RetrievalArtifact.artifact_kind,
-        )
-        .where(RetrievalArtifact.document_id.in_(unique_document_ids))
-        .where(RetrievalArtifact.source_kind == "protocol")
-        .where(RetrievalArtifact.artifact_kind.in_(("header_anchor", "section_unit", "decision_unit")))
-        .order_by(RetrievalArtifact.document_id.asc(), RetrievalArtifact.ordinal.asc())
-    ).all()
-    if artifact_rows:
-        scored: dict[int, dict[str, float]] = {}
-        for document_id, ordinal, header_path_json, artifact_kind in artifact_rows:
-            header_path = _loads_json(header_path_json)
-            if not isinstance(header_path, list):
-                continue
-            depth = len(header_path)
-            for reverse_index, raw_label in enumerate(reversed(header_path), start=1):
-                candidate = _normalize_headline_text(str(raw_label or ""))
-                if _is_ignored_headline(candidate):
-                    continue
-                position_score = 1.0 / max(1, int(ordinal or 0) + 1)
-                depth_bonus = min(0.45, max(0, depth - reverse_index) * 0.08)
-                kind_bonus = 0.18 if artifact_kind == "decision_unit" else 0.1 if artifact_kind == "section_unit" else 0.0
-                bucket = scored.setdefault(int(document_id), {})
-                bucket[candidate] = bucket.get(candidate, 0.0) + position_score + depth_bonus + kind_bonus
-                break
-
-        out: dict[int, list[str]] = {}
-        for document_id, candidate_scores in scored.items():
-            ordered = [
-                candidate
-                for candidate, _ in sorted(candidate_scores.items(), key=lambda row: row[1], reverse=True)
-            ]
-            if ordered:
-                out[document_id] = ordered[:5]
-        return out
-    return {}
-
-
-def _load_protocol_semantic_topic_labels(
-    *,
-    db,
-    protocol_document_ids: list[int],
-) -> dict[int, list[str]]:
-    normalized_ids: set[int] = set()
-    for doc_id in protocol_document_ids:
-        try:
-            normalized = int(doc_id)
-        except (TypeError, ValueError):
-            continue
-        if normalized > 0:
-            normalized_ids.add(normalized)
-
-    unique_document_ids = sorted(normalized_ids)
-    if not unique_document_ids:
-        return {}
-
-    artifact_rows = db.execute(
-        select(RetrievalArtifact.document_id, SemanticNode.pref_label_he, ArtifactSemanticLink.confidence)
-        .join(ArtifactSemanticLink, ArtifactSemanticLink.artifact_id == RetrievalArtifact.artifact_id)
-        .join(SemanticNode, SemanticNode.id == ArtifactSemanticLink.semantic_node_id)
-        .where(RetrievalArtifact.document_id.in_(unique_document_ids))
-        .where(RetrievalArtifact.source_kind == "protocol")
-        .where(SemanticNode.node_kind == "topic")
-        .where(SemanticNode.status == "active")
-    ).all()
-    if artifact_rows:
-        scored: dict[int, dict[str, float]] = {}
-        for document_id, label_he, confidence in artifact_rows:
-            label = _sanitize_topic_label(str(label_he or ""), min_tokens=2)
-            if not label or is_low_quality_topic_label(label):
-                continue
-            bucket = scored.setdefault(int(document_id), {})
-            bucket[label] = bucket.get(label, 0.0) + max(0.0, min(1.0, float(confidence or 0.0)))
-
-        out: dict[int, list[str]] = {}
-        for document_id, label_scores in scored.items():
-            ordered = [
-                label
-                for label, _ in sorted(label_scores.items(), key=lambda row: row[1], reverse=True)
-                if label
-            ]
-            if ordered:
-                out[document_id] = ordered[:6]
-        return out
-    return {}
-
-
-def _load_decision_request_contexts_by_context_id(
-    *,
-    db,
-    contexts: list[RagContextChunk],
-    allow_nearby_match: bool = True,
-) -> dict[str, dict[str, Any]]:
-    if not contexts:
-        return {}
-    if not inspect(db.get_bind()).has_table("decision_request_context"):
-        return {}
-
-    protocol_contexts = [
-        context
-        for context in contexts
-        if context.source_kind == "protocol" and context.document_id and context.chunk_id
-    ]
-    if not protocol_contexts:
-        return {}
-
-    document_ids = sorted({int(context.document_id) for context in protocol_contexts})
-    rows = db.execute(
-        select(
-            DecisionRequestContext.decision_id,
-            DecisionRequestContext.source_document_id,
-            DecisionRequestContext.request_subject_he,
-            DecisionRequestContext.subject_topic_he,
-            DecisionRequestContext.address_he,
-            DecisionRequestContext.gush,
-            DecisionRequestContext.helka,
-            DecisionRequestContext.migrash,
-            DecisionRequestContext.source_artifact_ids_json,
-            DecisionRequestContext.metadata_json,
-            DecisionRequestContext.confidence,
-            Decision.agenda_item,
-            Decision.decision_text,
-            DecisionCitation.start_offset,
-            DecisionCitation.end_offset,
-        )
-        .join(Decision, Decision.id == DecisionRequestContext.decision_id)
-        .join(DecisionCitation, DecisionCitation.decision_id == DecisionRequestContext.decision_id)
-        .where(DecisionRequestContext.source_document_id.in_(document_ids))
-        .where(DecisionCitation.document_id.in_(document_ids))
-        .where(DecisionCitation.source_type == "protocol")
-    ).all()
-
-    contexts_by_document: dict[int, list[dict[str, Any]]] = {}
-    for row in rows:
-        source_artifact_ids = _loads_json(row[8])
-        metadata = _loads_json(row[9])
-        if not isinstance(source_artifact_ids, list):
-            source_artifact_ids = []
-        normalized_artifact_ids = [str(item).strip() for item in source_artifact_ids if str(item).strip()]
-        if not normalized_artifact_ids and isinstance(metadata, dict):
-            raw_artifact_ids = metadata.get("source_artifact_ids")
-            if isinstance(raw_artifact_ids, list):
-                normalized_artifact_ids = [str(item).strip() for item in raw_artifact_ids if str(item).strip()]
-        contexts_by_document.setdefault(int(row[1]), []).append(
-            {
-                "decision_id": int(row[0]),
-                "source_document_id": int(row[1]),
-                "request_subject_he": row[2],
-                "subject_topic_he": row[3],
-                "address_he": row[4],
-                "gush": row[5],
-                "helka": row[6],
-                "migrash": row[7],
-                "source_artifact_ids": normalized_artifact_ids,
-                "confidence": float(row[10] or 0.0),
-                "agenda_item": row[11],
-                "decision_text": row[12],
-                "start_offset": int(row[13]) if row[13] is not None else None,
-                "end_offset": int(row[14]) if row[14] is not None else None,
-            }
-        )
-
-    out: dict[str, dict[str, Any]] = {}
-    for context in protocol_contexts:
-        candidates = contexts_by_document.get(int(context.document_id), [])
-        if not candidates:
-            continue
-
-        best_payload: dict[str, Any] | None = None
-        best_score = float("-inf")
-        for candidate in candidates:
-            score = float(candidate.get("confidence") or 0.0)
-            if str(context.chunk_id) in {str(item) for item in candidate.get("source_artifact_ids") or []}:
-                score += 2.0
-            start_offset = candidate.get("start_offset")
-            end_offset = candidate.get("end_offset")
-            if (
-                start_offset is not None
-                and end_offset is not None
-                and context.start_offset is not None
-                and context.end_offset is not None
-            ):
-                if context.start_offset < end_offset and start_offset < context.end_offset:
-                    score += 1.0
-                elif allow_nearby_match:
-                    distance = min(
-                        abs(int(context.start_offset) - int(start_offset)),
-                        abs(int(context.end_offset) - int(end_offset)),
-                    )
-                    if distance <= 2200:
-                        score += max(0.0, 0.5 - (distance / 5000.0))
-            if score > best_score:
-                best_score = score
-                best_payload = candidate
-
-        if best_payload is None:
-            continue
-        out[str(context.chunk_id)] = dict(best_payload)
-    return out
-
-
 def _decision_request_context_payload(*, db, decision_id: int) -> dict[str, Any] | None:
     if not inspect(db.get_bind()).has_table("decision_request_context"):
         return None
@@ -3025,7 +3251,8 @@ def _run_ask(
     ask_request_id = new_ask_request_id()
     question_hash = hash_text(request.question)
     arch_config = RagArchitectureConfig.from_env()
-    effective_scope = _ask_effective_scope(request)
+    effective_scope = _ask_effective_scope(request, db=db)
+    retrieval_query, retrieval_query_debug = _ask_retrieval_query(request=request, effective_scope=effective_scope)
     log_rag_event(
         "rag.ask.request",
         ask_request_id=ask_request_id,
@@ -3042,6 +3269,7 @@ def _run_ask(
         retrieval_strategy=request.retrieval_strategy,
         document_ids=effective_scope["document_ids"],
         document_version_ids=effective_scope["document_version_ids"],
+        scope_reason=effective_scope["scope_reason"],
     )
 
     embedding_service = build_embedding_backend(session=db, arch_config=arch_config)
@@ -3051,7 +3279,7 @@ def _run_ask(
     )
     retrieval_started = time.perf_counter()
     retrieval_result = retrieval_service.retrieve(
-        query=request.question,
+        query=retrieval_query,
         top_k=request.top_k,
         municipality_slug=request.muni,
         source_kinds=effective_scope["source_types"],
@@ -3067,7 +3295,13 @@ def _run_ask(
     )
     retrieval_ms = round((time.perf_counter() - retrieval_started) * 1000.0, 3)
 
-    answering_contexts = list(retrieval_result.contexts)
+    answering_contexts, reference_enrichment_debug = _enrich_pdf_first_reference_contexts(
+        db=db,
+        contexts=list(retrieval_result.contexts),
+        municipality_slug=request.muni,
+        allowed_document_version_ids=_pdf_first_allowed_document_version_ids(),
+    )
+    answering_contexts = _hydrate_context_semantic_topic_labels(db=db, contexts=answering_contexts)
     answering_contexts, context_dedupe_stats = _collapse_duplicate_answering_contexts(
         embedding_service=embedding_service,
         question=request.question,
@@ -3080,95 +3314,29 @@ def _run_ask(
         retrieval_set_id=retrieval_result.retrieval_set_id,
         requested_source_kinds=list(retrieval_result.requested_source_kinds),
         contexts=answering_contexts,
-        debug_info={**dict(retrieval_result.debug_info), "answer_context_dedupe": context_dedupe_stats},
+        debug_info={
+            **dict(retrieval_result.debug_info),
+            "answer_context_dedupe": context_dedupe_stats,
+            "pdf_first_reference_enrichments": reference_enrichment_debug["enrichment_map"],
+            "pdf_first_reference_enrichment": reference_enrichment_debug,
+            "ask_scope": {
+                "scope_reason": effective_scope.get("scope_reason"),
+                "date_scope": effective_scope.get("date_scope"),
+                "retrieval_query": retrieval_query_debug,
+            },
+        },
     )
-    pdf_first_answer_scope = retrieval_result.requested_source_kinds == ["pdf_first_protocol"]
-
-    protocol_subject_anchors = {}
-    protocol_semantic_topic_labels = {}
-    decision_request_context_by_context_id = {}
-    if not pdf_first_answer_scope:
-        protocol_document_ids = [
-            context.document_id
-            for context in retrieval_for_answering.contexts
-            if context.source_kind == "protocol"
-        ]
-        protocol_subject_anchors = _load_protocol_subject_anchors(
-            db=db,
-            protocol_document_ids=protocol_document_ids,
-        )
-        protocol_semantic_topic_labels = _load_protocol_semantic_topic_labels(
-            db=db,
-            protocol_document_ids=protocol_document_ids,
-        )
-        decision_request_context_by_context_id = _load_decision_request_contexts_by_context_id(
-            db=db,
-            contexts=retrieval_for_answering.contexts,
-        )
+    if set(retrieval_result.requested_source_kinds) != set(PDF_FIRST_ASK_SOURCE_TYPES):
+        raise HTTPException(status_code=500, detail="ask_pdf_first_scope_missing")
 
     resolved_llm_client = llm_client or _build_ask_llm_client(request=request)
     answering_service = RagAnsweringService(llm_client=resolved_llm_client)
-    answer_cache_service = RagAnswerCacheService(db, embedding_service=embedding_service)
     answering_started = time.perf_counter()
-    answer_result: RagAnswerResult | None = None
-    cache_hit = None
-    if not request.disable_answer_cache and not pdf_first_answer_scope:
-        cache_hit = answer_cache_service.lookup(
-            query=request.question,
-            retrieval_set_id=retrieval_result.retrieval_set_id,
-        )
-    if cache_hit is not None:
-        answer_result = _answer_result_from_cache_payload(cache_hit.payload)
-        if answer_result is None:
-            cache_hit = None
-        else:
-            answer_result.scoring = {
-                **dict(answer_result.scoring),
-                "semantic_answer_cache_hit": True,
-                "semantic_answer_cache_similarity": cache_hit.similarity,
-                "semantic_answer_cache_id": cache_hit.cache_id,
-                "answer_external_api_called": False,
-                "external_call_count": 0,
-            }
-    if cache_hit is None:
-        low_relevance_gate = None
-        if not pdf_first_answer_scope:
-            low_relevance_gate = _low_relevance_embedding_refusal(
-                embedding_service=embedding_service,
-                question=request.question,
-                retrieval_result=retrieval_for_answering,
-            )
-        if low_relevance_gate is not None:
-            answer_result = answering_service._build_refusal(
-                question=request.question,
-                retrieval=retrieval_for_answering,
-                reason_code="INSUFFICIENT_EVIDENCE",
-                missing_source_kinds=[],
-                ask_request_id=ask_request_id,
-                scoring={
-                    "low_relevance_gate": low_relevance_gate,
-                    "answer_external_api_called": False,
-                    "external_call_count": 0,
-                },
-            )
-        elif pdf_first_answer_scope:
-            answer_result = answering_service.compose_pdf_first(
-                question=request.question,
-                retrieval=retrieval_for_answering,
-                ask_request_id=ask_request_id,
-            )
-        else:
-            answer_result = answering_service.compose(
-                question=request.question,
-                retrieval=retrieval_for_answering,
-                required_source_kinds=effective_scope["required_source_types"],
-                protocol_subject_anchors=protocol_subject_anchors,
-                protocol_semantic_topic_labels=protocol_semantic_topic_labels,
-                decision_request_context_by_chunk=decision_request_context_by_context_id,
-                ask_request_id=ask_request_id,
-            )
-    if answer_result is None:
-        raise HTTPException(status_code=500, detail="ask_answer_result_missing")
+    answer_result = answering_service.compose_pdf_first(
+        question=request.question,
+        retrieval=retrieval_for_answering,
+        ask_request_id=ask_request_id,
+    )
     answering_ms = round((time.perf_counter() - answering_started) * 1000.0, 3)
     total_ms = round((time.perf_counter() - request_started) * 1000.0, 3)
 
@@ -3178,23 +3346,6 @@ def _run_ask(
     provider_warning = _provider_warning_payload(answer_result)
     if provider_warning is not None and provider_warning["message_he"] not in limitations:
         limitations.insert(0, str(provider_warning["message_he"]))
-
-    if answer_result.status == "answer":
-        cache_payload = _answer_result_to_cache_payload(answer_result)
-        if (
-            not request.disable_answer_cache
-            and not bool(answer_result.scoring.get("semantic_answer_cache_hit"))
-            and not is_degraded_answer_cache_payload(cache_payload)
-        ):
-            answer_cache_service.store(
-                query=request.question,
-                query_hash=question_hash,
-                retrieval_set_id=retrieval_result.retrieval_set_id,
-                answer_provider=answer_result.provider,
-                answer_model=answer_result.model,
-                answer_payload=cache_payload,
-            )
-        db.commit()
 
     citations_payload = [
         {
@@ -3242,7 +3393,9 @@ def _run_ask(
         "retrieval": {
             "retrieval_set_id": retrieval_result.retrieval_set_id,
             "count": len(retrieval_result.contexts),
+            "answer_context_count": len(answering_contexts),
             "source_types": sorted(retrieval_result.source_kinds),
+            "answer_source_types": sorted({context.source_kind for context in answering_contexts}),
             "requested_source_types": retrieval_result.requested_source_kinds,
             "top_k": retrieval_result.top_k,
             "semantic_mode": request.semantic_mode,
@@ -3253,6 +3406,10 @@ def _run_ask(
             "effective_document_ids": effective_scope["document_ids"],
             "effective_document_version_ids": effective_scope["document_version_ids"],
             "forced_pdf_first_scope": effective_scope["forced_pdf_first_scope"],
+            "scope_reason": effective_scope["scope_reason"],
+            "date_scope": effective_scope["date_scope"],
+            "retrieval_query": retrieval_query_debug,
+            "pdf_first_reference_enrichment": reference_enrichment_debug,
             "pipeline_run_id": request.pipeline_run_id,
         },
         "model": {
@@ -3271,17 +3428,21 @@ def _run_ask(
         }
         response_payload["debug"] = {
             "enabled": True,
-            "thresholds": _ask_thresholds_payload(request=request, llm_client=resolved_llm_client),
+            "thresholds": _ask_thresholds_payload(
+                request=request,
+                llm_client=resolved_llm_client,
+                effective_scope=effective_scope,
+            ),
             "answering_trace": trace_payload,
             "retrieval_trace": retrieval_trace,
             "timing_ms": timing_breakdown,
             "pipeline": {
                 "stage_order": [
                     "retrieve",
-                    "answer",
-                    "deterministic_similarity",
-                    "verify_fallback_if_low",
-                    "refuse_if_needed",
+                    "dictalm_pdf_first_answer",
+                    "validate_cited_chunks",
+                    "retry_or_repair_if_needed",
+                    "refuse_if_uncited",
                 ],
                 "effective_required_source_types": effective_scope["required_source_types"],
                 "effective_document_version_ids": effective_scope["document_version_ids"],
@@ -3559,17 +3720,64 @@ def ask(request: AskRequest, db=Depends(get_db)) -> dict:
     return _run_ask(request=request, db=db)
 
 
+def _hydrate_context_semantic_topic_labels(*, db, contexts: list[RagContextChunk]) -> list[RagContextChunk]:
+    chunk_ids = [context.chunk_id for context in contexts if str(context.chunk_id or "").strip()]
+    if not chunk_ids:
+        return contexts
+
+    rows = db.execute(
+        select(ArtifactSemanticLink.artifact_id, SemanticNode.id, SemanticNode.pref_label_he)
+        .join(SemanticNode, SemanticNode.id == ArtifactSemanticLink.semantic_node_id)
+        .where(ArtifactSemanticLink.artifact_id.in_(chunk_ids))
+        .where(SemanticNode.node_kind == "topic")
+        .where(SemanticNode.status == "active")
+        .order_by(SemanticNode.depth.desc(), SemanticNode.specificity_score.desc(), SemanticNode.pref_label_norm.asc())
+    ).all()
+    labels_by_chunk: dict[str, list[str]] = {}
+    node_ids_by_chunk: dict[str, list[int]] = {}
+    for artifact_id, node_id, label in rows:
+        chunk_id = str(artifact_id)
+        compact_label = str(label or "").strip()
+        if not compact_label:
+            continue
+        labels = labels_by_chunk.setdefault(chunk_id, [])
+        if compact_label not in labels:
+            labels.append(compact_label)
+        node_ids = node_ids_by_chunk.setdefault(chunk_id, [])
+        if int(node_id) not in node_ids:
+            node_ids.append(int(node_id))
+
+    if not labels_by_chunk:
+        return contexts
+
+    hydrated: list[RagContextChunk] = []
+    for context in contexts:
+        labels = labels_by_chunk.get(context.chunk_id)
+        if not labels:
+            hydrated.append(context)
+            continue
+        merged_labels = list(context.semantic_topic_labels)
+        for label in labels:
+            if label not in merged_labels:
+                merged_labels.append(label)
+        context.semantic_topic_labels = merged_labels
+        context.semantic_node_ids = list(dict.fromkeys([*context.semantic_node_ids, *node_ids_by_chunk.get(context.chunk_id, [])]))
+        hydrated.append(context)
+    return hydrated
+
+
 @app.post("/ask/debug/retrieval")
 def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
     started = time.perf_counter()
     arch_config = RagArchitectureConfig.from_env()
-    effective_scope = _ask_effective_scope(request)
+    effective_scope = _ask_effective_scope(request, db=db)
+    retrieval_query, retrieval_query_debug = _ask_retrieval_query(request=request, effective_scope=effective_scope)
     retrieval_service = RagRetrievalService(
         search_service=build_search_backend(session=db, arch_config=arch_config),
         reranker=EmbeddingReranker(build_embedding_backend(session=db, arch_config=arch_config)),
     )
     retrieval_result = retrieval_service.retrieve(
-        query=request.question,
+        query=retrieval_query,
         top_k=request.top_k,
         municipality_slug=request.muni,
         source_kinds=effective_scope["source_types"],
@@ -3601,6 +3809,9 @@ def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
             "effective_document_ids": effective_scope["document_ids"],
             "effective_document_version_ids": effective_scope["document_version_ids"],
             "forced_pdf_first_scope": effective_scope["forced_pdf_first_scope"],
+            "scope_reason": effective_scope["scope_reason"],
+            "date_scope": effective_scope["date_scope"],
+            "retrieval_query": retrieval_query_debug,
             "pipeline_run_id": request.pipeline_run_id,
         },
         "embedding_cache": _active_embedding_cache_summary(db=db),
@@ -3647,26 +3858,80 @@ def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
 
 @app.get("/document-versions/{document_version_id}/source.pdf")
 def document_version_source_pdf(document_version_id: int, db=Depends(get_db)) -> FileResponse:
-    if document_version_id not in PDF_FIRST_ASK_DOCUMENT_VERSION_IDS:
+    allowed_docvers = _pdf_first_allowed_document_version_ids()
+    if allowed_docvers is not None and document_version_id not in allowed_docvers:
         raise HTTPException(status_code=404, detail="pdf_first_document_version_not_found")
     version = db.execute(
         select(DocumentVersion).where(DocumentVersion.id == document_version_id)
     ).scalar_one_or_none()
     if version is None:
         raise HTTPException(status_code=404, detail="document_version_not_found")
-    storage_uri = str(version.storage_uri or "").strip()
-    if not storage_uri:
-        raise HTTPException(status_code=404, detail="document_version_storage_missing")
-    candidate = Path(storage_uri)
-    if not candidate.is_absolute():
-        candidate = Path.cwd() / candidate
-    resolved = candidate.resolve()
+    resolved = _resolve_document_version_source_pdf_path(
+        document_version_id=document_version_id,
+        storage_uri=str(version.storage_uri or ""),
+    )
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="document_version_file_missing")
+    resolved = resolved.resolve()
     workspace_root = Path.cwd().resolve()
     if not str(resolved).startswith(str(workspace_root) + os.sep):
         raise HTTPException(status_code=403, detail="document_version_storage_forbidden")
     if not resolved.exists() or not resolved.is_file():
         raise HTTPException(status_code=404, detail="document_version_file_missing")
-    return FileResponse(resolved, media_type="application/pdf", filename=resolved.name)
+    return FileResponse(
+        resolved,
+        media_type="application/pdf",
+        filename=resolved.name,
+        content_disposition_type="inline",
+    )
+
+
+def _resolve_document_version_source_pdf_path(*, document_version_id: int, storage_uri: str) -> Path | None:
+    storage_uri = str(storage_uri or "").strip()
+    candidates: list[Path] = []
+    batch_pdf = _pdf_first_batch_pdf_path_for_docver(document_version_id)
+    if batch_pdf is not None:
+        candidates.append(batch_pdf)
+    if storage_uri:
+        storage_path = Path(storage_uri)
+        candidates.append(storage_path if storage_path.is_absolute() else Path.cwd() / storage_path)
+        if not storage_path.is_absolute():
+            candidates.append(Path.cwd() / "storage" / "raw" / storage_path)
+
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved.exists() and resolved.is_file():
+            return resolved
+    return None
+
+
+def _pdf_first_batch_pdf_path_for_docver(document_version_id: int) -> Path | None:
+    status_path = Path("rag_eval/runs/ashdod_pdf_first_batch/batch_status.jsonl")
+    if not status_path.exists():
+        return None
+    try:
+        lines = status_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("status") != "completed":
+            continue
+        try:
+            row_docver_id = int(payload.get("docver_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if row_docver_id != int(document_version_id):
+            continue
+        pdf_path = str(payload.get("pdf") or "").strip()
+        if not pdf_path:
+            return None
+        candidate = Path(pdf_path)
+        return candidate if candidate.is_absolute() else Path.cwd() / candidate
+    return None
 
 
 PIPELINE_RUNS_ROOT = Path("rag_eval/runs").resolve()
@@ -3942,55 +4207,6 @@ def debug_playground_page() -> HTMLResponse:
           <input id="ask-top-k" name="top_k" type="number" min="1" max="50" value="8" />
           <span class="muted">How many chunks retrieval returns before answering (higher can be slower and costlier).</span>
         </div>
-        <div class="field hidden">
-          <label for="ask-document-id">document_id</label>
-          <input id="ask-document-id" name="document_id" type="number" min="1" placeholder="optional" />
-          <span class="muted">Ignored. PDF-first /ask always uses accepted doc versions 21, 22, 23.</span>
-        </div>
-        <div class="field hidden">
-          <label for="ask-document-version-id">document_version_id</label>
-          <input id="ask-document-version-id" name="document_version_id" type="number" min="1" placeholder="optional" />
-          <span class="muted">Ignored. PDF-first /ask always uses accepted doc versions 21, 22, 23.</span>
-        </div>
-        <div class="field hidden">
-          <label for="ask-pipeline-run-id">pipeline_run_id</label>
-          <input id="ask-pipeline-run-id" name="pipeline_run_id" type="text" placeholder="optional" />
-          <span class="muted">Not used by PDF-first /ask.</span>
-        </div>
-      </section>
-      <fieldset class="group hidden">
-        <legend>source_types (retrieval filter)</legend>
-        <div class="checks">
-          <label><input type="checkbox" name="source_types" value="protocol" />protocol</label>
-          <label><input type="checkbox" name="source_types" value="pdf_first_protocol" checked />pdf_first_protocol</label>
-          <label><input type="checkbox" name="source_types" value="attachment" />attachment</label>
-        </div>
-      </fieldset>
-      <fieldset class="group hidden">
-        <legend>required_source_types (coverage gate)</legend>
-        <div class="checks">
-          <label><input type="checkbox" name="required_source_types" value="protocol" />protocol</label>
-          <label><input type="checkbox" name="required_source_types" value="pdf_first_protocol" checked />pdf_first_protocol</label>
-          <label><input type="checkbox" name="required_source_types" value="attachment" />attachment</label>
-        </div>
-      </fieldset>
-      <section class="grid hidden">
-        <div class="field">
-          <label for="ask-semantic-mode">semantic_mode</label>
-          <select id="ask-semantic-mode" name="semantic_mode">
-            <option value="off" selected>off</option>
-            <option value="boost">boost</option>
-            <option value="filter">filter</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="ask-semantic-node-id">semantic_node_id</label>
-          <input id="ask-semantic-node-id" name="semantic_node_id" type="number" min="1" placeholder="optional" />
-        </div>
-        <div class="field">
-          <label for="ask-semantic-label">semantic_label</label>
-          <input id="ask-semantic-label" class="he-input" name="semantic_label" type="text" placeholder="optional" />
-        </div>
       </section>
       <div class="actions">
         <label class="muted"><input id="ask-debug-mode" type="checkbox" checked /> debug mode (show PDF-first debug)</label>
@@ -4060,16 +4276,9 @@ def debug_playground_page() -> HTMLResponse:
       }
 
       const questionInput = document.getElementById("ask-question");
-      const muniInput = document.getElementById("ask-muni");
       const topicInput = document.getElementById("ask-topic");
       const yearInput = document.getElementById("ask-year");
       const topKInput = document.getElementById("ask-top-k");
-      const documentIdInput = document.getElementById("ask-document-id");
-      const documentVersionIdInput = document.getElementById("ask-document-version-id");
-      const pipelineRunIdInput = document.getElementById("ask-pipeline-run-id");
-      const semanticModeInput = document.getElementById("ask-semantic-mode");
-      const semanticNodeIdInput = document.getElementById("ask-semantic-node-id");
-      const semanticLabelInput = document.getElementById("ask-semantic-label");
       const debugModeInput = document.getElementById("ask-debug-mode");
       const showExtendedInput = document.getElementById("ask-show-extended");
 
@@ -4232,7 +4441,7 @@ def debug_playground_page() -> HTMLResponse:
         const topicChild = typeof section?.topic_child === "string" ? section.topic_child.trim() : "";
         if (topicRoot || topicChild) {
           return {
-            root: topicRoot || topicChild || "נושא כללי",
+            root: topicRoot || topicChild || "ללא תיוג סמנטי",
             child: topicChild,
           };
         }
@@ -4247,7 +4456,7 @@ def debug_playground_page() -> HTMLResponse:
         }
 
         return {
-          root: parts[0] || "נושא כללי",
+          root: parts[0] || "ללא תיוג סמנטי",
           child: "",
         };
       };
@@ -4454,9 +4663,6 @@ def debug_playground_page() -> HTMLResponse:
           renderExtendedAnswer();
         });
       }
-      const getCheckedValues = (name) => {
-        return Array.from(document.querySelectorAll(`input[name=\"${name}\"]:checked`)).map((box) => box.value);
-      };
       const cleanText = (value) => {
         const compact = String(value || "").trim();
         return compact || null;
@@ -4471,9 +4677,6 @@ def debug_playground_page() -> HTMLResponse:
         };
         assign(questionInput, "question");
         assign(yearInput, "year");
-        assign(documentIdInput, "document_id");
-        assign(documentVersionIdInput, "document_version_id");
-        assign(pipelineRunIdInput, "pipeline_run_id");
         assign(topicInput, "topic");
       };
       applyQueryParams();
@@ -4533,9 +4736,6 @@ def debug_playground_page() -> HTMLResponse:
           question: question,
           top_k: topK,
           muni: "ashdod",
-          semantic_mode: "off",
-          source_types: ["pdf_first_protocol"],
-          required_source_types: ["pdf_first_protocol"],
           debug_mode: Boolean(debugModeInput && debugModeInput.checked),
         };
 
@@ -4778,13 +4978,15 @@ def debug_playground_page() -> HTMLResponse:
 
 @app.get("/semantic/tree")
 def semantic_tree(
+    request: Request,
     muni: str | None = None,
     root_id: int | None = None,
     depth: int | None = None,
     kind: str | None = None,
     status: str | None = "active",
+    format: str | None = None,
     db=Depends(get_db),
-) -> dict:
+) -> Any:
     stmt = select(SemanticNode)
     if muni:
         stmt = stmt.join(SourceSite, SourceSite.id == SemanticNode.source_site_id).where(
@@ -4810,6 +5012,8 @@ def semantic_tree(
         if node.parent_node_id is None:
             continue
         children_by_parent.setdefault(node.parent_node_id, []).append(node.id)
+    for child_ids in children_by_parent.values():
+        child_ids.sort(key=lambda node_id: (nodes_by_id[node_id].pref_label_norm, node_id))
 
     included_ids: set[int]
     if root_id is not None:
@@ -4831,17 +5035,145 @@ def semantic_tree(
             max_depth = max(0, depth)
             included_ids = {node.id for node in nodes if node.depth <= max_depth}
 
+    parent_by_id = {node.id: node.parent_node_id for node in nodes}
+
+    def path_for(node_id: int) -> list[int]:
+        path = [node_id]
+        parent_id = parent_by_id.get(node_id)
+        while parent_id is not None and parent_id in nodes_by_id:
+            path.append(parent_id)
+            parent_id = parent_by_id.get(parent_id)
+        return list(reversed(path))
+
+    def payload_for(node: SemanticNode) -> dict:
+        child_ids = [child_id for child_id in children_by_parent.get(node.id, []) if child_id in included_ids]
+        siblings = [
+            sibling_id
+            for sibling_id in children_by_parent.get(node.parent_node_id, [])
+            if sibling_id in included_ids and sibling_id != node.id
+        ] if node.parent_node_id is not None else []
+        sort_order = 0
+        sibling_order = children_by_parent.get(node.parent_node_id, []) if node.parent_node_id is not None else [root.id for root in nodes if root.parent_node_id is None]
+        if node.id in sibling_order:
+            sort_order = sibling_order.index(node.id)
+        return _semantic_node_payload(
+            node,
+            child_count=len(child_ids),
+            child_ids=child_ids,
+            sibling_ids=siblings,
+            path_ids=[node_id for node_id in path_for(node.id) if node_id in included_ids],
+            sort_order=sort_order,
+        )
+
+    def nested_node(node: SemanticNode) -> dict:
+        payload = payload_for(node)
+        payload["children"] = [nested_node(nodes_by_id[child_id]) for child_id in payload["child_ids"]]
+        return payload
+
     items = []
     for node in nodes:
         if node.id not in included_ids:
             continue
-        child_count = sum(1 for child_id in children_by_parent.get(node.id, []) if child_id in included_ids)
-        items.append(_semantic_node_payload(node, child_count=child_count))
+        items.append(payload_for(node))
 
-    return {
+    roots = [
+        nested_node(node)
+        for node in nodes
+        if node.id in included_ids and node.parent_node_id is None
+    ]
+
+    payload = {
         "count": len(items),
         "items": items,
+        "root_count": len(roots),
+        "roots": roots,
     }
+    if _wants_semantic_tree_html(request=request, format=format):
+        return HTMLResponse(_semantic_tree_html(payload, title="עץ נושאים סמנטי", subtitle="/semantic/tree"))
+    return payload
+
+
+def _wants_semantic_tree_html(*, request: Request | None, format: str | None) -> bool:
+    if str(format or "").strip().casefold() == "json":
+        return False
+    if request is None:
+        return False
+    accept = str(request.headers.get("accept") or "").casefold()
+    return "text/html" in accept and "application/json" not in accept
+
+
+def _semantic_tree_html(payload: dict[str, Any], *, title: str, subtitle: str) -> str:
+    roots = payload.get("roots") if isinstance(payload.get("roots"), list) else []
+    rows = "\n".join(_semantic_tree_node_html(root) for root in roots)
+    if not rows:
+        rows = '<p class="empty">אין נושאים להצגה.</p>'
+    return f"""
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(title)}</title>
+  <style>
+    body {{ margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f7f4ee; color: #17201b; }}
+    main {{ max-width: 1120px; margin: 0 auto; padding: 32px 20px 48px; }}
+    header {{ display: flex; justify-content: space-between; gap: 16px; align-items: end; margin-bottom: 24px; }}
+    h1 {{ margin: 0; font-size: clamp(28px, 4vw, 44px); letter-spacing: -0.03em; }}
+    .muted {{ color: #667064; font-size: 14px; }}
+    .actions a {{ color: #145c40; font-weight: 700; text-decoration: none; border-bottom: 1px solid currentColor; }}
+    .summary {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 22px; }}
+    .metric {{ background: #fff; border: 1px solid #ded8cb; border-radius: 18px; padding: 16px; box-shadow: 0 12px 28px rgba(46, 37, 24, 0.06); }}
+    .metric strong {{ display: block; font-size: 26px; }}
+    .tree {{ display: grid; gap: 12px; }}
+    .node {{ background: #fffdf9; border: 1px solid #ded8cb; border-radius: 18px; padding: 14px 16px; box-shadow: 0 10px 24px rgba(46, 37, 24, 0.05); }}
+    .node.child {{ margin-top: 10px; margin-right: 24px; background: #fbfaf6; }}
+    .label {{ font-size: 20px; font-weight: 800; }}
+    .meta {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: #5c665d; font-size: 13px; }}
+    .pill {{ border: 1px solid #d2cabb; border-radius: 999px; padding: 3px 8px; background: #f6f1e7; }}
+    .empty {{ background: #fff; border-radius: 16px; padding: 18px; }}
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>{html.escape(title)}</h1>
+        <div class="muted">{html.escape(subtitle)}</div>
+      </div>
+      <div class="actions"><a href="?format=json">JSON</a></div>
+    </header>
+    <section class="summary">
+      <div class="metric"><span class="muted">שורשים</span><strong>{int(payload.get('root_count') or 0)}</strong></div>
+      <div class="metric"><span class="muted">פריטים</span><strong>{int(payload.get('count') or 0)}</strong></div>
+    </section>
+    <section class="tree">{rows}</section>
+  </main>
+</body>
+</html>
+"""
+
+
+def _semantic_tree_node_html(node: dict[str, Any], *, child: bool = False) -> str:
+    label = str(node.get("label_he") or node.get("label") or "")
+    status = str(node.get("status") or "")
+    support = int(node.get("support_count") or 0)
+    node_id = str(node.get("id") or "")
+    semantic_type = str(node.get("semantic_type") or "")
+    children = node.get("children") if isinstance(node.get("children"), list) else []
+    child_rows = "\n".join(_semantic_tree_node_html(item, child=True) for item in children)
+    css_class = "node child" if child else "node"
+    return f"""
+      <article class="{css_class}">
+        <div class="label">{html.escape(label)}</div>
+        <div class="meta">
+          <span class="pill">id: {html.escape(node_id)}</span>
+          <span class="pill">status: {html.escape(status)}</span>
+          <span class="pill">support: {support}</span>
+          <span class="pill">type: {html.escape(semantic_type)}</span>
+        </div>
+        {child_rows}
+      </article>
+    """
 
 
 @app.get("/semantic/node/{node_id}")
@@ -4975,13 +5307,20 @@ def semantic_node_detail(node_id: int, db=Depends(get_db)) -> dict:
 
 
 @app.get("/topic/tree/cache")
-def topic_tree_cache(*, limit: int = 5000, db=Depends(get_db)) -> dict:
-    return {
-        "count": 0,
-        "roots": [],
+def topic_tree_cache(*, request: Request, limit: int = 5000, format: str | None = None, db=Depends(get_db)) -> Any:
+    payload = semantic_tree(request=request, depth=None, kind="topic", status="active", format="json", db=db)
+    if limit and int(limit) > 0:
+        payload["items"] = payload.get("items", [])[: int(limit)]
+        payload["count"] = len(payload["items"])
+    payload = {
         "status": "retired",
         "replacement_endpoint": "/semantic/tree",
+        "adapter": "semantic_tree",
+        **payload,
     }
+    if _wants_semantic_tree_html(request=request, format=format):
+        return HTMLResponse(_semantic_tree_html(payload, title="עץ נושאים", subtitle="/topic/tree/cache · adapter to /semantic/tree"))
+    return payload
 
 
 @app.get("/semantic/runs/{document_version_id}")
@@ -5431,8 +5770,6 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
 
       const defaultMuni = {default_muni_json};
       const defaultTopic = {default_topic_json};
-      const requiredSourceTypes = ["protocol", "attachment"];
-
       const hide = (node) => {{
         if (node) {{
           node.classList.add("hidden");
@@ -5467,7 +5804,7 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
         }}
         const fallbackWords = String(fallbackText || "").trim().split(/\\s+/).filter(Boolean);
         return {{
-          root: parts[0] || "נושא כללי",
+          root: parts[0] || "ללא תיוג סמנטי",
           child: fallbackWords.slice(0, 4).join(" ") || "החלטה",
         }};
       }};
@@ -5485,8 +5822,6 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
         const payload = {{
           question: question,
           top_k: topK,
-          source_types: requiredSourceTypes,
-          required_source_types: requiredSourceTypes,
           semantic_mode: "off",
           debug_mode: Boolean(debugModeInput && debugModeInput.checked),
         }};

@@ -81,6 +81,97 @@ def test_rag_retrieval_source_filter_and_top_k_are_tunable() -> None:
     assert result.retrieval_set_id
 
 
+def test_rag_retrieval_pdf_first_scope_uses_pdf_first_chunks_directly() -> None:
+    search = StubSearchService(
+        {
+            "pdf_first_protocol": [
+                _hit(
+                    chunk_id="pf-1",
+                    source_type="pdf_first_protocol",
+                    score=0.95,
+                    citation="p.1",
+                ),
+            ],
+            "pdf_first_attachment": [
+                _hit(
+                    chunk_id="pfa-1",
+                    source_type="pdf_first_attachment",
+                    score=0.91,
+                    citation="p.2",
+                ),
+            ]
+        }
+    )
+    retrieval = RagRetrievalService(search_service=search)
+
+    result = retrieval.retrieve(
+        query="מה הוחלט?",
+        source_kinds=["pdf_first_protocol", "pdf_first_attachment"],
+        document_version_ids=[21],
+        top_k=3,
+        semantic_mode="off",
+    )
+
+    assert [context.chunk_id for context in result.contexts] == ["pf-1", "pfa-1"]
+    assert search.calls == [
+        {
+            "query": "מה הוחלט?",
+            "municipality_slug": None,
+            "source_type": "pdf_first_protocol",
+            "year": None,
+            "topic": None,
+            "semantic_node_id": None,
+            "semantic_label": None,
+            "semantic_mode": "off",
+            "artifact_kinds": ["pdf_first_retrieval_chunk", "pdf_first_v4_retrieval_chunk"],
+            "topic_terms": [],
+            "document_ids": [],
+            "document_version_ids": [21],
+            "limit": 9,
+        },
+        {
+            "query": "מה הוחלט?",
+            "municipality_slug": None,
+            "source_type": "pdf_first_attachment",
+            "year": None,
+            "topic": None,
+            "semantic_node_id": None,
+            "semantic_label": None,
+            "semantic_mode": "off",
+            "artifact_kinds": ["pdf_first_retrieval_chunk", "pdf_first_v4_retrieval_chunk"],
+            "topic_terms": [],
+            "document_ids": [],
+            "document_version_ids": [21],
+            "limit": 9,
+        },
+    ]
+    assert result.debug_info["pdf_first_direct"] is True
+    assert result.debug_info["query_rewrite"]["route_reason"] == "pdf_first_direct_scope"
+
+
+def test_rag_retrieval_empty_document_version_scope_returns_no_contexts() -> None:
+    search = StubSearchService(
+        {
+            "pdf_first_protocol": [
+                _hit(chunk_id="pf-1", source_type="pdf_first_protocol", score=0.95, citation="p.1"),
+            ],
+        }
+    )
+    retrieval = RagRetrievalService(search_service=search)
+
+    result = retrieval.retrieve(
+        query="מה נדון?",
+        source_kinds=["pdf_first_protocol", "pdf_first_attachment"],
+        document_version_ids=[],
+        top_k=3,
+        semantic_mode="off",
+    )
+
+    assert result.contexts == []
+    assert search.calls == []
+    assert result.debug_info["empty_document_version_scope"] is True
+
+
 def test_rag_retrieval_forwards_semantic_selector_params_to_search() -> None:
     search = StubSearchService(
         {

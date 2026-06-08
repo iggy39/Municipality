@@ -31,6 +31,8 @@ BROAD_SCOPE_TOKENS = {
     "בישיבה",
     "בוועדה",
 }
+PDF_FIRST_SOURCE_KINDS = {"pdf_first_protocol", "pdf_first_attachment", "pdf_first_v4_protocol", "pdf_first_v4_attachment"}
+PDF_FIRST_ARTIFACT_KINDS = ["pdf_first_retrieval_chunk", "pdf_first_v4_retrieval_chunk"]
 RETRIEVAL_VERSION = f"hierarchy_hebrew_rag_{RagArchitectureConfig.from_env().version}"
 
 
@@ -105,6 +107,7 @@ class RagRetrievalService:
         normalized_query = normalize_for_search(query)
         effective_top_k = max(1, top_k)
         requested_source_kinds = _normalize_source_kinds(source_kinds)
+        explicit_empty_document_scope = document_version_ids is not None and not document_version_ids
         scoped_document_ids = _normalize_positive_ints(document_ids)
         scoped_document_version_ids = _normalize_positive_ints(document_version_ids)
         query_hash = hash_text(query)
@@ -168,6 +171,133 @@ class RagRetrievalService:
                 requested_source_types=requested_source_kinds,
                 retrieved_source_types=[],
                 score_stats={"max": None, "min": None, "avg": None},
+            )
+            return result
+
+        if explicit_empty_document_scope:
+            result = RagRetrievalResult(
+                query=query,
+                normalized_query=normalized_query,
+                top_k=effective_top_k,
+                retrieval_set_id=empty_retrieval_set_id,
+                requested_source_kinds=requested_source_kinds,
+                contexts=[],
+                debug_info={
+                    "candidate_limit": 0,
+                    "empty_document_version_scope": True,
+                    "lexical_top_k_chunk_ids": [],
+                    "reranked_top_k_chunk_ids": [],
+                    "embedding_rerank": {"enabled": False},
+                },
+            )
+            log_rag_event(
+                "rag.retrieval.result",
+                ask_request_id=ask_request_id,
+                query_hash=query_hash,
+                retrieval_set_id=result.retrieval_set_id,
+                context_count=0,
+                requested_source_types=requested_source_kinds,
+                retrieved_source_types=[],
+                score_stats={"max": None, "min": None, "avg": None},
+            )
+            return result
+
+        if requested_source_kinds and set(requested_source_kinds).issubset(PDF_FIRST_SOURCE_KINDS):
+            if self.reranker is not None:
+                initial_limit = max(self.reranker.initial_candidate_limit(top_k=effective_top_k), effective_top_k * 3)
+            else:
+                initial_limit = max(effective_top_k * 3, effective_top_k)
+            hits = []
+            for source_kind in requested_source_kinds:
+                hits.extend(
+                    self.search_service.search(
+                        query=query,
+                        municipality_slug=municipality_slug,
+                        source_type=source_kind,
+                        year=year,
+                        topic=topic,
+                        semantic_node_id=semantic_node_id,
+                        semantic_label=semantic_label,
+                        semantic_mode=semantic_mode,
+                        artifact_kinds=PDF_FIRST_ARTIFACT_KINDS,
+                        topic_terms=[],
+                        document_ids=scoped_document_ids,
+                        document_version_ids=scoped_document_version_ids,
+                        limit=initial_limit,
+                    )
+                )
+            selected_hits = _dedupe_hits(hits)
+            lexical_top_k_chunk_ids = [str(row.chunk_id) for row in selected_hits[:effective_top_k]]
+            rerank_stats: dict[str, Any] = {"enabled": False}
+            if self.reranker is not None and selected_hits:
+                selected_hits, rerank_stats = self.reranker.rerank_hits(
+                    query=query,
+                    hits=selected_hits,
+                    top_k=effective_top_k,
+                )
+            selected_hits.sort(key=lambda row: row.score, reverse=True)
+            contexts = [_to_context(row) for row in selected_hits[:effective_top_k]]
+            retrieval_set_id = build_retrieval_set_id(
+                normalized_query=normalized_query,
+                requested_source_kinds=requested_source_kinds,
+                top_k=effective_top_k,
+                chunk_ids=[row.chunk_id for row in contexts],
+                retrieval_version=RETRIEVAL_VERSION,
+                scope_filters=_retrieval_scope_filters(
+                    municipality_slug=municipality_slug,
+                    year=year,
+                    topic=topic,
+                    semantic_node_id=semantic_node_id,
+                    semantic_label=semantic_label,
+                    semantic_mode=semantic_mode,
+                    document_ids=scoped_document_ids,
+                    document_version_ids=scoped_document_version_ids,
+                ),
+            )
+            result = RagRetrievalResult(
+                query=query,
+                normalized_query=normalized_query,
+                top_k=effective_top_k,
+                retrieval_set_id=retrieval_set_id,
+                requested_source_kinds=requested_source_kinds,
+                contexts=contexts,
+                debug_info={
+                    "candidate_limit": initial_limit,
+                    "pdf_first_direct": True,
+                    "query_rewrite": {
+                        "rewritten_query": query,
+                        "lexical_terms": [],
+                        "semantic_terms": [],
+                        "header_terms": [],
+                        "artifact_kind_priority": list(PDF_FIRST_ARTIFACT_KINDS),
+                        "retrieval_strategy": "pdf_first_chunks",
+                        "use_neighbors": False,
+                        "route_reason": "pdf_first_direct_scope",
+                        "provider": None,
+                        "model": None,
+                    },
+                    "lexical_top_k_chunk_ids": lexical_top_k_chunk_ids,
+                    "reranked_top_k_chunk_ids": [str(row.chunk_id) for row in contexts],
+                    "embedding_rerank": dict(rerank_stats),
+                },
+            )
+            scores = [row.score for row in contexts]
+            score_stats = {
+                "max": round(max(scores), 6) if scores else None,
+                "min": round(min(scores), 6) if scores else None,
+                "avg": round((sum(scores) / len(scores)), 6) if scores else None,
+            }
+            log_rag_event(
+                "rag.retrieval.result",
+                ask_request_id=ask_request_id,
+                query_hash=query_hash,
+                retrieval_set_id=result.retrieval_set_id,
+                context_count=len(contexts),
+                requested_source_types=requested_source_kinds,
+                retrieved_source_types=sorted(result.source_kinds),
+                chunk_ids=[row.chunk_id for row in contexts],
+                score_stats=score_stats,
+                embedding_rerank=rerank_stats,
             )
             return result
 
@@ -406,8 +536,8 @@ def _artifact_kind_plans(*, rewrite_result: QueryRewriteResult, retrieval_strate
 
 
 def _source_artifact_kinds(*, source_kind: str, rewrite_result: QueryRewriteResult, retrieval_strategy: str) -> list[str]:
-    if source_kind == "pdf_first_protocol":
-        return ["pdf_first_retrieval_chunk"]
+    if source_kind in PDF_FIRST_SOURCE_KINDS:
+        return list(PDF_FIRST_ARTIFACT_KINDS)
     return _artifact_kind_plans(rewrite_result=rewrite_result, retrieval_strategy=retrieval_strategy)[0]
 
 
@@ -451,7 +581,7 @@ def _ensure_requested_source_coverage(hits: list[Any], requested_source_kinds: l
 def _normalize_source_kinds(source_kinds: list[str] | None) -> list[str]:
     if not source_kinds:
         return []
-    accepted = {"protocol", "pdf_first_protocol", "attachment", "other"}
+    accepted = {"protocol", "pdf_first_protocol", "pdf_first_attachment", "pdf_first_v4_protocol", "pdf_first_v4_attachment", "attachment", "other"}
     out: list[str] = []
     seen: set[str] = set()
     for source_kind in source_kinds:

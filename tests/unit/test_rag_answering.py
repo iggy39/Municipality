@@ -1466,6 +1466,22 @@ def test_enforce_semantic_topics_never_returns_placeholder_topic() -> None:
     assert ">" in str(enriched[0]["topic_name"])
 
 
+def test_compose_answer_omits_generic_topic_placeholder() -> None:
+    answer = rag_answering._compose_answer_from_sections(
+        [
+            {
+                "protocol_title": "פרוטוקול",
+                "topic_name": "נושא כללי",
+                "text": "הדיון עסק בנושא שנתמך בראיות.",
+            }
+        ]
+    )
+
+    assert "נושא כללי" not in answer
+    assert "נושא:" not in answer
+    assert "הדיון עסק בנושא שנתמך בראיות" in answer
+
+
 def test_enrich_allocation_procedural_summary_with_parcel_details() -> None:
     decision_chunk = RagContextChunk(
         chunk_id="chunk-decision",
@@ -1824,6 +1840,477 @@ def test_rag_answering_refuses_when_no_decision_content_exists() -> None:
     assert [request["call_type"] for request in provider.requests] == ["answer"]
 
 
+def test_pdf_first_context_fallback_suppresses_unrelated_broad_root() -> None:
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "answer": json.dumps(
+                {
+                    "answer_status": "answer",
+                    "topic_he": "הקצאות ושימושים",
+                    "outcome_type": "discussed",
+                    "answer_he": "טיוטה לא תקפה",
+                    "claims": [
+                        {
+                            "text_he": "טענה לא תקפה",
+                            "supporting_chunk_ids": ["missing-chunk"],
+                            "quoted_evidence": "טענה לא תקפה",
+                        }
+                    ],
+                    "confidence": 0.2,
+                    "limitations": [],
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+    retrieval = RagRetrievalResult(
+        query="מה נדון בישיבת מועצה מיום 2.2.2022? נושאים לדיון החלטות סעיפים",
+        normalized_query="מה נדון בישיבת מועצה מיום 2.2.2022 נושאים לדיון החלטות סעיפים",
+        top_k=8,
+        retrieval_set_id="set-pdf-first-overview",
+        requested_source_kinds=["pdf_first_protocol", "pdf_first_attachment"],
+        contexts=[
+            RagContextChunk(
+                chunk_id="pf-topic",
+                score=0.91,
+                snippet="snippet",
+                citation="p.32",
+                source_kind="pdf_first_protocol",
+                document_id=11,
+                document_title="ישיבת-מועצה-2-22-מיום-02-02-22-pdfua",
+                document_url="https://example.local/doc.pdf",
+                municipality_slug="ashdod",
+                start_page=32,
+                end_page=32,
+                chunk_text=(
+                    "canonical_topic_label_he: הקצאות ושימושים\n"
+                    "structural_role: outline_item\n"
+                    "raw_pdf_text: סעיף36 : 35 '.פרוטוקול מישיבת הנחות במיסים ונזקקים "
+                    "מס1/22 מיום 3.1.22 החלטות פרוטוקול מישיבת הנחות במיסים ונזקקים "
+                    "מס1/22 מיום 3.1.22 מחליטים פה אחד לאשר"
+                ),
+                primary_topic="הקצאות ושימושים",
+                section_path=["הקצאות ושימושים", "outline_item"],
+                artifact_kind="pdf_first_retrieval_chunk",
+                document_version_id=11,
+            )
+        ],
+        debug_info={
+            "ask_scope": {
+                "date_scope": {"applied": True},
+                "retrieval_query": {"expanded": True},
+            }
+        },
+    )
+
+    result = service.compose_pdf_first(question="מה נדון בישיבת מועצה מיום 2.2.2022?", retrieval=retrieval)
+
+    assert result.status == "answer"
+    assert result.scoring.get("answer_generation_route") == "pdf_first_context_extract_fallback"
+    section = result.answer_sections[0]
+    assert section["topic_root"] == "הנחות במיסים ונזקקים"
+    assert section["topic_child"] is None
+    assert section["topic_display"] == "הנחות במיסים ונזקקים"
+    assert section["topic_evidence"]["route"] == "visible_cited_text"
+    assert section["topic_evidence"]["root_relation"] == "unrelated_broad_root_suppressed"
+    assert result.citations[0].chunk_id == "pf-topic"
+
+
+def test_pdf_first_context_fallback_collapses_equivalent_parent_child_topic() -> None:
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "answer": json.dumps(
+                {
+                    "answer_status": "answer",
+                    "topic_he": "מישיבת ועדת 'מלגות",
+                    "outcome_type": "approved",
+                    "answer_he": "טיוטה לא תקפה",
+                    "claims": [{"text_he": "טיוטה", "supporting_chunk_ids": ["missing"], "quoted_evidence": "טיוטה"}],
+                    "confidence": 0.2,
+                    "limitations": [],
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+    retrieval = RagRetrievalResult(
+        query="מה נדון בישיבת מועצה מיום 2.2.2022? נושאים לדיון החלטות סעיפים",
+        normalized_query="מה נדון בישיבת מועצה מיום 2.2.2022 נושאים לדיון החלטות סעיפים",
+        top_k=8,
+        retrieval_set_id="set-pdf-first-overview-scholarships",
+        requested_source_kinds=["pdf_first_protocol", "pdf_first_attachment"],
+        contexts=[
+            RagContextChunk(
+                chunk_id="pf-scholarships",
+                score=0.91,
+                snippet="snippet",
+                citation="p.33",
+                source_kind="pdf_first_protocol",
+                document_id=11,
+                document_title="פרוטוקול",
+                document_url="https://example.local/doc.pdf",
+                municipality_slug="ashdod",
+                start_page=33,
+                end_page=33,
+                chunk_text=(
+                    "canonical_topic_label_he: מישיבת ועדת 'מלגות\n"
+                    "structural_role: outline_item\n"
+                    "raw_pdf_text: סעיף43 פרוטוקול מישיבת ועדת מלגות מס1/22 מיום17.1.22 "
+                    "מחליטים פה אחד לאשר פרוטוקול מישיבת ועדת מלגות"
+                ),
+                primary_topic="מישיבת ועדת 'מלגות",
+                section_path=["מישיבת ועדת 'מלגות", "outline_item"],
+                artifact_kind="pdf_first_retrieval_chunk",
+                document_version_id=11,
+            )
+        ],
+        debug_info={"ask_scope": {"date_scope": {"applied": True}, "retrieval_query": {"expanded": True}}},
+    )
+
+    result = service.compose_pdf_first(question="מה נדון בישיבת מועצה מיום 2.2.2022?", retrieval=retrieval)
+
+    section = result.answer_sections[0]
+    assert section["topic_root"] == "ועדת מלגות"
+    assert section["topic_child"] is None
+    assert section["topic_display"] == "ועדת מלגות"
+    assert section["topic_evidence"]["root_relation"] == "equivalent_root_child_collapsed"
+
+
+def test_pdf_first_context_fallback_labels_agenda_header_instead_of_general_topic() -> None:
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "answer": json.dumps(
+                {
+                    "answer_status": "answer",
+                    "topic_he": "דת ושירותי דת",
+                    "outcome_type": "discussed",
+                    "answer_he": "טיוטה לא תקפה",
+                    "claims": [{"text_he": "טיוטה", "supporting_chunk_ids": ["missing"], "quoted_evidence": "טיוטה"}],
+                    "confidence": 0.2,
+                    "limitations": [],
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+    retrieval = RagRetrievalResult(
+        query="מה נדון בישיבת מועצה מיום 2.2.2022? נושאים לדיון החלטות סעיפים",
+        normalized_query="מה נדון בישיבת מועצה מיום 2.2.2022 נושאים לדיון החלטות סעיפים",
+        top_k=8,
+        retrieval_set_id="set-pdf-first-overview-agenda",
+        requested_source_kinds=["pdf_first_protocol", "pdf_first_attachment"],
+        contexts=[
+            RagContextChunk(
+                chunk_id="pf-agenda",
+                score=0.82,
+                snippet="snippet",
+                citation="p.1",
+                source_kind="pdf_first_protocol",
+                document_id=11,
+                document_title="פרוטוקול",
+                document_url="https://example.local/doc.pdf",
+                municipality_slug="ashdod",
+                start_page=1,
+                end_page=1,
+                chunk_text=(
+                    "canonical_topic_label_he: דת ושירותי דת\n"
+                    "structural_role: outline_item\n"
+                    "raw_pdf_text: סעיף1 : הנושאים לדיון שאילתות 1. שאילתא בנושא מינוי מועצה דתית "
+                    "2. שאילתה בנושא תקציב מכבי אשדוד"
+                ),
+                primary_topic="דת ושירותי דת",
+                section_path=["דת ושירותי דת", "outline_item"],
+                artifact_kind="pdf_first_retrieval_chunk",
+                document_version_id=11,
+            )
+        ],
+        debug_info={"ask_scope": {"date_scope": {"applied": True}, "retrieval_query": {"expanded": True}}},
+    )
+
+    result = service.compose_pdf_first(question="מה נדון בישיבת מועצה מיום 2.2.2022?", retrieval=retrieval)
+
+    section = result.answer_sections[0]
+    assert section["topic_root"] == "מינוי מועצה דתית"
+    assert section["topic_child"] is None
+    assert section["topic_display"] == "מינוי מועצה דתית"
+    assert section["topic_root"] != "נושא כללי"
+
+
+def test_pdf_first_context_fallback_uses_matched_protocol_detail_subject_for_topic_tree() -> None:
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "answer": json.dumps(
+                {
+                    "answer_status": "answer",
+                    "topic_he": "שאילתות",
+                    "outcome_type": "discussed",
+                    "answer_he": "טיוטה לא תקפה",
+                    "claims": [{"text_he": "טיוטה", "supporting_chunk_ids": ["missing"], "quoted_evidence": "טיוטה"}],
+                    "confidence": 0.2,
+                    "limitations": [],
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+    header = RagContextChunk(
+        chunk_id="pf-question-header",
+        score=0.9,
+        snippet="snippet",
+        citation="p.1",
+        source_kind="pdf_first_protocol",
+        document_id=11,
+        document_title="פרוטוקול",
+        document_url="https://example.local/doc.pdf",
+        municipality_slug="ashdod",
+        start_page=1,
+        end_page=1,
+        chunk_text=(
+            "canonical_topic_label_he: דת ושירותי דת\n"
+            "structural_role: outline_item\n"
+            "raw_pdf_text: סעיף1 הנושאים לדיון שאילתות 1. שאילתא של ד\"ר לחמני בנושא \"מינוי מועצה דתית\" - מצ\"ל"
+        ),
+        primary_topic="דת ושירותי דת",
+        section_path=["דת ושירותי דת", "outline_item"],
+        artifact_kind="pdf_first_retrieval_chunk",
+        document_version_id=11,
+    )
+    detail = RagContextChunk(
+        chunk_id="pf-question-detail",
+        score=0.88,
+        snippet="snippet",
+        citation="p.7",
+        source_kind="pdf_first_protocol",
+        document_id=11,
+        document_title="פרוטוקול",
+        document_url="https://example.local/doc.pdf",
+        municipality_slug="ashdod",
+        start_page=7,
+        end_page=7,
+        chunk_text=(
+            "canonical_topic_label_he: דת ושירותי דת\n"
+            "structural_role: body\n"
+            "raw_pdf_text: שאילתא של ד\"ר לחמני בנושא \"מינוי מועצה דתית\" "
+            "גב' דינה בר אולפן מקריאה את תשובת ראש העיר לשאילתא של ד\"ר לחמני בנושא \"מינוי מועצה דתית\" "
+            "האם יש מועצות אחרות שכן מונה בהם ההרכב או שרק אנחנו לא מקבלים את המינוי"
+        ),
+        primary_topic="דת ושירותי דת",
+        section_path=["דת ושירותי דת", "body"],
+        artifact_kind="pdf_first_retrieval_chunk",
+        document_version_id=11,
+    )
+    retrieval = RagRetrievalResult(
+        query="מה נדון בישיבת מועצה מיום 2.2.2022? נושאים לדיון החלטות סעיפים",
+        normalized_query="מה נדון בישיבת מועצה מיום 2.2.2022 נושאים לדיון החלטות סעיפים",
+        top_k=8,
+        retrieval_set_id="set-question-detail-topic",
+        requested_source_kinds=["pdf_first_protocol", "pdf_first_attachment"],
+        contexts=[header, detail],
+        debug_info={
+            "ask_scope": {"date_scope": {"applied": True}, "retrieval_query": {"expanded": True}},
+            "pdf_first_reference_enrichments": {"pf-question-header": ["pf-question-detail"]},
+        },
+    )
+
+    result = service.compose_pdf_first(question="מה נדון בישיבת מועצה מיום 2.2.2022?", retrieval=retrieval)
+
+    assert result.status == "answer"
+    section = result.answer_sections[0]
+    assert section["topic_root"] == "מינוי מועצה דתית"
+    assert section["topic_child"] is None
+    assert section["topic_display"] == "מינוי מועצה דתית"
+    assert section["chunk_ids"] == ["pf-question-header", "pf-question-detail"]
+    assert "האם יש מועצות אחרות" in section["text"]
+    assert [citation.chunk_id for citation in result.citations] == ["pf-question-header", "pf-question-detail"]
+
+
+def test_pdf_first_context_fallback_uses_linked_attachment_detail_with_protocol_header_citation() -> None:
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "answer": json.dumps(
+                {
+                    "answer_status": "answer",
+                    "topic_he": "הסכמים והתקשרויות",
+                    "outcome_type": "approved",
+                    "answer_he": "טיוטה לא תקפה",
+                    "claims": [{"text_he": "טיוטה", "supporting_chunk_ids": ["missing"], "quoted_evidence": "טיוטה"}],
+                    "confidence": 0.2,
+                    "limitations": [],
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+    protocol_context = RagContextChunk(
+        chunk_id="pf-protocol-header",
+        score=0.95,
+        snippet="snippet",
+        citation="p.3",
+        source_kind="pdf_first_protocol",
+        document_id=11,
+        document_title="פרוטוקול מועצה",
+        document_url="https://example.local/protocol.pdf",
+        municipality_slug="ashdod",
+        start_page=3,
+        end_page=3,
+        chunk_text=(
+            "canonical_topic_label_he: הסכם בין עיריית אשדוד ובין החברה העירונית לתיירות אשדוד\n"
+            "structural_role: outline_item\n"
+            "raw_pdf_text: 27. הסכם בין עיריית אשדוד ובין החברה העירונית לתיירות אשדוד - מצ\"ל"
+        ),
+        primary_topic="הסכם בין עיריית אשדוד ובין החברה העירונית לתיירות אשדוד",
+        section_path=["הסכם בין עיריית אשדוד ובין החברה העירונית לתיירות אשדוד", "outline_item"],
+        artifact_kind="pdf_first_retrieval_chunk",
+        document_version_id=11,
+    )
+    attachment_context = RagContextChunk(
+        chunk_id="pf-attachment-detail",
+        score=0.88,
+        snippet="snippet",
+        citation="p.8",
+        source_kind="pdf_first_attachment",
+        document_id=13,
+        document_title="נספח מועצה",
+        document_url="https://example.local/attachment.pdf",
+        municipality_slug="ashdod",
+        start_page=8,
+        end_page=8,
+        chunk_text=(
+            "canonical_topic_label_he: הסכם בין עיריית אשדוד ובין החברה העירונית לתיירות אשדוד\n"
+            "structural_role: outline_item\n"
+            "summary_he: החברה לתיירות אשדוד מבקשת שימוש במקרקעין ברחוב הטיילת רובע א. "
+            "עיקרי ההסכם כוללים תקופת הרשאה, דמי שימוש ותחזוקה.\n"
+            "raw_pdf_text: הסכם בין עיריית אשדוד ובין החברה העירונית לתיירות אשדוד. "
+            "החברה לתיירות אשדוד מבקשת שימוש במקרקעין ברחוב הטיילת רובע א."
+        ),
+        primary_topic="הסכם בין עיריית אשדוד ובין החברה העירונית לתיירות אשדוד",
+        section_path=["הסכם בין עיריית אשדוד ובין החברה העירונית לתיירות אשדוד", "outline_item"],
+        artifact_kind="pdf_first_retrieval_chunk",
+        document_version_id=13,
+    )
+    retrieval = RagRetrievalResult(
+        query="מה נדון בישיבת מועצה מיום 2.2.2022? נושאים לדיון החלטות סעיפים",
+        normalized_query="מה נדון בישיבת מועצה מיום 2.2.2022 נושאים לדיון החלטות סעיפים",
+        top_k=8,
+        retrieval_set_id="set-pdf-first-overview-attachment",
+        requested_source_kinds=["pdf_first_protocol", "pdf_first_attachment"],
+        contexts=[protocol_context, attachment_context],
+        debug_info={
+            "ask_scope": {"date_scope": {"applied": True}, "retrieval_query": {"expanded": True}},
+            "pdf_first_reference_enrichments": {"pf-protocol-header": ["pf-attachment-detail"]},
+        },
+    )
+
+    result = service.compose_pdf_first(question="מה נדון בישיבת מועצה מיום 2.2.2022?", retrieval=retrieval)
+
+    section = result.answer_sections[0]
+    assert section["chunk_ids"] == ["pf-protocol-header", "pf-attachment-detail"]
+    assert "שימוש במקרקעין" in section["text"]
+    assert [citation.chunk_id for citation in result.citations] == ["pf-protocol-header", "pf-attachment-detail"]
+    assert {citation.source_kind for citation in result.citations} == {"pdf_first_protocol", "pdf_first_attachment"}
+
+
+def test_pdf_first_overview_replaces_valid_but_undercovered_model_answer() -> None:
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "answer": json.dumps(
+                {
+                    "answer_status": "answer",
+                    "topic_he": "הקצאות ושימושים",
+                    "outcome_type": "approved",
+                    "answer_he": "ועדת הקצאות מקצועית אושרה ברוב קולות",
+                    "claims": [
+                        {
+                            "text_he": "ועדת הקצאות מקצועית אושרה ברוב קולות",
+                            "supporting_chunk_ids": ["pf-allocations"],
+                            "quoted_evidence": "ועדת הקצאות מקצועית אושרה ברוב קולות",
+                        }
+                    ],
+                    "confidence": 0.9,
+                    "limitations": [],
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+
+    result = service.compose_pdf_first(
+        question="מה נדון בישיבת מועצה מיום 2.2.2022?",
+        retrieval=_pdf_first_overview_retrieval_with_multiple_agenda_items(),
+    )
+
+    assert result.status == "answer"
+    assert result.scoring.get("answer_generation_route") == "pdf_first_context_extract_fallback"
+    assert result.scoring.get("pdf_first_extract_fallback_reason") == "overview_undercovered_model_answer"
+    assert result.scoring.get("pdf_first_model_used_chunk_ids") == ["pf-allocations"]
+    assert [citation.chunk_id for citation in result.citations] == [
+        "pf-agreement",
+        "pf-scholarships",
+        "pf-discounts",
+        "pf-allocations",
+    ]
+    topic_displays = [section.get("topic_display") for section in result.answer_sections]
+    assert "הסכם בין עיריית אשדוד ובין החברה העירונית לתיירות אשדוד" in topic_displays
+    assert "ועדת מלגות" in topic_displays
+    assert "הנחות במיסים ונזקקים" in topic_displays
+    assert "ועדת הקצאות מקצועית" in topic_displays
+    assert "הקצאות ושימושים" not in topic_displays
+    assert [request["call_type"] for request in provider.requests] == ["answer"]
+
+
+def test_pdf_first_non_overview_keeps_valid_model_answer_and_specific_topic_display() -> None:
+    provider = MockRagProvider(
+        responses_by_call_type={
+            "answer": json.dumps(
+                {
+                    "answer_status": "answer",
+                    "topic_he": "הקצאות ושימושים",
+                    "outcome_type": "approved",
+                    "answer_he": "ועדת הקצאות מקצועית אושרה ברוב קולות",
+                    "claims": [
+                        {
+                            "text_he": "ועדת הקצאות מקצועית אושרה ברוב קולות",
+                            "supporting_chunk_ids": ["pf-allocations"],
+                            "quoted_evidence": "ועדת הקצאות מקצועית אושרה ברוב קולות",
+                        }
+                    ],
+                    "confidence": 0.9,
+                    "limitations": [],
+                },
+                ensure_ascii=False,
+            )
+        }
+    )
+    client = build_rag_llm_client(config=RagLlmConfig.from_env({"RAG_LLM_PROVIDER": "mock"}), provider=provider)
+    service = RagAnsweringService(llm_client=client)
+    retrieval = _pdf_first_overview_retrieval_with_multiple_agenda_items()
+    retrieval.debug_info = {}
+
+    result = service.compose_pdf_first(question="מה אושר בוועדת הקצאות?", retrieval=retrieval)
+
+    assert result.status == "answer"
+    assert result.scoring.get("answer_generation_route") == "pdf_first_dictalm"
+    assert [citation.chunk_id for citation in result.citations] == ["pf-allocations"]
+    assert len(result.answer_sections) == 1
+    section = result.answer_sections[0]
+    assert section["topic_root"] == "הקצאות ושימושים"
+    assert section["topic_child"] == "ועדת הקצאות מקצועית"
+    assert section["topic_display"] == "ועדת הקצאות מקצועית"
+    assert section["topic_evidence"]["route"] == "visible_cited_text"
+
+
 def test_rag_answering_refuses_when_claim_has_unknown_citation_chunk() -> None:
     provider = MockRagProvider(
         responses_by_call_type={
@@ -1962,7 +2449,7 @@ def test_rag_answering_accepts_markdown_fenced_json_from_model() -> None:
     assert {row.chunk_id for row in result.citations} == {"chunk-protocol", "chunk-attachment"}
 
 
-def test_rag_answering_refuses_when_mixed_answer_cites_only_protocol_side() -> None:
+def test_rag_answering_augments_mixed_answer_when_provider_cites_only_protocol_side() -> None:
     provider = MockRagProvider(
         responses_by_call_type={
             "answer": json.dumps(
@@ -2003,9 +2490,10 @@ def test_rag_answering_refuses_when_mixed_answer_cites_only_protocol_side() -> N
         required_source_kinds=["protocol", "attachment"],
     )
 
-    assert result.status == "refusal"
-    assert result.refusal_reason_code == REASON_MISSING_ATTACHMENT_EVIDENCE
-    assert result.missing_source_kinds == ["attachment"]
+    assert result.status == "answer"
+    assert result.missing_source_kinds == []
+    assert {citation.chunk_id for citation in result.citations} == {"chunk-protocol", "chunk-attachment"}
+    assert result.scoring.get("protocol_coverage_augmented_count") == 1
     assert [request["call_type"] for request in provider.requests] == ["answer"]
 
 
@@ -2148,6 +2636,117 @@ def _retrieval_result_with_mixed_sources() -> RagRetrievalResult:
                 end_page=1,
             ),
         ],
+    )
+
+
+def _pdf_first_overview_retrieval_with_multiple_agenda_items() -> RagRetrievalResult:
+    return RagRetrievalResult(
+        query="מה נדון בישיבת מועצה מיום 2.2.2022? נושאים לדיון החלטות סעיפים",
+        normalized_query="מה נדון בישיבת מועצה מיום 2.2.2022 נושאים לדיון החלטות סעיפים",
+        top_k=8,
+        retrieval_set_id="set-pdf-first-overview-regression",
+        requested_source_kinds=["pdf_first_protocol", "pdf_first_attachment"],
+        contexts=[
+            RagContextChunk(
+                chunk_id="pf-agreement",
+                score=0.95,
+                snippet="snippet agreement",
+                citation="p.27",
+                source_kind="pdf_first_protocol",
+                document_id=11,
+                document_title="ישיבת-מועצה-2-22-מיום-02-02-22-pdfua",
+                document_url="https://example.local/doc.pdf",
+                municipality_slug="ashdod",
+                start_page=27,
+                end_page=27,
+                chunk_text=(
+                    "canonical_topic_label_he: הסכמים והתקשרויות\n"
+                    "structural_role: outline_item\n"
+                    "raw_pdf_text: סעיף 30 אישור הסכם בין עיריית אשדוד ובין החברה העירונית "
+                    "לתיירות אשדוד מחליטים לא לאשר את ההסכם מאחר ולא התקבל רוב"
+                ),
+                primary_topic="הסכמים והתקשרויות",
+                section_path=["הסכמים והתקשרויות", "outline_item"],
+                artifact_kind="pdf_first_retrieval_chunk",
+                document_version_id=11,
+            ),
+            RagContextChunk(
+                chunk_id="pf-scholarships",
+                score=0.91,
+                snippet="snippet scholarships",
+                citation="p.33",
+                source_kind="pdf_first_protocol",
+                document_id=11,
+                document_title="ישיבת-מועצה-2-22-מיום-02-02-22-pdfua",
+                document_url="https://example.local/doc.pdf",
+                municipality_slug="ashdod",
+                start_page=33,
+                end_page=33,
+                chunk_text=(
+                    "canonical_topic_label_he: מישיבת ועדת 'מלגות\n"
+                    "structural_role: outline_item\n"
+                    "raw_pdf_text: סעיף 37 פרוטוקול מישיבת ועדת מלגות מס1/22 מיום 3.1.22 "
+                    "החלטות פרוטוקול מישיבת ועדת מלגות מחליטים פה אחד לאשר"
+                ),
+                primary_topic="מישיבת ועדת 'מלגות",
+                section_path=["מישיבת ועדת 'מלגות", "outline_item"],
+                artifact_kind="pdf_first_retrieval_chunk",
+                document_version_id=11,
+            ),
+            RagContextChunk(
+                chunk_id="pf-discounts",
+                score=0.89,
+                snippet="snippet discounts",
+                citation="p.32",
+                source_kind="pdf_first_protocol",
+                document_id=11,
+                document_title="ישיבת-מועצה-2-22-מיום-02-02-22-pdfua",
+                document_url="https://example.local/doc.pdf",
+                municipality_slug="ashdod",
+                start_page=32,
+                end_page=32,
+                chunk_text=(
+                    "canonical_topic_label_he: הקצאות ושימושים\n"
+                    "structural_role: outline_item\n"
+                    "raw_pdf_text: סעיף 36 פרוטוקול מישיבת הנחות במיסים ונזקקים "
+                    "מס1/22 מיום 3.1.22 החלטות פרוטוקול מישיבת הנחות במיסים ונזקקים "
+                    "מחליטים פה אחד לאשר"
+                ),
+                primary_topic="הקצאות ושימושים",
+                section_path=["הקצאות ושימושים", "outline_item"],
+                artifact_kind="pdf_first_retrieval_chunk",
+                document_version_id=11,
+            ),
+            RagContextChunk(
+                chunk_id="pf-allocations",
+                score=0.87,
+                snippet="snippet allocations",
+                citation="p.27",
+                source_kind="pdf_first_protocol",
+                document_id=11,
+                document_title="ישיבת-מועצה-2-22-מיום-02-02-22-pdfua",
+                document_url="https://example.local/doc.pdf",
+                municipality_slug="ashdod",
+                start_page=27,
+                end_page=27,
+                chunk_text=(
+                    "canonical_topic_label_he: הקצאות ושימושים\n"
+                    "structural_role: outline_item\n"
+                    "raw_pdf_text: סעיף 35 פרוטוקול מישיבת ועדת הקצאות מקצועית מס 1/22 "
+                    "מיום 17.1.22 החלטות פרוטוקול מישיבת ועדת הקצאות מקצועית אושרו ברוב קולות"
+                ),
+                primary_topic="הקצאות ושימושים",
+                section_path=["הקצאות ושימושים", "outline_item"],
+                artifact_kind="pdf_first_retrieval_chunk",
+                document_version_id=11,
+            ),
+        ],
+        debug_info={
+            "ask_scope": {
+                "date_scope": {"applied": True},
+                "retrieval_query": {"expanded": True},
+            }
+        },
     )
 
 
