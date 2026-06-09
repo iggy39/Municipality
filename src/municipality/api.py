@@ -19,6 +19,7 @@ from municipality.chunking import normalize_for_search
 from municipality.db import build_engine, build_session_factory
 from municipality.embeddings import ChunkEmbeddingService, EmbeddingReranker
 from municipality.fetcher import AssetFetcher
+from municipality.gis_api import router as gis_router
 from municipality.migrations import apply_all
 from municipality.models import (
     ArtifactSemanticLink,
@@ -83,6 +84,7 @@ def _default_html_fetcher(url: str) -> str:
 engine = build_engine()
 SessionLocal = build_session_factory(engine)
 app = FastAPI(title="Municipality API")
+app.include_router(gis_router)
 TOPIC_SEMANTIC_CANONICALIZER = SemanticCanonicalizer()
 PDF_FIRST_ASK_SOURCE_TYPES = ["pdf_first_protocol", "pdf_first_attachment", "pdf_first_v4_protocol", "pdf_first_v4_attachment"]
 PDF_FIRST_PROTOCOL_SOURCE_TYPES = {"pdf_first_protocol", "pdf_first_v4_protocol"}
@@ -3587,7 +3589,8 @@ def _decision_payload(decision_id: int, db) -> dict | None:
 
 @app.on_event("startup")
 def startup() -> None:
-    apply_all(engine, Path("migrations"))
+    if engine.dialect.name == "sqlite":
+        apply_all(engine, Path("migrations"))
 
 
 @app.get("/health")
