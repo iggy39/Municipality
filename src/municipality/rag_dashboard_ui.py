@@ -9,7 +9,7 @@ def render_rag_dashboard_page() -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>לוח מחוונים עירוני</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQ+dzT4NfS2O5LkNzpH8b/3v0C8P2x0=" crossorigin="" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <style>
     :root {
       --page-bg: #f7f9fc;
@@ -487,6 +487,21 @@ def render_rag_dashboard_page() -> str:
     }
 
     .realGisMap[hidden] { display: none; }
+
+    .realGisStaticMap {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      width: 100%;
+      height: 100%;
+      display: block;
+      background:
+        linear-gradient(115deg, rgba(219, 234, 254, 0.72), transparent 38%),
+        repeating-linear-gradient(22deg, rgba(100, 116, 139, 0.13) 0 1px, transparent 1px 46px),
+        #eef7ef;
+    }
+
+    .realGisStaticMap[hidden] { display: none; }
 
     .mapFrame.hasRealGis .schematicMapSvg,
     .mapFrame.hasRealGis .mapControls { display: none; }
@@ -1455,6 +1470,7 @@ def render_rag_dashboard_page() -> str:
             </svg>
 
             <div id="real-gis-map" class="realGisMap" role="img" aria-label="מפת GIS אמיתית עם חלקה ונקודות עניין" hidden></div>
+            <svg id="real-gis-static-map" class="realGisStaticMap" viewBox="0 0 900 620" role="img" aria-label="מפת GIS אמיתית ללא ספריית מפה חיצונית" hidden></svg>
 
             <aside class="mapProvenanceBadge" data-spatial-representation="schematic" aria-label="מקוריות המפה">
               <p class="mapProvenanceBadgeTitle">מפה סכמטית בלבד</p>
@@ -1665,7 +1681,7 @@ def render_rag_dashboard_page() -> str:
     <ul id="ask-playground-meta"></ul><pre id="ask-playground-json"></pre>
   </section>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script>
     (() => {
       const form = document.getElementById("ask-playground-form");
@@ -1951,11 +1967,132 @@ def render_rag_dashboard_page() -> str:
         return source.name_he || source.name_en || feature?.source_id || "מקור לא ידוע";
       };
 
+      const collectGeoPoints = (coordinates, out = []) => {
+        if (Array.isArray(coordinates) && coordinates.length >= 2 && coordinates.slice(0, 2).every((value) => Number.isFinite(Number(value)))) {
+          out.push([Number(coordinates[0]), Number(coordinates[1])]);
+          return out;
+        }
+        if (Array.isArray(coordinates)) {
+          for (const item of coordinates) {
+            collectGeoPoints(item, out);
+          }
+        }
+        return out;
+      };
+
+      const staticProjection = (payload) => {
+        const points = collectGeoPoints(payload.parcel?.geometry?.coordinates || []);
+        for (const poi of payload.nearby_pois?.items || []) {
+          collectGeoPoints(poi.geometry?.coordinates || [], points);
+        }
+        if (points.length === 0) {
+          return null;
+        }
+        const lons = points.map((point) => point[0]);
+        const lats = points.map((point) => point[1]);
+        let minLon = Math.min(...lons);
+        let maxLon = Math.max(...lons);
+        let minLat = Math.min(...lats);
+        let maxLat = Math.max(...lats);
+        const lonPad = Math.max((maxLon - minLon) * 0.18, 0.001);
+        const latPad = Math.max((maxLat - minLat) * 0.18, 0.001);
+        minLon -= lonPad;
+        maxLon += lonPad;
+        minLat -= latPad;
+        maxLat += latPad;
+        return ([lon, lat]) => {
+          const x = 46 + ((lon - minLon) / (maxLon - minLon || 1)) * 808;
+          const y = 574 - ((lat - minLat) / (maxLat - minLat || 1)) * 528;
+          return [x, y];
+        };
+      };
+
+      const polygonPaths = (geometry, project) => {
+        const polygons = geometry?.type === "Polygon" ? [geometry.coordinates] : geometry?.coordinates || [];
+        return polygons.map((polygon) => {
+          const rings = Array.isArray(polygon) ? polygon : [];
+          return rings.map((ring) => {
+            const projected = (ring || []).map(project);
+            if (projected.length === 0) {
+              return "";
+            }
+            return `M ${projected.map((point) => `${point[0].toFixed(1)} ${point[1].toFixed(1)}`).join(" L ")} Z`;
+          }).join(" ");
+        }).join(" ");
+      };
+
+      const renderStaticGisMap = (payload) => {
+        const svg = document.getElementById("real-gis-static-map");
+        const mapFrame = document.querySelector(".mapFrame");
+        const project = staticProjection(payload || {});
+        if (!svg || !mapFrame || !payload?.parcel?.geometry || !project) {
+          return false;
+        }
+        svg.replaceChildren();
+        const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+        title.textContent = payload.title_he || "מפת GIS אמיתית";
+        svg.appendChild(title);
+        const parcelPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        parcelPath.setAttribute("d", polygonPaths(payload.parcel.geometry, project));
+        parcelPath.setAttribute("fill", "rgba(34,197,94,0.28)");
+        parcelPath.setAttribute("stroke", "#14532d");
+        parcelPath.setAttribute("stroke-width", "4");
+        parcelPath.setAttribute("stroke-linejoin", "round");
+        svg.appendChild(parcelPath);
+        for (const poi of payload.nearby_pois?.items || []) {
+          const coordinates = poi.geometry?.coordinates;
+          if (!Array.isArray(coordinates) || coordinates.length < 2) {
+            continue;
+          }
+          const [x, y] = project([Number(coordinates[0]), Number(coordinates[1])]);
+          const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          circle.setAttribute("cx", x.toFixed(1));
+          circle.setAttribute("cy", y.toFixed(1));
+          circle.setAttribute("r", poi.poi_category === "school" ? "8" : "7");
+          circle.setAttribute("fill", poiColor(poi.poi_category));
+          circle.setAttribute("stroke", "#ffffff");
+          circle.setAttribute("stroke-width", "3");
+          circle.setAttribute("opacity", "0.94");
+          const label = document.createElementNS("http://www.w3.org/2000/svg", "title");
+          label.textContent = `${poi.name_he || poi.name_en || poi.poi_category || "נקודת עניין"} · ${poi.provenance_id}`;
+          circle.appendChild(label);
+          svg.appendChild(circle);
+        }
+        const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        label.setAttribute("x", "450");
+        label.setAttribute("y", "36");
+        label.setAttribute("text-anchor", "middle");
+        label.setAttribute("direction", "rtl");
+        label.setAttribute("font-size", "18");
+        label.setAttribute("font-weight", "850");
+        label.setAttribute("fill", "#14532d");
+        label.textContent = "מפת GIS אמיתית - fallback ללא CDN";
+        svg.appendChild(label);
+        svg.hidden = false;
+        mapFrame.classList.add("hasRealGis");
+        setAttr(".mapPanel", "aria-label", "מפת GIS אמיתית");
+        setText("#map-title", payload.title_he || "מפת GIS אמיתית");
+        setText("#map-desc", "חלקת POC אמיתית ונקודות עניין רשמיות סמוכות. הרינדור מוצג ללא ספריית מפה חיצונית.");
+        setText(".mapProvenanceBadgeTitle", "מפת GIS אמיתית");
+        setText(".mapProvenanceBadgeText", "מוצגת שכבת GIS אמיתית עם provenance; רקע האריחים החיצוני לא נטען ולכן מוצג fallback מקומי.");
+        setAttr(".mapProvenanceBadge", "data-spatial-representation", "real_gis_static");
+        window.__municipalDashboardGisMap = payload;
+        if (dashboardRoot) {
+          dashboardRoot.dataset.realGisAvailable = "true";
+          dashboardRoot.dataset.gisMapStatus = "static-rendered";
+        }
+        return true;
+      };
+
       const renderRealGisMap = (payload) => {
         const mapNode = document.getElementById("real-gis-map");
         const mapFrame = document.querySelector(".mapFrame");
         if (!mapNode || !mapFrame || !payload || payload.status !== "found" || !payload.parcel?.geometry || !window.L) {
-          return false;
+          return renderStaticGisMap(payload);
+        }
+        const staticMap = document.getElementById("real-gis-static-map");
+        if (staticMap) {
+          staticMap.hidden = true;
         }
         mapNode.hidden = false;
         mapFrame.classList.add("hasRealGis");
