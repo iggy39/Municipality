@@ -470,6 +470,8 @@ def build_mock_rag_dashboard_payload() -> dict[str, Any]:
             "map": {
                 "title": "מפה סכמטית של רובע טו",
                 "description": "ים במערב, רשת רחובות בהירה, אזור נבחר סגול, תוואי תחבורה ציבורית כחול ופארקים ירוקים.",
+                "provenance_label": "מפה סכמטית בלבד",
+                "provenance_description": "אין גיאומטריית GIS מאומתת; המיקומים והצורות מוצגים להמחשה בלבד על בסיס הראיות.",
                 "sea_label": "חוף הים",
                 "legend_title": "מקרא",
                 "control_labels": ["מרכז מפה", "התקרבות", "התרחקות", "שכבות מפה"],
@@ -569,6 +571,14 @@ def build_mock_rag_dashboard_payload() -> dict[str, Any]:
             "map": {
                 "spatial_representation": "schematic",
                 "label": "מפה סכמטית",
+                "real_geometry": None,
+                "geometry_provenance": None,
+                "provenance": {
+                    "status": "schematic_only",
+                    "label_he": "מפה סכמטית בלבד",
+                    "description_he": "אין גיאומטריית GIS מאומתת; המיקומים והצורות מוצגים להמחשה בלבד על בסיס הראיות.",
+                    "source_evidence_refs": [],
+                },
                 "entities": _map_entities(),
                 "legend": [
                     {"id": "selected_area", "label": "אזור נבחר"},
@@ -690,6 +700,9 @@ def apply_mock_rag_dashboard_interaction(
         next_state["filter_modal_open"] = False
         next_state["active_filter_count"] = sum(1 for value in filters.values() if value not in (None, "", [], {}))
         next_state["active_filter_summary"] = filters
+        category_id = _category_id_from_filter(filters.get("category"))
+        if category_id in category_ids:
+            next_state["selected_category_id"] = category_id
     elif interaction_type == "reset_filters":
         next_state["filter_modal_open"] = False
         next_state["active_filter_count"] = 0
@@ -727,3 +740,15 @@ def _apply_selection_flags(payload: dict[str, Any]) -> None:
     payload["main_civic_workspace"]["timeline"]["selected_event_id"] = state.get("selected_timeline_event_id")
     for row in payload["main_civic_workspace"]["map"]["entities"]:
         row["selected"] = row["id"] == state.get("selected_map_entity_id")
+
+
+def _category_id_from_filter(value: Any) -> str | None:
+    compact = " ".join(str(value or "").split())
+    labels = {
+        "תכנון ובנייה": "planning",
+        "תחבורה": "transport",
+        "חינוך": "education",
+        "רווחה": "welfare",
+        "סביבה": "environment",
+    }
+    return labels.get(compact, compact if compact in set(labels.values()) else None)

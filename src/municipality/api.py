@@ -56,6 +56,13 @@ from municipality.rag_observability import (
     should_sample_audit,
 )
 from municipality.rag_retrieval import RagContextChunk, RagRetrievalResult, RagRetrievalService
+from municipality.rag_dashboard_adapter import (
+    build_dashboard_error_payload,
+    build_dashboard_payload_from_ask_result,
+    get_dashboard_artifact_evidence,
+    validate_dashboard_payload,
+)
+from municipality.rag_dashboard_contracts import RagDashboardInteractionRequest, RagDashboardQueryRequest
 from municipality.rag_dashboard_mock import (
     apply_mock_rag_dashboard_interaction,
     get_mock_rag_dashboard_evidence,
@@ -3590,26 +3597,88 @@ def health() -> dict[str, str]:
 
 @app.get("/api/ui/rag-dashboard/mock")
 def rag_dashboard_mock() -> dict[str, Any]:
-    return get_mock_rag_dashboard_payload()
+    return validate_dashboard_payload(get_mock_rag_dashboard_payload())
 
 
 @app.get("/api/ui/rag-dashboard/evidence/{evidence_id}")
-def rag_dashboard_evidence(evidence_id: str) -> dict[str, Any]:
+def rag_dashboard_evidence(evidence_id: str, db=Depends(get_db)) -> dict[str, Any]:
     evidence = get_mock_rag_dashboard_evidence(evidence_id)
+    if evidence is None:
+        evidence = get_dashboard_artifact_evidence(db=db, evidence_id=evidence_id)
     if evidence is None:
         raise HTTPException(status_code=404, detail="rag_dashboard_evidence_not_found")
     return evidence
 
 
+@app.post("/api/ui/rag-dashboard/query")
+def rag_dashboard_query(request: RagDashboardQueryRequest, db=Depends(get_db)) -> dict[str, Any]:
+    dashboard_filters = request.filters if isinstance(request.filters, dict) else {}
+    filter_year = _dashboard_filter_year(dashboard_filters)
+    filter_semantic_label = request.semantic_label or _dashboard_filter_semantic_label(dashboard_filters)
+    try:
+        ask_payload = _run_ask(
+            request=AskRequest(
+                question=request.question,
+                muni=request.muni,
+                top_k=request.top_k,
+                year=filter_year,
+                semantic_node_id=request.semantic_node_id,
+                semantic_label=filter_semantic_label,
+                semantic_mode=request.semantic_mode,
+                debug_mode=request.debug_mode,
+            ),
+            db=db,
+        )
+    except HTTPException as exc:
+        return build_dashboard_error_payload(
+            question=request.question,
+            municipality_id=request.muni,
+            error_code=str(exc.detail or "dashboard_query_failed"),
+            message_he="שירות התשובות לא הצליח להפיק תשובה כרגע.",
+        )
+    except Exception as exc:  # noqa: BLE001 - dashboard query should render a safe error state.
+        return build_dashboard_error_payload(
+            question=request.question,
+            municipality_id=request.muni,
+            error_code=exc.__class__.__name__,
+            message_he="שירות התשובות לא זמין כרגע.",
+        )
+    return build_dashboard_payload_from_ask_result(
+        question=request.question,
+        municipality_id=request.muni,
+        ask_payload=ask_payload,
+        filters=dashboard_filters,
+    )
+
+
+def _dashboard_filter_year(filters: dict[str, Any]) -> int | None:
+    raw = str(filters.get("time_range") or "").strip()
+    return int(raw) if raw.isdigit() and len(raw) == 4 else None
+
+
+def _dashboard_filter_semantic_label(filters: dict[str, Any]) -> str | None:
+    raw = str(filters.get("category") or "").strip()
+    labels = {
+        "planning": "תכנון ובנייה",
+        "transport": "תחבורה",
+        "education": "חינוך",
+        "welfare": "רווחה",
+        "environment": "סביבה",
+    }
+    if raw in labels:
+        return labels[raw]
+    return raw if raw and raw not in {"כל הקטגוריות", "הכול"} else None
+
+
 @app.post("/api/ui/rag-dashboard/interaction")
-def rag_dashboard_interaction(payload: dict[str, Any]) -> dict[str, Any]:
+def rag_dashboard_interaction(payload: RagDashboardInteractionRequest) -> dict[str, Any]:
     next_payload = apply_mock_rag_dashboard_interaction(
-        state=payload.get("state") if isinstance(payload, dict) else None,
-        interaction=payload.get("interaction") if isinstance(payload, dict) else None,
+        state=payload.state,
+        interaction=payload.interaction.model_dump(exclude_none=True),
     )
     if next_payload is None:
         raise HTTPException(status_code=404, detail="rag_dashboard_interaction_not_found")
-    return next_payload
+    return validate_dashboard_payload(next_payload)
 
 
 @app.post("/crawl/run")

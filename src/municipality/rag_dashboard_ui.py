@@ -174,6 +174,23 @@ def render_rag_dashboard_page() -> str:
 
     .headerButton.filterButton { min-width: 138px; }
 
+    .filterCountBadge {
+      min-width: 20px;
+      height: 20px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding-inline: 6px;
+      border-radius: 999px;
+      background: var(--purple);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 900;
+      line-height: 1;
+    }
+
+    .filterCountBadge.isVisible { display: inline-flex; }
+
     .headerButton.adminButton {
       min-width: 120px;
       padding-inline: 15px;
@@ -494,6 +511,48 @@ def render_rag_dashboard_page() -> str:
 
     .mapControlButton:last-child { border-bottom: 0; }
     .mapControlButton:hover { background: #f7f9fc; }
+
+    .mapProvenanceBadge {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      z-index: 4;
+      max-width: min(360px, calc(100% - 86px));
+      padding: 10px 12px 11px;
+      border: 1px solid rgba(160, 117, 23, 0.38);
+      border-radius: 10px;
+      background: rgba(255, 251, 235, 0.94);
+      box-shadow: 0 8px 22px rgba(23, 36, 55, 0.14);
+      color: #623d05;
+      direction: rtl;
+    }
+
+    .mapProvenanceBadgeTitle {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin: 0 0 3px;
+      font-size: 13px;
+      font-weight: 900;
+      line-height: 1.25;
+    }
+
+    .mapProvenanceBadgeTitle::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #d97706;
+      box-shadow: 0 0 0 4px rgba(217, 119, 6, 0.16);
+      flex: 0 0 auto;
+    }
+
+    .mapProvenanceBadgeText {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #7c4a03;
+    }
 
     .legendCard {
       position: absolute;
@@ -881,6 +940,30 @@ def render_rag_dashboard_page() -> str:
       color: #172033;
     }
 
+    .evidenceSourceStatus {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-block-start: 12px;
+      min-height: 34px;
+      padding-inline: 12px;
+      border: 1px solid #d8e1ec;
+      border-radius: 9px;
+      background: #f8fafc;
+      color: #64748b;
+      font-weight: 800;
+    }
+
+    .evidenceSourceUrl {
+      margin: 10px 0 0;
+      color: #475569;
+      direction: ltr;
+      text-align: left;
+      overflow-wrap: anywhere;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
     .dialogTop {
       display: flex;
       align-items: center;
@@ -1021,7 +1104,7 @@ def render_rag_dashboard_page() -> str:
   </style>
 </head>
 <body>
-  <div class="appShell" id="rag-dashboard" data-dashboard-endpoint="/api/ui/rag-dashboard/mock" data-source-status="fallback">
+  <div class="appShell" id="rag-dashboard" data-dashboard-endpoint="/api/ui/rag-dashboard/mock" data-source-status="fallback" data-build-id="source-preview-text-only-v2">
     <header class="SearchHeader" aria-label="סרגל חיפוש ראשי">
       <div class="municipalityBrand" aria-label="עירייה">
         <svg class="crest" viewBox="0 0 64 74" aria-hidden="true">
@@ -1060,6 +1143,7 @@ def render_rag_dashboard_page() -> str:
           <circle cx="12" cy="18" r="2" fill="#fff" />
         </svg>
         <span>מסננים</span>
+        <b class="filterCountBadge" aria-label="מספר מסננים פעילים"></b>
       </button>
 
       <button class="headerButton adminButton" type="button" aria-label="מנהל">
@@ -1325,6 +1409,11 @@ def render_rag_dashboard_page() -> str:
               </g>
             </svg>
 
+            <aside class="mapProvenanceBadge" data-spatial-representation="schematic" aria-label="מקוריות המפה">
+              <p class="mapProvenanceBadgeTitle">מפה סכמטית בלבד</p>
+              <p class="mapProvenanceBadgeText">אין גיאומטריית GIS מאומתת; המיקומים והצורות מוצגים להמחשה בלבד על בסיס הראיות.</p>
+            </aside>
+
             <div class="mapControls" aria-label="פקדי מפה">
               <div class="mapControlGroup">
                 <button class="mapControlButton" type="button" aria-label="מרכז מפה">
@@ -1421,11 +1510,11 @@ def render_rag_dashboard_page() -> str:
             </svg>
           </div>
           <ul class="rowList">
-            <li><button class="discoveryRow selected" type="button"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M4 10h16v10H4zM8 10V6h8v4M2 20h22" stroke-linejoin="round" /></svg><span class="rowLabel">תכנון ובנייה</span><span class="countPill">342</span></button></li>
-            <li><button class="discoveryRow" type="button"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M6 20V5h8v15M14 9h5v11M8 9h2M8 13h2M8 17h2M16 13h1M16 17h1" stroke-linecap="round" stroke-linejoin="round" /></svg><span class="rowLabel">תחבורה</span><span class="countPill">128</span></button></li>
-            <li><button class="discoveryRow" type="button"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m12 4 10 5-10 5L2 9Zm-6 8.2 6 3 6-3V17c-2.2 2.1-9.8 2.1-12 0Z" /></svg><span class="rowLabel">חינוך</span><span class="countPill">95</span></button></li>
-            <li><button class="discoveryRow" type="button"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-8-4.7-8-11a4.8 4.8 0 0 1 8-3.5A4.8 4.8 0 0 1 20 10c0 6.3-8 11-8 11Z" /></svg><span class="rowLabel">רווחה</span><span class="countPill">76</span></button></li>
-            <li><button class="discoveryRow" type="button"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20 4c-7.5.4-13.3 4-14.5 9.8-.6 3 1 5.8 3.7 6.7 5.6 1.8 10.4-4.9 10.8-16.5ZM7 19c2.6-4.3 5.5-7.2 10-9" /></svg><span class="rowLabel">סביבה</span><span class="countPill">64</span></button></li>
+            <li><button class="discoveryRow selected" type="button" data-item-id="planning"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M4 10h16v10H4zM8 10V6h8v4M2 20h22" stroke-linejoin="round" /></svg><span class="rowLabel">תכנון ובנייה</span><span class="countPill">342</span></button></li>
+            <li><button class="discoveryRow" type="button" data-item-id="transport"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M6 20V5h8v15M14 9h5v11M8 9h2M8 13h2M8 17h2M16 13h1M16 17h1" stroke-linecap="round" stroke-linejoin="round" /></svg><span class="rowLabel">תחבורה</span><span class="countPill">128</span></button></li>
+            <li><button class="discoveryRow" type="button" data-item-id="education"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m12 4 10 5-10 5L2 9Zm-6 8.2 6 3 6-3V17c-2.2 2.1-9.8 2.1-12 0Z" /></svg><span class="rowLabel">חינוך</span><span class="countPill">95</span></button></li>
+            <li><button class="discoveryRow" type="button" data-item-id="welfare"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-8-4.7-8-11a4.8 4.8 0 0 1 8-3.5A4.8 4.8 0 0 1 20 10c0 6.3-8 11-8 11Z" /></svg><span class="rowLabel">רווחה</span><span class="countPill">76</span></button></li>
+            <li><button class="discoveryRow" type="button" data-item-id="environment"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20 4c-7.5.4-13.3 4-14.5 9.8-.6 3 1 5.8 3.7 6.7 5.6 1.8 10.4-4.9 10.8-16.5ZM7 19c2.6-4.3 5.5-7.2 10-9" /></svg><span class="rowLabel">סביבה</span><span class="countPill">64</span></button></li>
           </ul>
           <button class="showMoreButton flat" type="button">הצג עוד <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="m8 10 4 4 4-4" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
         </section>
@@ -1478,11 +1567,11 @@ def render_rag_dashboard_page() -> str:
       <button class="dialogClose" type="button" aria-label="סגירת מסננים">×</button>
     </div>
     <div class="dialogFilters">
-      <label>אזור<select><option>כל העיר</option><option>רובע טו</option></select></label>
-      <label>טווח זמן<select><option>2024</option><option>כל השנים</option></select></label>
-      <label>קטגוריה<select><option>תכנון ובנייה</option><option>תחבורה</option></select></label>
-      <label>סוגי מקורות<select><option>פרוטוקולים ונספחים</option><option>פרוטוקולים</option></select></label>
-      <label>ודאות<select><option>גבוהה ובינונית</option><option>כל הרמות</option></select></label>
+      <label>אזור<select name="area"><option>כל העיר</option><option>רובע טו</option></select></label>
+      <label>טווח זמן<select name="time_range"><option>2024</option><option>כל השנים</option></select></label>
+      <label>קטגוריה<select name="category"><option value="">כל הקטגוריות</option><option value="planning">תכנון ובנייה</option><option value="transport">תחבורה</option></select></label>
+      <label>סוגי מקורות<select name="source_types"><option>פרוטוקולים ונספחים</option><option>פרוטוקולים</option></select></label>
+      <label>ודאות<select name="confidence"><option>גבוהה ובינונית</option><option>כל הרמות</option></select></label>
     </div>
     <div class="dialogActions">
       <button class="dialogAction" type="button">איפוס</button>
@@ -1507,6 +1596,8 @@ def render_rag_dashboard_page() -> str:
     </div>
     <p class="evidencePill" id="evidence-header-path"></p>
     <p class="evidenceSnippet" id="evidence-snippet"></p>
+    <span class="evidenceSourceStatus" id="evidence-source-status">אין כפתור פתיחה: קישור מקור מוצג כטקסט בלבד</span>
+    <p class="evidenceSourceUrl" id="evidence-source-url">קישור מקור אינו זמין</p>
   </dialog>
 
   <span id="ask-playground-status" class="assistiveStatus" aria-live="polite"></span>
@@ -1540,12 +1631,16 @@ def render_rag_dashboard_page() -> str:
       const popularPopover = document.getElementById("popular-popover");
       const dashboardRoot = document.getElementById("rag-dashboard");
       const DASHBOARD_DATA_ENDPOINT = dashboardRoot?.dataset.dashboardEndpoint || "/api/ui/rag-dashboard/mock";
+      const DASHBOARD_QUERY_ENDPOINT = "/api/ui/rag-dashboard/query";
       const DASHBOARD_INTERACTION_ENDPOINT = "/api/ui/rag-dashboard/interaction";
+      const DASHBOARD_EVIDENCE_ENDPOINT = "/api/ui/rag-dashboard/evidence";
+      const DASHBOARD_QUERY_TIMEOUT_MS = 45000;
       const evidenceDialog = document.getElementById("evidence-preview");
       let currentDashboardData = null;
       let dashboardState = null;
       let dashboardRequestSeq = 0;
       let lastFocusedEvidenceLink = null;
+      let activeFilters = {};
 
       const normalizeText = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
       const isAlmostEqualText = (left, right) => normalizeText(left) === normalizeText(right);
@@ -1576,6 +1671,88 @@ def render_rag_dashboard_page() -> str:
         if (label && value !== undefined && value !== null) {
           label.textContent = String(value);
         }
+      };
+
+      const filterDefaults = {
+        area: "כל העיר",
+        time_range: "כל השנים",
+        category: "",
+        source_types: "",
+        confidence: "כל הרמות"
+      };
+
+      const categoryFilterToId = (value) => {
+        const compact = String(value || "").trim();
+        const map = {
+          "תכנון ובנייה": "planning",
+          "תחבורה": "transport",
+          "חינוך": "education",
+          "רווחה": "welfare",
+          "סביבה": "environment",
+          planning: "planning",
+          transport: "transport",
+          education: "education",
+          welfare: "welfare",
+          environment: "environment"
+        };
+        return map[compact] || "";
+      };
+
+      const applySelectedCategoryToRows = (categoryId) => {
+        if (!categoryId) {
+          return;
+        }
+        const rows = document.querySelectorAll(".startDiscoveryPanel .discoverySection:nth-of-type(1) .discoveryRow");
+        for (const row of rows) {
+          const selected = row.dataset.itemId === categoryId;
+          row.classList.toggle("selected", selected);
+          row.setAttribute("aria-pressed", selected ? "true" : "false");
+        }
+        if (dashboardRoot) {
+          dashboardRoot.dataset.selectedCategoryId = categoryId;
+        }
+      };
+
+      const normalizeFilters = (filters = {}) => {
+        const out = {};
+        for (const [key, value] of Object.entries(filters || {})) {
+          const compact = String(value || "").trim();
+          if (compact && compact !== filterDefaults[key]) {
+            out[key] = compact;
+          }
+        }
+        return out;
+      };
+
+      const collectFilterValues = () => {
+        if (!filterModal) {
+          return activeFilters || {};
+        }
+        const values = {};
+        for (const select of filterModal.querySelectorAll("select[name]")) {
+          values[select.name] = select.value || "";
+        }
+        return normalizeFilters(values);
+      };
+
+      const syncFilterModal = (filters = {}) => {
+        if (!filterModal) {
+          return;
+        }
+        for (const select of filterModal.querySelectorAll("select[name]")) {
+          const value = filters[select.name] ?? filterDefaults[select.name] ?? "";
+          select.value = value;
+        }
+      };
+
+      const updateFilterBadge = (count) => {
+        const badge = document.querySelector(".filterCountBadge");
+        const normalized = Number.isFinite(Number(count)) ? Number(count) : 0;
+        if (!badge) {
+          return;
+        }
+        badge.textContent = normalized > 0 ? String(normalized) : "";
+        badge.classList.toggle("isVisible", normalized > 0);
       };
 
       const setIconHeadingText = (selector, value) => {
@@ -1722,6 +1899,8 @@ def render_rag_dashboard_page() -> str:
         const drawer = data.end_detail_drawer || {};
         const discovery = data.start_discovery_panel || {};
         const workspace = data.main_civic_workspace || {};
+        const map = workspace.map || {};
+        const mapProvenance = map.provenance || {};
 
         document.title = copy.document_title || document.title;
         setText(".brandWord", copy.municipality_brand);
@@ -1758,8 +1937,11 @@ def render_rag_dashboard_page() -> str:
         setText("#map-title", mapCopy.title);
         setText("#map-desc", mapCopy.description);
         const areaLabels = Array.isArray(mapCopy.area_labels) ? mapCopy.area_labels : [];
-        const selectedEntity = (workspace.map?.entities || []).find((entity) => entity.id === data.state?.selected_map_entity_id) || workspace.map?.entities?.[0];
+        const selectedEntity = (map.entities || []).find((entity) => entity.id === data.state?.selected_map_entity_id) || map.entities?.[0];
         setText("#map-selected-label", selectedEntity?.label);
+        setText(".mapProvenanceBadgeTitle", mapProvenance.label_he || mapCopy.provenance_label);
+        setText(".mapProvenanceBadgeText", mapProvenance.description_he || mapCopy.provenance_description);
+        setAttr(".mapProvenanceBadge", "data-spatial-representation", map.spatial_representation || "schematic");
         setText("#map-area-north", areaLabels[0]);
         setText("#map-area-center", areaLabels[1]);
         setText("#map-area-west", areaLabels[2]);
@@ -1828,6 +2010,9 @@ def render_rag_dashboard_page() -> str:
 
         currentDashboardData = data;
         dashboardState = structuredClone(data.state || {});
+        activeFilters = normalizeFilters(dashboardState.active_filter_summary || {});
+        syncFilterModal(activeFilters);
+        updateFilterBadge(dashboardState.active_filter_count || Object.keys(activeFilters).length);
         window.__municipalDashboardData = currentDashboardData;
         window.__municipalDashboardState = dashboardState;
         if (dashboardRoot) {
@@ -1838,6 +2023,8 @@ def render_rag_dashboard_page() -> str:
           dashboardRoot.dataset.selectedTimelineEventId = dashboardState.selected_timeline_event_id || "";
           dashboardRoot.dataset.selectedMapEntityId = dashboardState.selected_map_entity_id || "";
           dashboardRoot.dataset.detailDrawerMode = dashboardState.active_detail_drawer_mode || "";
+          dashboardRoot.dataset.mapSpatialRepresentation = currentDashboardData?.main_civic_workspace?.map?.spatial_representation || "";
+          dashboardRoot.dataset.realGisAvailable = String(Boolean(currentDashboardData?.main_civic_workspace?.map?.real_gis_available));
         }
         if (statusNode) {
           statusNode.textContent = "נתוני לוח המחוונים נטענו מהשרת.";
@@ -1860,6 +2047,24 @@ def render_rag_dashboard_page() -> str:
         setText("#evidence-confidence", evidence.confidence_label || "-");
         setText("#evidence-header-path", Array.isArray(evidence.header_path) ? evidence.header_path.join(" › ") : "");
         setText("#evidence-snippet", evidence.text || "");
+        const sourceStatus = document.getElementById("evidence-source-status");
+        const sourceUrl = document.getElementById("evidence-source-url");
+        if (evidence.source_url) {
+          const source = String(evidence.source_url);
+          if (sourceStatus) {
+            sourceStatus.textContent = "אין כפתור פתיחה: קישור מקור מוצג כטקסט בלבד";
+          }
+          if (sourceUrl) {
+            sourceUrl.textContent = source.startsWith("https://example.local/") ? `${source} · זהו קישור mock ואינו ניתן לפתיחה` : source;
+          }
+        } else {
+          if (sourceStatus) {
+            sourceStatus.textContent = "מקור לא זמין לפתיחה";
+          }
+          if (sourceUrl) {
+            sourceUrl.textContent = "קישור מקור אינו זמין";
+          }
+        }
         evidenceDialog.hidden = false;
         if (typeof evidenceDialog.showModal === "function") {
           evidenceDialog.showModal();
@@ -1869,6 +2074,9 @@ def render_rag_dashboard_page() -> str:
       };
 
       const applyDashboardInteraction = async (type, id, extra = {}) => {
+        if (type === "open_evidence") {
+          return openEvidencePreview(id);
+        }
         const seq = dashboardRequestSeq + 1;
         dashboardRequestSeq = seq;
         if (statusNode) {
@@ -1904,6 +2112,40 @@ def render_rag_dashboard_page() -> str:
         }
       };
       window.applyDashboardInteraction = applyDashboardInteraction;
+
+      const openEvidencePreview = async (evidenceId) => {
+        if (!evidenceId) {
+          return;
+        }
+        if (statusNode) {
+          statusNode.textContent = "טוען מקור.";
+        }
+        try {
+          const response = await fetch(`${DASHBOARD_EVIDENCE_ENDPOINT}/${encodeURIComponent(evidenceId)}`, {
+            headers: { Accept: "application/json" }
+          });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const evidence = await response.json();
+          window.__lastDashboardInteraction = { type: "open_evidence", id: evidenceId, status: "applied" };
+          if (dashboardState) {
+            dashboardState.active_detail_drawer_mode = "evidencePreview";
+            dashboardState.selected_evidence_id = evidenceId;
+            window.__municipalDashboardState = dashboardState;
+          }
+          renderEvidencePreview(evidence);
+          if (statusNode) {
+            statusNode.textContent = "המקור נפתח.";
+          }
+        } catch (error) {
+          window.__lastDashboardInteraction = { type: "open_evidence", id: evidenceId, status: "failed", error: String(error?.message || error) };
+          if (statusNode) {
+            statusNode.textContent = "לא ניתן לפתוח את המקור כרגע.";
+          }
+          console.warn("municipal_rag_dashboard_evidence_failed", { evidenceId, error });
+        }
+      };
 
       const loadDashboardData = async () => {
         try {
@@ -2037,30 +2279,40 @@ def render_rag_dashboard_page() -> str:
             question,
             top_k: topK,
             muni: "ashdod",
+            filters: activeFilters,
             debug_mode: Boolean(debugModeInput && debugModeInput.checked)
           };
           if (statusNode) {
             statusNode.textContent = "מריץ חיפוש במסמכי העירייה.";
           }
+          const controller = new AbortController();
+          const timeoutId = window.setTimeout(() => controller.abort(), DASHBOARD_QUERY_TIMEOUT_MS);
           try {
-            const response = await fetch("/ask", {
+            const response = await fetch(DASHBOARD_QUERY_ENDPOINT, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload)
+              headers: { "Content-Type": "application/json", Accept: "application/json" },
+              body: JSON.stringify(payload),
+              signal: controller.signal
             });
+            window.clearTimeout(timeoutId);
             const data = await response.json().catch(() => ({}));
+            if (response.ok && data && typeof data === "object") {
+              renderDashboardFromEndpoint(data);
+            }
             if (statusNode) {
               statusNode.textContent = response.ok ? "התשובה מוצגת בלוח המחוונים." : "החיפוש נשמר, אך שירות התשובות לא זמין כרגע.";
             }
             console.info("municipal_rag_dashboard_search", {
               question,
               ok: response.ok,
-              status: data.status || response.status,
-              retrieval_count: data.retrieval && data.retrieval.count
+              status: data.state?.generation_status || response.status,
+              evidence_count: Array.isArray(data.evidence) ? data.evidence.length : 0,
+              spatial_representation: data.main_civic_workspace?.map?.spatial_representation
             });
           } catch (error) {
+            window.clearTimeout(timeoutId);
             if (statusNode) {
-              statusNode.textContent = "החיפוש נשמר, אך שירות התשובות לא זמין כרגע.";
+              statusNode.textContent = error?.name === "AbortError" ? "החיפוש לוקח יותר מדי זמן. נסו שוב עם שאלה ממוקדת יותר." : "החיפוש נשמר, אך שירות התשובות לא זמין כרגע.";
             }
             console.warn("municipal_rag_dashboard_search_failed", error);
           }
@@ -2095,18 +2347,24 @@ def render_rag_dashboard_page() -> str:
         });
         const dialogActions = filterModal.querySelectorAll(".dialogAction");
         dialogActions[0]?.addEventListener("click", () => {
+          activeFilters = {};
+          syncFilterModal(activeFilters);
+          updateFilterBadge(0);
           closeFilters();
           applyDashboardInteraction("reset_filters", "filters");
         });
         dialogActions[1]?.addEventListener("click", () => {
-          const selects = filterModal.querySelectorAll("select");
-          const filters = {
-            area: selects[0]?.value || "",
-            time_range: selects[1]?.value || "",
-            category: selects[2]?.value || "",
-            source_types: selects[3]?.value || "",
-            confidence: selects[4]?.value || "",
-          };
+          const filters = collectFilterValues();
+          activeFilters = filters;
+          updateFilterBadge(Object.keys(activeFilters).length);
+          const selectedCategoryId = categoryFilterToId(activeFilters.category);
+          if (selectedCategoryId) {
+            if (dashboardState) {
+              dashboardState.selected_category_id = selectedCategoryId;
+              window.__municipalDashboardState = dashboardState;
+            }
+            applySelectedCategoryToRows(selectedCategoryId);
+          }
           closeFilters();
           applyDashboardInteraction("apply_filters", "filters", { filters });
         });

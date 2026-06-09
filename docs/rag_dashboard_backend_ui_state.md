@@ -22,6 +22,7 @@ Dashboard data API:
 
 ```text
 GET /api/ui/rag-dashboard/mock
+POST /api/ui/rag-dashboard/query
 GET /api/ui/rag-dashboard/evidence/{evidence_id}
 POST /api/ui/rag-dashboard/interaction
 ```
@@ -49,6 +50,20 @@ get_mock_rag_dashboard_payload()
 get_mock_rag_dashboard_evidence(evidence_id)
 apply_mock_rag_dashboard_interaction(state, interaction)
 ```
+
+Strict dashboard contracts live in:
+
+```text
+src/municipality/rag_dashboard_contracts.py
+```
+
+The real-query adapter lives in:
+
+```text
+src/municipality/rag_dashboard_adapter.py
+```
+
+Both mock and query payloads are validated with `RagDashboardPayload` before returning to the UI.
 
 ## Dashboard Payload Shape
 
@@ -168,6 +183,60 @@ Unknown interaction types or unknown IDs return:
 404 rag_dashboard_interaction_not_found
 ```
 
+## Query Endpoint
+
+`POST /api/ui/rag-dashboard/query` runs the existing `/ask` answer path and adapts the answer payload into the dashboard view model.
+
+Request:
+
+```json
+{
+  "question": "מה הוחלט לגבי תכנית רובע טו?",
+  "muni": "ashdod",
+  "top_k": 8,
+  "semantic_mode": "off",
+  "filters": {},
+  "debug_mode": false
+}
+```
+
+Response:
+
+```text
+Full `RagDashboardPayload` with answer drawer, evidence links, and schematic map provenance.
+```
+
+If the answer backend fails, the endpoint returns a valid dashboard payload with:
+
+```text
+state.generation_status = "error"
+state.error.code = backend error code
+end_detail_drawer.mode = "errorState"
+evidence = []
+```
+
+The query adapter currently reuses the dashboard shell and discovery scaffolding, then replaces the answer drawer, decisions, and evidence with data adapted from the real `/ask` payload.
+
+The adapter performs first-pass normalization from answer/citation text into governed public codelists:
+
+```text
+decision_kind: APPROVAL, REJECTION, DEFERRAL, REQUEST_FOR_INFO, PUBLICATION, BUDGET_ALLOCATION, DISCUSSION, UNKNOWN
+outcome_status: APPROVED, APPROVED_WITH_CONDITIONS, REJECTED, PENDING, NOTED, NO_FORMAL_OUTCOME, UNKNOWN
+legal_effect: BINDING, PROCEDURAL, INFORMATIONAL, UNKNOWN
+```
+
+Uncertain mappings remain broad or `UNKNOWN`; the adapter does not invent unsupported codelist values.
+
+Dashboard filters are passed to `/api/ui/rag-dashboard/query` and mapped conservatively:
+
+```text
+time_range -> AskRequest.year when the value is a four-digit year
+category -> AskRequest.semantic_label when no explicit semantic_label was supplied
+source_types -> dashboard state source_type_filter
+confidence -> dashboard state confidence_filter
+area -> dashboard state only; it does not use schematic map geometry as real GIS
+```
+
 ## UI State Model
 
 The browser UI fetches `/api/ui/rag-dashboard/mock` on load and renders from the returned payload.
@@ -241,7 +310,7 @@ Updates topic state without showing relation labels in the chip UI.
 Source link click:
 
 ```text
-Calls open_evidence interaction and opens an evidence preview dialog.
+Fetches /api/ui/rag-dashboard/evidence/{evidence_id} and opens an evidence preview dialog.
 ```
 
 Filters:
@@ -268,9 +337,16 @@ page span
 confidence
 header path
 snippet text
+source document link when available
 ```
 
 The dialog preserves the dashboard state and returns focus to the source link when closed.
+
+Real artifact evidence source URLs include a page fragment when a page is known, for example:
+
+```text
+/document-versions/{document_version_id}/source.pdf#page=7
+```
 
 ## Map State
 
@@ -282,6 +358,17 @@ The current map is schematic:
   "real_geometry": null,
   "geometry_provenance": null,
   "real_gis_available": false
+}
+```
+
+Map-level provenance is explicit in both backend data and UI:
+
+```json
+{
+  "status": "schematic_only",
+  "label_he": "מפה סכמטית בלבד",
+  "description_he": "אין גיאומטריית GIS מאומתת; המיקומים והצורות מוצגים להמחשה בלבד על בסיס הראיות.",
+  "source_evidence_refs": []
 }
 ```
 
@@ -305,6 +392,14 @@ evidence endpoint contract
 interaction state transitions
 unknown interaction handling
 HTTP route exposure
+strict contract validation
+real query adapter behavior
+safe query error state
+artifact-backed evidence lookup
+first-pass codelist normalization
+filter-to-query/state mapping
+page-anchored evidence source URLs
+UI wiring for filter badge, query filters, and evidence source link
 ```
 
 Focused command:
@@ -316,7 +411,7 @@ Focused command:
 Current expected result:
 
 ```text
-7 passed, 1 skipped
+11 passed, 1 skipped
 ```
 
 The skipped test is an optional Chromium executable test. The local `/opt/homebrew/bin/chromium` shim is broken in this environment, but Playwright CLI verification has been run separately.
@@ -341,7 +436,8 @@ Latest screenshot artifact:
 ## Current Limitations
 
 - Data is backend-owned mock data, not live DB-derived municipal data.
+- `/api/ui/rag-dashboard/query` adapts real `/ask` answer/evidence data, but discovery panels are still scaffolded from the dashboard shell.
 - The UI is endpoint-backed, but still rendered as inline FastAPI HTML rather than a dedicated frontend bundle.
 - The schematic map is not a real GIS map.
-- Interaction transitions are deterministic mock transitions, not real retrieval/filter queries.
-- Search submit still calls the existing `POST /ask` path and does not yet merge real answer results into the dashboard view model.
+- Interaction transitions are deterministic mock transitions except source links, which fetch evidence directly.
+- Search submit now calls `POST /api/ui/rag-dashboard/query` and renders the dashboard payload.
