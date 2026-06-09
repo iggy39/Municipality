@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from typing import Any
 
-def render_rag_dashboard_page() -> str:
-    return """
+
+def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = None) -> str:
+    html = """
 <!doctype html>
 <html lang="he" dir="rtl">
 <head>
@@ -2707,3 +2709,119 @@ def render_rag_dashboard_page() -> str:
 </body>
 </html>
 """
+    if initial_gis_map_payload and initial_gis_map_payload.get("status") == "found":
+        return _inject_initial_gis_map(html, initial_gis_map_payload)
+    return html
+
+
+def _inject_initial_gis_map(html: str, payload: dict[str, Any]) -> str:
+    static_svg = _server_rendered_gis_svg(payload)
+    if not static_svg:
+        return html
+    html = html.replace('<div class="mapFrame">', '<div class="mapFrame hasRealGis" data-server-rendered-gis="true">', 1)
+    html = html.replace(
+        '<svg id="real-gis-static-map" class="realGisStaticMap" viewBox="0 0 900 620" role="img" aria-label="מפת GIS אמיתית ללא ספריית מפה חיצונית" hidden></svg>',
+        static_svg,
+        1,
+    )
+    html = html.replace('<p class="mapProvenanceBadgeTitle">מפה סכמטית בלבד</p>', '<p class="mapProvenanceBadgeTitle">מפת GIS אמיתית</p>', 1)
+    html = html.replace(
+        '<p class="mapProvenanceBadgeText">אין גיאומטריית GIS מאומתת; המיקומים והצורות מוצגים להמחשה בלבד על בסיס הראיות.</p>',
+        '<p class="mapProvenanceBadgeText">החלקה ונקודות העניין נטענו ממקורות GIS עם provenance. הרינדור מוטמע כבר בתשובת השרת.</p>',
+        1,
+    )
+    html = html.replace('data-spatial-representation="schematic"', 'data-spatial-representation="real_gis_static"', 1)
+    return html
+
+
+def _server_rendered_gis_svg(payload: dict[str, Any]) -> str:
+    parcel = payload.get("parcel") if isinstance(payload.get("parcel"), dict) else {}
+    geometry = parcel.get("geometry") if isinstance(parcel.get("geometry"), dict) else None
+    if not geometry:
+        return ""
+    project = _server_projection(payload)
+    if project is None:
+        return ""
+    parcel_path = _polygon_paths(geometry, project)
+    poi_nodes = []
+    for poi in (payload.get("nearby_pois") or {}).get("items") or []:
+        if not isinstance(poi, dict):
+            continue
+        coordinates = ((poi.get("geometry") or {}).get("coordinates") if isinstance(poi.get("geometry"), dict) else None)
+        if not isinstance(coordinates, list) or len(coordinates) < 2:
+            continue
+        x, y = project((float(coordinates[0]), float(coordinates[1])))
+        color = "#f59e0b" if poi.get("poi_category") == "school" else "#0b68d1" if poi.get("poi_category") == "transport_stop" else "#475569"
+        label = _escape_text(str(poi.get("name_he") or poi.get("name_en") or poi.get("poi_category") or "נקודת עניין"))
+        provenance_id = _escape_text(str(poi.get("provenance_id") or ""))
+        radius = "8" if poi.get("poi_category") == "school" else "7"
+        poi_nodes.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="{radius}" fill="{color}" stroke="#ffffff" stroke-width="3" opacity="0.94"><title>{label} · {provenance_id}</title></circle>'
+        )
+    title = _escape_text(str(payload.get("title_he") or "מפת GIS אמיתית"))
+    parcel_label = _escape_text(str(parcel.get("label") or "חלקה"))
+    return f'''
+            <svg id="real-gis-static-map" class="realGisStaticMap" viewBox="0 0 900 620" role="img" aria-label="מפת GIS אמיתית ללא ספריית מפה חיצונית">
+              <title>{title}</title>
+              <path d="{parcel_path}" fill="rgba(34,197,94,0.28)" stroke="#14532d" stroke-width="4" stroke-linejoin="round"><title>{parcel_label}</title></path>
+              {''.join(poi_nodes)}
+              <text x="450" y="36" text-anchor="middle" direction="rtl" font-size="18" font-weight="850" fill="#14532d">מפת GIS אמיתית - נטענה מהשרת</text>
+            </svg>'''
+
+
+def _server_projection(payload: dict[str, Any]):
+    points: list[tuple[float, float]] = []
+    parcel = payload.get("parcel") if isinstance(payload.get("parcel"), dict) else {}
+    geometry = parcel.get("geometry") if isinstance(parcel.get("geometry"), dict) else {}
+    _collect_points(geometry.get("coordinates"), points)
+    for poi in (payload.get("nearby_pois") or {}).get("items") or []:
+        if isinstance(poi, dict) and isinstance(poi.get("geometry"), dict):
+            _collect_points(poi["geometry"].get("coordinates"), points)
+    if not points:
+        return None
+    lons = [point[0] for point in points]
+    lats = [point[1] for point in points]
+    min_lon, max_lon = min(lons), max(lons)
+    min_lat, max_lat = min(lats), max(lats)
+    lon_pad = max((max_lon - min_lon) * 0.18, 0.001)
+    lat_pad = max((max_lat - min_lat) * 0.18, 0.001)
+    min_lon -= lon_pad
+    max_lon += lon_pad
+    min_lat -= lat_pad
+    max_lat += lat_pad
+
+    def project(point: tuple[float, float]) -> tuple[float, float]:
+        lon, lat = point
+        x = 46 + ((lon - min_lon) / ((max_lon - min_lon) or 1)) * 808
+        y = 574 - ((lat - min_lat) / ((max_lat - min_lat) or 1)) * 528
+        return x, y
+
+    return project
+
+
+def _polygon_paths(geometry: dict[str, Any], project) -> str:
+    polygons = [geometry.get("coordinates") or []] if geometry.get("type") == "Polygon" else geometry.get("coordinates") or []
+    paths = []
+    for polygon in polygons:
+        if not isinstance(polygon, list):
+            continue
+        for ring in polygon:
+            if not isinstance(ring, list):
+                continue
+            projected = [project((float(point[0]), float(point[1]))) for point in ring if isinstance(point, list) and len(point) >= 2]
+            if projected:
+                paths.append("M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in projected) + " Z")
+    return " ".join(paths)
+
+
+def _collect_points(coordinates: Any, out: list[tuple[float, float]]) -> None:
+    if isinstance(coordinates, list) and len(coordinates) >= 2 and all(isinstance(value, int | float) for value in coordinates[:2]):
+        out.append((float(coordinates[0]), float(coordinates[1])))
+        return
+    if isinstance(coordinates, list):
+        for item in coordinates:
+            _collect_points(item, out)
+
+
+def _escape_text(value: str) -> str:
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")

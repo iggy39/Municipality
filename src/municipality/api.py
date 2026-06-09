@@ -4099,9 +4099,15 @@ def _resolve_pipeline_artifact_path(*, run_id: str, artifact: dict[str, Any]) ->
 
 @app.get("/ask", response_class=HTMLResponse)
 @app.get("/ui/ask", response_class=HTMLResponse)
-def ask_playground_page() -> HTMLResponse:
+def ask_playground_page(db=Depends(get_db)) -> HTMLResponse:
+    initial_gis_map_payload = None
+    if hasattr(db, "execute"):
+        try:
+            initial_gis_map_payload = build_dashboard_gis_map_payload(db)
+        except Exception:  # noqa: BLE001 - dashboard must remain available if GIS is unavailable.
+            initial_gis_map_payload = None
     return HTMLResponse(
-        render_rag_dashboard_page(),
+        render_rag_dashboard_page(initial_gis_map_payload=initial_gis_map_payload),
         headers={
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",

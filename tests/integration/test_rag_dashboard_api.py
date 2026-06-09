@@ -26,6 +26,7 @@ from municipality.migrations import apply_all
 from municipality.models import Document, DocumentVersion, ExtractedDocument, RetrievalArtifact, SourceSite
 from municipality.rag_dashboard_adapter import build_dashboard_error_payload, encode_artifact_evidence_id, validate_dashboard_payload
 from municipality.rag_dashboard_contracts import RagDashboardInteractionRequest, RagDashboardPayload
+from municipality.rag_dashboard_ui import render_rag_dashboard_page
 
 
 def _flatten_strings(value: Any) -> set[str]:
@@ -301,6 +302,38 @@ def test_rag_dashboard_gis_map_endpoint_returns_real_layers_with_provenance() ->
         assert item["source"]
         assert item["provenance_id"]
         assert item["geometry"]["type"] == "Point"
+
+
+def test_rag_dashboard_can_server_render_visible_gis_map() -> None:
+    payload = {
+        "status": "found",
+        "title_he": "מפת GIS לדוגמה: גוש 7103 חלקה 43",
+        "parcel": {
+            "label": "7103 / 43",
+            "geometry": {
+                "type": "MultiPolygon",
+                "coordinates": [[[[34.781, 32.067], [34.782, 32.067], [34.782, 32.068], [34.781, 32.068], [34.781, 32.067]]]],
+            },
+        },
+        "nearby_pois": {
+            "items": [
+                {
+                    "poi_category": "school",
+                    "name_he": "בית ספר סמוך",
+                    "provenance_id": "prov-school",
+                    "geometry": {"type": "Point", "coordinates": [34.7815, 32.0675]},
+                }
+            ]
+        },
+    }
+
+    body = render_rag_dashboard_page(initial_gis_map_payload=payload)
+
+    assert 'data-server-rendered-gis="true"' in body
+    assert 'id="real-gis-static-map"' in body
+    assert 'id="real-gis-static-map" class="realGisStaticMap" viewBox="0 0 900 620" role="img" aria-label="מפת GIS אמיתית ללא ספריית מפה חיצונית" hidden' not in body
+    assert "מפת GIS אמיתית - נטענה מהשרת" in body
+    assert "7103 / 43" in body
 
 
 def test_ask_dashboard_page_is_wired_to_backend_mock_endpoint() -> None:
