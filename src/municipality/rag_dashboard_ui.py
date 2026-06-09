@@ -9,7 +9,6 @@ def render_rag_dashboard_page() -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>לוח מחוונים עירוני</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <style>
     :root {
       --page-bg: #f7f9fc;
@@ -1681,7 +1680,6 @@ def render_rag_dashboard_page() -> str:
     <ul id="ask-playground-meta"></ul><pre id="ask-playground-json"></pre>
   </section>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script>
     (() => {
       const form = document.getElementById("ask-playground-form");
@@ -2085,10 +2083,11 @@ def render_rag_dashboard_page() -> str:
       };
 
       const renderRealGisMap = (payload) => {
+        const renderedStatic = renderStaticGisMap(payload);
         const mapNode = document.getElementById("real-gis-map");
         const mapFrame = document.querySelector(".mapFrame");
         if (!mapNode || !mapFrame || !payload || payload.status !== "found" || !payload.parcel?.geometry || !window.L) {
-          return renderStaticGisMap(payload);
+          return renderedStatic;
         }
         const staticMap = document.getElementById("real-gis-static-map");
         if (staticMap) {

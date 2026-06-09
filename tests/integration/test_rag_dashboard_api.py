@@ -267,8 +267,8 @@ def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None
 
     assert "/api/ui/rag-dashboard/gis-map" in body
     assert "id=\"real-gis-map\"" in body
-    assert "leaflet@1.9.4" in body
-    assert "OpenStreetMap contributors · context only" in body
+    assert "id=\"real-gis-static-map\"" in body
+    assert "fallback ללא CDN" in body
     assert "מפת GIS אמיתית" in body
 
 
