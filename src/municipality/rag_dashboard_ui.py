@@ -9,6 +9,7 @@ def render_rag_dashboard_page() -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>לוח מחוונים עירוני</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQ+dzT4NfS2O5LkNzpH8b/3v0C8P2x0=" crossorigin="" />
   <style>
     :root {
       --page-bg: #f7f9fc;
@@ -476,6 +477,50 @@ def render_rag_dashboard_page() -> str:
       width: 100%;
       height: 100%;
       display: block;
+    }
+
+    .realGisMap {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      background: #e7efe9;
+    }
+
+    .realGisMap[hidden] { display: none; }
+
+    .mapFrame.hasRealGis .schematicMapSvg,
+    .mapFrame.hasRealGis .mapControls { display: none; }
+
+    .mapFrame.hasRealGis .mapProvenanceBadge {
+      border-color: rgba(20, 83, 45, 0.34);
+      background: rgba(240, 253, 244, 0.95);
+      color: #14532d;
+    }
+
+    .mapFrame.hasRealGis .mapProvenanceBadgeTitle::before {
+      background: #16a34a;
+      box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.16);
+    }
+
+    .mapFrame.hasRealGis .mapProvenanceBadgeText { color: #166534; }
+
+    .realGisTooltip {
+      direction: rtl;
+      text-align: right;
+      font-family: var(--font-he);
+      line-height: 1.45;
+    }
+
+    .realGisTooltip strong { display: block; margin-bottom: 3px; }
+
+    .leaflet-container {
+      font-family: var(--font-he);
+      background: #e7efe9;
+    }
+
+    .leaflet-control-attribution {
+      direction: ltr;
+      font-size: 10px;
     }
 
     .mapControls {
@@ -1409,6 +1454,8 @@ def render_rag_dashboard_page() -> str:
               </g>
             </svg>
 
+            <div id="real-gis-map" class="realGisMap" role="img" aria-label="מפת GIS אמיתית עם חלקה ונקודות עניין" hidden></div>
+
             <aside class="mapProvenanceBadge" data-spatial-representation="schematic" aria-label="מקוריות המפה">
               <p class="mapProvenanceBadgeTitle">מפה סכמטית בלבד</p>
               <p class="mapProvenanceBadgeText">אין גיאומטריית GIS מאומתת; המיקומים והצורות מוצגים להמחשה בלבד על בסיס הראיות.</p>
@@ -1618,6 +1665,7 @@ def render_rag_dashboard_page() -> str:
     <ul id="ask-playground-meta"></ul><pre id="ask-playground-json"></pre>
   </section>
 
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
   <script>
     (() => {
       const form = document.getElementById("ask-playground-form");
@@ -1634,6 +1682,7 @@ def render_rag_dashboard_page() -> str:
       const DASHBOARD_QUERY_ENDPOINT = "/api/ui/rag-dashboard/query";
       const DASHBOARD_INTERACTION_ENDPOINT = "/api/ui/rag-dashboard/interaction";
       const DASHBOARD_EVIDENCE_ENDPOINT = "/api/ui/rag-dashboard/evidence";
+      const DASHBOARD_GIS_MAP_ENDPOINT = "/api/ui/rag-dashboard/gis-map";
       const DASHBOARD_QUERY_TIMEOUT_MS = 45000;
       const evidenceDialog = document.getElementById("evidence-preview");
       let currentDashboardData = null;
@@ -1641,6 +1690,9 @@ def render_rag_dashboard_page() -> str:
       let dashboardRequestSeq = 0;
       let lastFocusedEvidenceLink = null;
       let activeFilters = {};
+      let realGisMap = null;
+      let realGisOverlayGroup = null;
+      let realGisTileLayer = null;
 
       const normalizeText = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
       const isAlmostEqualText = (left, right) => normalizeText(left) === normalizeText(right);
@@ -1884,6 +1936,127 @@ def render_rag_dashboard_page() -> str:
         }
       };
 
+      const poiColor = (category) => {
+        if (category === "school") {
+          return "#f59e0b";
+        }
+        if (category === "transport_stop") {
+          return "#0b68d1";
+        }
+        return "#475569";
+      };
+
+      const sourceLine = (feature) => {
+        const source = feature?.source || {};
+        return source.name_he || source.name_en || feature?.source_id || "מקור לא ידוע";
+      };
+
+      const renderRealGisMap = (payload) => {
+        const mapNode = document.getElementById("real-gis-map");
+        const mapFrame = document.querySelector(".mapFrame");
+        if (!mapNode || !mapFrame || !payload || payload.status !== "found" || !payload.parcel?.geometry || !window.L) {
+          return false;
+        }
+        mapNode.hidden = false;
+        mapFrame.classList.add("hasRealGis");
+        setAttr(".mapPanel", "aria-label", "מפת GIS אמיתית");
+        setText("#map-title", payload.title_he || "מפת GIS אמיתית");
+        setText("#map-desc", "חלקת POC אמיתית ונקודות עניין רשמיות סמוכות, מעל רקע OpenStreetMap המשמש הקשר בלבד.");
+        setText(".mapProvenanceBadgeTitle", "מפת GIS אמיתית");
+        setText(".mapProvenanceBadgeText", "החלקה ונקודות העניין נטענו ממקורות GIS עם provenance. רקע OpenStreetMap הוא שכבת הקשר בלבד.");
+        setAttr(".mapProvenanceBadge", "data-spatial-representation", "real_gis");
+
+        if (!realGisMap) {
+          realGisMap = window.L.map(mapNode, { zoomControl: true, attributionControl: true });
+        }
+        if (!realGisTileLayer) {
+          realGisTileLayer = window.L.tileLayer(payload.basemap?.tile_url || "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            maxZoom: 20,
+            attribution: "&copy; OpenStreetMap contributors · context only"
+          }).addTo(realGisMap);
+        }
+        if (realGisOverlayGroup) {
+          realGisOverlayGroup.clearLayers();
+        } else {
+          realGisOverlayGroup = window.L.layerGroup().addTo(realGisMap);
+        }
+
+        const bounds = [];
+        const parcelLayer = window.L.geoJSON(payload.parcel.geometry, {
+          style: {
+            color: "#14532d",
+            weight: 3,
+            fillColor: "#22c55e",
+            fillOpacity: 0.24
+          }
+        }).bindTooltip(
+          `<div class="realGisTooltip"><strong>${payload.parcel.label || "חלקה"}</strong><span>מקור: ${sourceLine(payload.parcel)}</span><br><span>Provenance: ${payload.parcel.provenance_id}</span></div>`,
+          { sticky: true }
+        );
+        parcelLayer.addTo(realGisOverlayGroup);
+        if (parcelLayer.getBounds().isValid()) {
+          bounds.push(parcelLayer.getBounds());
+        }
+
+        for (const poi of payload.nearby_pois?.items || []) {
+          const coordinates = poi.geometry?.coordinates;
+          if (!Array.isArray(coordinates) || coordinates.length < 2) {
+            continue;
+          }
+          const marker = window.L.circleMarker([coordinates[1], coordinates[0]], {
+            radius: poi.poi_category === "school" ? 7 : 6,
+            color: "#ffffff",
+            weight: 2,
+            fillColor: poiColor(poi.poi_category),
+            fillOpacity: 0.92
+          }).bindTooltip(
+            `<div class="realGisTooltip"><strong>${poi.name_he || poi.name_en || poi.poi_category || "נקודת עניין"}</strong><span>מקור: ${sourceLine(poi)}</span><br><span>Provenance: ${poi.provenance_id}</span></div>`,
+            { sticky: true }
+          );
+          marker.addTo(realGisOverlayGroup);
+          bounds.push(marker.getLatLng().toBounds(80));
+        }
+
+        if (bounds.length > 0) {
+          const merged = bounds.reduce((acc, next) => acc.extend(next), bounds[0]);
+          realGisMap.fitBounds(merged.pad(0.18), { maxZoom: payload.zoom || 17 });
+        } else if (payload.center) {
+          realGisMap.setView([payload.center.lat, payload.center.lon], payload.zoom || 17);
+        }
+        window.setTimeout(() => realGisMap.invalidateSize(), 50);
+        window.__municipalDashboardGisMap = payload;
+        if (dashboardRoot) {
+          dashboardRoot.dataset.realGisAvailable = "true";
+          dashboardRoot.dataset.gisMapStatus = payload.status;
+        }
+        return true;
+      };
+
+      const loadDashboardGisMap = async () => {
+        try {
+          const response = await fetch(DASHBOARD_GIS_MAP_ENDPOINT, { headers: { Accept: "application/json" } });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const payload = await response.json();
+          const rendered = renderRealGisMap(payload);
+          if (dashboardRoot) {
+            dashboardRoot.dataset.gisMapStatus = rendered ? "rendered" : payload.status || "fallback";
+          }
+          console.info("municipal_rag_dashboard_gis_map", {
+            status: payload.status,
+            rendered,
+            poi_count: payload.nearby_pois?.count || 0,
+            parcel_source: payload.parcel?.source_id
+          });
+        } catch (error) {
+          if (dashboardRoot) {
+            dashboardRoot.dataset.gisMapStatus = "fallback";
+          }
+          console.warn("municipal_rag_dashboard_gis_map_failed", error);
+        }
+      };
+
       const renderDashboardFromEndpoint = (data) => {
         if (!data || typeof data !== "object") {
           return;
@@ -2024,7 +2197,10 @@ def render_rag_dashboard_page() -> str:
           dashboardRoot.dataset.selectedMapEntityId = dashboardState.selected_map_entity_id || "";
           dashboardRoot.dataset.detailDrawerMode = dashboardState.active_detail_drawer_mode || "";
           dashboardRoot.dataset.mapSpatialRepresentation = currentDashboardData?.main_civic_workspace?.map?.spatial_representation || "";
-          dashboardRoot.dataset.realGisAvailable = String(Boolean(currentDashboardData?.main_civic_workspace?.map?.real_gis_available));
+          dashboardRoot.dataset.realGisAvailable = String(Boolean(currentDashboardData?.main_civic_workspace?.map?.real_gis_available || window.__municipalDashboardGisMap?.real_gis_available));
+        }
+        if (window.__municipalDashboardGisMap?.status === "found") {
+          renderRealGisMap(window.__municipalDashboardGisMap);
         }
         if (statusNode) {
           statusNode.textContent = "נתוני לוח המחוונים נטענו מהשרת.";
@@ -2184,6 +2360,7 @@ def render_rag_dashboard_page() -> str:
       };
       console.info("municipal_rag_dashboard_state", dashboardDebugSnapshot);
       loadDashboardData();
+      loadDashboardGisMap();
 
       const categorySection = document.querySelector(".startDiscoveryPanel .discoverySection:nth-of-type(1)");
       const hotTopicSection = document.querySelector(".startDiscoveryPanel .discoverySection:nth-of-type(2)");

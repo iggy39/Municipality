@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import socket
 import subprocess
@@ -8,14 +9,16 @@ import sys
 import time
 import urllib.request
 from datetime import datetime
+from math import sqrt
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
 import municipality.api as api_module
 from municipality.api import app, ask_playground_page, get_db, rag_dashboard_evidence, rag_dashboard_interaction, rag_dashboard_mock
@@ -257,6 +260,47 @@ def test_rag_dashboard_mock_payload_covers_current_dashboard_visual_data() -> No
         assert entity["spatial_representation"] == "schematic"
         assert entity["real_geometry"] is None
         assert entity["geometry_provenance"] is None
+
+
+def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None:
+    body = bytes(ask_playground_page().body).decode("utf-8")
+
+    assert "/api/ui/rag-dashboard/gis-map" in body
+    assert "id=\"real-gis-map\"" in body
+    assert "leaflet@1.9.4" in body
+    assert "OpenStreetMap contributors · context only" in body
+    assert "מפת GIS אמיתית" in body
+
+
+def test_rag_dashboard_gis_map_endpoint_returns_real_layers_with_provenance() -> None:
+    engine = _seed_gis_dashboard_sqlite()
+
+    def override_db():
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_db
+    try:
+        client = TestClient(app)
+        response = client.get("/api/ui/rag-dashboard/gis-map")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "found"
+    assert payload["real_gis_available"] is True
+    assert payload["basemap"]["display_status"] == "context_only"
+    assert payload["parcel"]["gush"] == "7103"
+    assert payload["parcel"]["helka"] == "43"
+    assert payload["parcel"]["source"]["source_id"] == "govmap_public_parcels"
+    assert payload["parcel"]["provenance_id"] == "prov-parcel-dashboard"
+    assert payload["parcel"]["geometry"]["type"] == "MultiPolygon"
+    assert payload["nearby_pois"]["count"] == 2
+    for item in payload["nearby_pois"]["items"]:
+        assert item["source"]
+        assert item["provenance_id"]
+        assert item["geometry"]["type"] == "Point"
 
 
 def test_ask_dashboard_page_is_wired_to_backend_mock_endpoint() -> None:
@@ -671,3 +715,189 @@ def _seed_retrieval_artifact(session: Session) -> str:
     session.add(artifact)
     session.commit()
     return artifact_id
+
+
+def _seed_gis_dashboard_sqlite():
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    event.listen(engine, "connect", _register_gis_spatial_sqlite_functions)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE source_registry (
+                  source_id TEXT PRIMARY KEY,
+                  name_he TEXT,
+                  name_en TEXT,
+                  provider_key TEXT,
+                  provenance_level TEXT,
+                  reuse_status TEXT,
+                  display_status TEXT,
+                  source_is_official INTEGER,
+                  reuse_is_verified INTEGER,
+                  display_as_official INTEGER,
+                  attribution TEXT,
+                  license_name TEXT,
+                  license_url TEXT
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE parcels (
+                  id TEXT PRIMARY KEY,
+                  source_id TEXT NOT NULL,
+                  provenance_id TEXT NOT NULL,
+                  source_object_id TEXT,
+                  gush TEXT,
+                  helka TEXT,
+                  parcel_label TEXT,
+                  validation_status TEXT NOT NULL,
+                  geom TEXT NOT NULL,
+                  fetched_at TEXT
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE poi_points (
+                  id TEXT PRIMARY KEY,
+                  source_id TEXT NOT NULL,
+                  provenance_id TEXT NOT NULL,
+                  source_object_id TEXT,
+                  poi_category TEXT NOT NULL,
+                  name_he TEXT,
+                  name_en TEXT,
+                  official_identifier TEXT,
+                  geom TEXT NOT NULL,
+                  geom_2039 TEXT NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO source_registry VALUES
+                ('govmap_public_parcels', 'חלקות GovMap', 'GovMap parcels', 'govmap', 'official_national', 'restricted', 'official_with_caveat', 1, 0, 0, NULL, NULL, NULL),
+                ('moe_school_coordinates', 'מוסדות חינוך', 'Schools', 'moe', 'official_national', 'verified', 'official', 1, 1, 1, NULL, NULL, NULL),
+                ('mot_gtfs_stops', 'תחנות תחבורה ציבורית', 'Bus stops', 'mot', 'official_national', 'verified', 'official', 1, 1, 1, NULL, NULL, NULL)
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO parcels VALUES
+                ('parcel-dashboard', 'govmap_public_parcels', 'prov-parcel-dashboard', '1063604', '7103', '43', '7103 / 43', 'valid', :parcel_geom, '2026-06-10')
+                """
+            ),
+            {"parcel_geom": _gis_polygon_json(34.779, 32.079, 34.783, 32.083)},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO poi_points VALUES
+                ('school-dashboard', 'moe_school_coordinates', 'prov-school-dashboard', 'school-1', 'school', 'בית ספר סמוך', 'Nearby school', '1001', :school_geom, :school_geom),
+                ('stop-dashboard', 'mot_gtfs_stops', 'prov-stop-dashboard', 'stop-1', 'transport_stop', 'תחנה סמוכה', 'Nearby stop', '2001', :stop_geom, :stop_geom)
+                """
+            ),
+            {"school_geom": _gis_point_json(34.781, 32.081), "stop_geom": _gis_point_json(34.782, 32.082)},
+        )
+    return engine
+
+
+def _register_gis_spatial_sqlite_functions(connection: object, _record: object) -> None:
+    connection.create_function("ST_AsGeoJSON", 1, lambda geom: geom)
+    connection.create_function("ST_SetSRID", 2, lambda geom, _srid: geom)
+    connection.create_function("ST_Transform", 2, lambda geom, _srid: geom)
+    connection.create_function("ST_Point", 2, _gis_point_json)
+    connection.create_function("ST_Centroid", 1, _gis_centroid_json)
+    connection.create_function("ST_DWithin", 3, lambda geom, point, radius: 1 if _gis_distance_m(geom, point) <= float(radius) else 0)
+    connection.create_function("ST_Distance", 2, _gis_distance_m)
+
+
+def _gis_polygon_json(min_lon: float, min_lat: float, max_lon: float, max_lat: float) -> str:
+    return json.dumps(
+        {
+            "type": "MultiPolygon",
+            "coordinates": [[[[min_lon, min_lat], [max_lon, min_lat], [max_lon, max_lat], [min_lon, max_lat], [min_lon, min_lat]]]],
+        }
+    )
+
+
+def _gis_point_json(lon: float, lat: float) -> str:
+    return json.dumps({"type": "Point", "coordinates": [float(lon), float(lat)]})
+
+
+def _gis_centroid_json(geom: object) -> str:
+    bbox = _gis_bbox(geom)
+    if bbox is None:
+        return str(geom)
+    min_lon, min_lat, max_lon, max_lat = bbox
+    return _gis_point_json((min_lon + max_lon) / 2, (min_lat + max_lat) / 2)
+
+
+def _gis_distance_m(geom: object, point: object) -> float:
+    left = _gis_point_coordinates(geom)
+    right = _gis_point_coordinates(point)
+    if left is None or right is None:
+        return 1_000_000.0
+    return sqrt(((left[0] - right[0]) * 111_000) ** 2 + ((left[1] - right[1]) * 111_000) ** 2)
+
+
+def _gis_point_coordinates(value: object) -> tuple[float, float] | None:
+    geometry = _gis_load_geometry(value)
+    if not geometry:
+        return None
+    if geometry.get("type") == "Point":
+        coordinates = geometry.get("coordinates") or []
+        return float(coordinates[0]), float(coordinates[1])
+    bbox = _gis_bbox(value)
+    if bbox is None:
+        return None
+    min_lon, min_lat, max_lon, max_lat = bbox
+    return (min_lon + max_lon) / 2, (min_lat + max_lat) / 2
+
+
+def _gis_bbox(value: object) -> tuple[float, float, float, float] | None:
+    geometry = _gis_load_geometry(value)
+    if not geometry:
+        return None
+    points = list(_gis_iter_points(geometry.get("coordinates")))
+    if not points:
+        return None
+    lons = [point[0] for point in points]
+    lats = [point[1] for point in points]
+    return min(lons), min(lats), max(lons), max(lats)
+
+
+def _gis_iter_points(coordinates: object):
+    if isinstance(coordinates, list) and len(coordinates) >= 2 and all(isinstance(value, (int, float)) for value in coordinates[:2]):
+        yield float(coordinates[0]), float(coordinates[1])
+        return
+    if isinstance(coordinates, list):
+        for item in coordinates:
+            yield from _gis_iter_points(item)
+
+
+def _gis_load_geometry(value: object) -> dict[str, object] | None:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None

@@ -64,6 +64,7 @@ from municipality.rag_dashboard_adapter import (
     validate_dashboard_payload,
 )
 from municipality.rag_dashboard_contracts import RagDashboardInteractionRequest, RagDashboardQueryRequest
+from municipality.rag_dashboard_gis import build_dashboard_gis_map_payload
 from municipality.rag_dashboard_mock import (
     apply_mock_rag_dashboard_interaction,
     get_mock_rag_dashboard_evidence,
@@ -3611,6 +3612,11 @@ def rag_dashboard_evidence(evidence_id: str, db=Depends(get_db)) -> dict[str, An
     if evidence is None:
         raise HTTPException(status_code=404, detail="rag_dashboard_evidence_not_found")
     return evidence
+
+
+@app.get("/api/ui/rag-dashboard/gis-map")
+def rag_dashboard_gis_map(gush: str = "7103", helka: str = "43", radius_m: float = 750.0, db=Depends(get_db)) -> dict[str, Any]:
+    return build_dashboard_gis_map_payload(db, gush=gush, helka=helka, radius_m=radius_m)
 
 
 @app.post("/api/ui/rag-dashboard/query")
