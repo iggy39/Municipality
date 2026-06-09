@@ -16,6 +16,10 @@ from municipality.gis_geometry import geometry_hash, normalize_polygon_geometry,
 from municipality.gis_raw_storage import ImmutableRawStorage
 
 JsonFetcher = Callable[[str, dict[str, Any]], dict[str, Any]]
+JsonPoster = Callable[[str, dict[str, Any]], Any]
+
+GOVMAP_PARCEL_AUTOCOMPLETE_URL = "https://www.govmap.gov.il/api/search-service/parcel/autocomplete"
+GOVMAP_GET_SHAPE_URL = "https://www.govmap.gov.il/api/search-service/getShape"
 
 
 @dataclass(frozen=True)
@@ -130,6 +134,7 @@ def fetch_arcgis_feature_pages(
     service_url: str,
     fetch_json: JsonFetcher,
     page_size: int = 1000,
+    where: str = "1=1",
 ) -> list[dict[str, Any]]:
     pages: list[dict[str, Any]] = []
     offset = 0
@@ -138,7 +143,7 @@ def fetch_arcgis_feature_pages(
             service_url.rstrip("/") + "/query",
             {
                 "f": "geojson",
-                "where": "1=1",
+                "where": where,
                 "outFields": "*",
                 "returnGeometry": "true",
                 "resultOffset": offset,
@@ -163,8 +168,9 @@ def import_xplan_arcgis_plans(
     plan_number_field: str = "plan_number",
     plan_name_field: str = "plan_name",
     page_size: int = 1000,
+    where: str = "1=1",
 ) -> ImportSummary:
-    pages = fetch_arcgis_feature_pages(service_url=service_url, fetch_json=fetch_json, page_size=page_size)
+    pages = fetch_arcgis_feature_pages(service_url=service_url, fetch_json=fetch_json, page_size=page_size, where=where)
     count = 0
     rejected = 0
     warnings: list[str] = []
@@ -328,6 +334,114 @@ def import_mapi_parcel_zip(
     return ImportSummary(count, rejected, _dedupe(warnings))
 
 
+def fetch_govmap_public_parcel(*, gush: str, helka: str, post_json: JsonPoster) -> dict[str, Any] | None:
+    search_payload = {
+        "searchText": f"block {gush} parcel {helka}",
+        "language": "he",
+        "maxResults": 10,
+        "isAccurate": False,
+        "subType": "parcel",
+    }
+    search_response = post_json(GOVMAP_PARCEL_AUTOCOMPLETE_URL, search_payload)
+    result = _select_govmap_parcel_result(search_response, gush=gush, helka=helka)
+    if result is None:
+        return None
+    source_object_id = str(result["id"]).split("|")[-1]
+    shape_payload = {"idType": "parcel", "id": source_object_id}
+    wkt = post_json(GOVMAP_GET_SHAPE_URL, shape_payload)
+    if not isinstance(wkt, str) or not wkt.strip():
+        return None
+    return {
+        "gush": _normalize_parcel_number(gush),
+        "helka": _normalize_parcel_number(helka),
+        "source_object_id": source_object_id,
+        "wkt": wkt,
+        "search_payload": search_payload,
+        "search_result": result,
+        "shape_payload": shape_payload,
+    }
+
+
+def import_govmap_public_parcel(
+    session: Session,
+    *,
+    source_id: str,
+    gush: str,
+    helka: str,
+    post_json: JsonPoster,
+    raw_storage: ImmutableRawStorage,
+    input_srid: int = 3857,
+) -> ImportSummary:
+    parcel = fetch_govmap_public_parcel(gush=gush, helka=helka, post_json=post_json)
+    if parcel is None:
+        return ImportSummary(0, 1, ["parcel_not_found"])
+    raw_uri = raw_storage.write_json(source_id=source_id, name=f"govmap_parcel_{gush}_{helka}.json", payload=parcel)
+    source_geometry = _geojson_polygon_from_wkt(parcel["wkt"])
+    geometry = transform_geojson_geometry(source_geometry, source_srid=input_srid, target_srid=4326)
+    result = validate_geojson_geometry(geometry, expected_type="MultiPolygon")
+    if result.status == "invalid":
+        return ImportSummary(0, 1, result.warnings or ["invalid_parcel_geometry"])
+    geom_hash = geometry_hash(geometry)
+    metadata = {
+        "govmap_public_fallback": True,
+        "search_payload": parcel["search_payload"],
+        "search_result": parcel["search_result"],
+        "shape_payload": parcel["shape_payload"],
+    }
+    provenance_id = _get_or_create_provenance(
+        session,
+        canonical_table="parcels",
+        source_id=source_id,
+        source_key=f"{source_id}:{parcel['source_object_id']}",
+        source_record_id=str(parcel["source_object_id"]),
+        raw_storage_uri=raw_uri,
+        geom_hash=geom_hash,
+        metadata=metadata,
+    )
+    session.execute(
+        text(
+            """
+            INSERT INTO parcels (
+              source_id, provenance_id, source_object_id, gush, helka, parcel_label,
+              normalized_geometry_hash, geom, geom_2039, validation_status,
+              validation_warnings, metadata
+            ) VALUES (
+              :source_id, :provenance_id, :source_object_id, :gush, :helka, :parcel_label,
+              :normalized_geometry_hash,
+              ST_Multi(ST_MakeValid(ST_GeomFromGeoJSON(:geometry)::geometry))::geometry(MultiPolygon, 4326),
+              ST_Transform(ST_Multi(ST_MakeValid(ST_GeomFromGeoJSON(:geometry)::geometry)), 2039)::geometry(MultiPolygon, 2039),
+              :validation_status, CAST(:validation_warnings AS jsonb), CAST(:metadata AS jsonb)
+            )
+            ON CONFLICT (source_id, gush, helka, normalized_geometry_hash) DO UPDATE SET
+              provenance_id = EXCLUDED.provenance_id,
+              source_object_id = EXCLUDED.source_object_id,
+              parcel_label = EXCLUDED.parcel_label,
+              geom = EXCLUDED.geom,
+              geom_2039 = EXCLUDED.geom_2039,
+              validation_status = EXCLUDED.validation_status,
+              validation_warnings = EXCLUDED.validation_warnings,
+              metadata = EXCLUDED.metadata,
+              fetched_at = now(),
+              updated_at = now()
+            """
+        ),
+        {
+            "source_id": source_id,
+            "provenance_id": provenance_id,
+            "source_object_id": str(parcel["source_object_id"]),
+            "gush": parcel["gush"],
+            "helka": parcel["helka"],
+            "parcel_label": f"{parcel['gush']} / {parcel['helka']}",
+            "normalized_geometry_hash": geom_hash,
+            "geometry": json.dumps(geometry),
+            "validation_status": result.status,
+            "validation_warnings": json.dumps(result.warnings, ensure_ascii=False),
+            "metadata": json.dumps(metadata, ensure_ascii=False, default=str),
+        },
+    )
+    return ImportSummary(1, 0, _dedupe(result.warnings))
+
+
 def import_gtfs_stops(session: Session, *, source_id: str, zip_bytes: bytes, raw_storage: ImmutableRawStorage) -> ImportSummary:
     raw_uri = raw_storage.write_bytes(source_id=source_id, name="gtfs.zip", content=zip_bytes)
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
@@ -376,6 +490,156 @@ def import_gtfs_stops(session: Session, *, source_id: str, zip_bytes: bytes, raw
         )
         count += 1
     return ImportSummary(count, rejected, _dedupe(warnings))
+
+
+def import_mot_bus_stops_csv(session: Session, *, source_id: str, csv_text: str, raw_storage: ImmutableRawStorage) -> ImportSummary:
+    raw_uri = raw_storage.write_bytes(source_id=source_id, name="mot_bus_stops.csv", content=csv_text.encode("utf-8"))
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    count = 0
+    rejected = 0
+    warnings: list[str] = []
+    for row in rows:
+        stop = _mot_bus_stop_values(row)
+        if stop is None:
+            rejected += 1
+            warnings.append("missing_stop_id_or_coordinates")
+            continue
+        stop_id, lon, lat = stop
+        geometry = {"type": "Point", "coordinates": [lon, lat]}
+        result = validate_geojson_geometry(geometry, expected_type="Point")
+        if result.status == "invalid":
+            rejected += 1
+            warnings.extend(result.warnings)
+            continue
+        provenance_id = _get_or_create_provenance(
+            session,
+            canonical_table="poi_points",
+            source_id=source_id,
+            source_key=f"{source_id}:{stop_id}",
+            source_record_id=stop_id,
+            raw_storage_uri=raw_uri,
+            geom_hash=geometry_hash(geometry),
+            metadata={"row": row},
+        )
+        _upsert_poi_point(
+            session,
+            source_id=source_id,
+            provenance_id=provenance_id,
+            source_object_id=stop_id,
+            poi_category="transport_stop",
+            name_he=_first_present(row, ["cityname", "city_name"]),
+            name_en=None,
+            official_identifier=stop_id,
+            lon=lon,
+            lat=lat,
+            validation_status=result.status,
+            validation_warnings=result.warnings,
+            metadata={"row": row},
+        )
+        count += 1
+    return ImportSummary(count, rejected, _dedupe(warnings))
+
+
+def _mot_bus_stop_values(row: Mapping[str, Any]) -> tuple[str, float, float] | None:
+    stop_id = _first_present(row, ["stationid", "station_id", "stop_id"])
+    lon = _float_or_none(_first_present(row, ["long", "lon", "longitude", "stop_lon"]))
+    lat = _float_or_none(_first_present(row, ["lat", "latitude", "stop_lat"]))
+    if not stop_id or lon is None or lat is None:
+        return None
+    return stop_id, lon, lat
+
+
+def _select_govmap_parcel_result(search_response: Any, *, gush: str, helka: str) -> dict[str, Any] | None:
+    if not isinstance(search_response, Mapping):
+        return None
+    target_gush = _normalize_parcel_number(gush)
+    target_helka = _normalize_parcel_number(helka)
+    for result in search_response.get("results") or []:
+        if not isinstance(result, Mapping):
+            continue
+        result_id = str(result.get("id") or "")
+        if not result_id.startswith("parcel|"):
+            continue
+        text_value = str(result.get("text") or "")
+        if _govmap_text_matches_parcel(text_value, gush=target_gush, helka=target_helka):
+            return dict(result)
+    return None
+
+
+def _govmap_text_matches_parcel(text_value: str, *, gush: str, helka: str) -> bool:
+    parts = text_value.replace(",", " ").split()
+    for index, part in enumerate(parts[:-1]):
+        if part == "גוש" and _normalize_parcel_number(parts[index + 1]) == gush:
+            break
+    else:
+        return False
+    for index, part in enumerate(parts[:-1]):
+        if part == "חלקה" and _normalize_parcel_number(parts[index + 1]) == helka:
+            return True
+    return False
+
+
+def _normalize_parcel_number(value: Any) -> str:
+    text_value = str(value or "").strip()
+    return str(int(text_value)) if text_value.isdigit() else text_value
+
+
+def _geojson_polygon_from_wkt(wkt: str) -> dict[str, Any]:
+    text_value = wkt.strip().strip('"')
+    upper = text_value.upper()
+    if upper.startswith("MULTIPOLYGON"):
+        body = _strip_wkt_type(text_value, "MULTIPOLYGON")
+        polygons = []
+        for polygon_text in _split_wkt_groups(_strip_outer_parens(body)):
+            rings = []
+            for ring_text in _split_wkt_groups(_strip_outer_parens(polygon_text)):
+                rings.append(_parse_wkt_ring(_strip_outer_parens(ring_text)))
+            polygons.append(rings)
+        return {"type": "MultiPolygon", "coordinates": polygons}
+    if upper.startswith("POLYGON"):
+        body = _strip_wkt_type(text_value, "POLYGON")
+        rings = [_parse_wkt_ring(_strip_outer_parens(ring_text)) for ring_text in _split_wkt_groups(_strip_outer_parens(body))]
+        return {"type": "MultiPolygon", "coordinates": [rings]}
+    raise ValueError("Only POLYGON and MULTIPOLYGON WKT are supported")
+
+
+def _strip_wkt_type(wkt: str, type_name: str) -> str:
+    return wkt[len(type_name) :].strip()
+
+
+def _strip_outer_parens(text_value: str) -> str:
+    stripped = text_value.strip()
+    if stripped.startswith("(") and stripped.endswith(")"):
+        return stripped[1:-1].strip()
+    return stripped
+
+
+def _split_wkt_groups(text_value: str) -> list[str]:
+    groups: list[str] = []
+    level = 0
+    start = 0
+    for index, char in enumerate(text_value):
+        if char == "(":
+            level += 1
+        elif char == ")":
+            level -= 1
+        elif char == "," and level == 0:
+            groups.append(text_value[start:index].strip())
+            start = index + 1
+    groups.append(text_value[start:].strip())
+    return [group for group in groups if group]
+
+
+def _parse_wkt_ring(text_value: str) -> list[list[float]]:
+    coordinates: list[list[float]] = []
+    for coordinate_text in text_value.split(","):
+        parts = coordinate_text.strip().split()
+        if len(parts) < 2:
+            continue
+        coordinates.append([float(parts[0]), float(parts[1])])
+    if len(coordinates) < 4:
+        raise ValueError("WKT polygon ring must contain at least four coordinates")
+    return coordinates
 
 
 def transform_geojson_geometry(geometry: dict[str, Any], *, source_srid: int, target_srid: int) -> dict[str, Any]:
@@ -446,8 +710,8 @@ def import_school_coordinates_csv(session: Session, *, source_id: str, csv_text:
 
 
 def _school_lon_lat(row: Mapping[str, Any]) -> tuple[float, float] | None:
-    lon = _float_or_none(_first_present(row, ["lon", "longitude", "x_wgs84", "lng"]))
-    lat = _float_or_none(_first_present(row, ["lat", "latitude", "y_wgs84"]))
+    lon = _float_or_none(_first_present(row, ["lon", "longitude", "x_wgs84", "lng", "utm_x"]))
+    lat = _float_or_none(_first_present(row, ["lat", "latitude", "y_wgs84", "utm_y"]))
     if lon is not None and lat is not None:
         return lon, lat
     x = _float_or_none(_first_present(row, ["x", "itm_x", "x_itm", "coord_x"]))

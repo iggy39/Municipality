@@ -21,6 +21,7 @@ sources:
     name_he: תכניות תכנון - XPLAN
     name_en: XPLAN Planning Blue Lines
     owner_name: Israel Planning Administration
+    source_url: https://ags.iplan.gov.il/arcgisiplan/rest/services/PlanningPublic/Xplan/MapServer/1
     layer_keys: [plans]
     provenance_level: official_national
     reuse_status: verified
@@ -37,6 +38,7 @@ sources:
     name_he: קדסטר וחלקות - MAPI
     name_en: MAPI Parcels
     owner_name: Survey of Israel
+    source_url: https://e.data.gov.il/dataset/dff8a168-af6c-4e0f-bbe3-c4bd3646084c/resource/c68b4df6-c809-4bb5-a546-61fa1528fed5/download/parcels.zip
     layer_keys: [parcels]
     provenance_level: official_national
     reuse_status: verified
@@ -47,12 +49,33 @@ sources:
     display_as_official: true
     enabled: true
     metadata: {}
+  - source_id: govmap_public_parcels
+    provider_key: govmap
+    source_kind: govmap_public_fallback
+    name_he: חלקות - GovMap public search fallback
+    name_en: GovMap Public Parcel Search Fallback
+    owner_name: Survey of Israel / GovMap
+    source_url: https://www.govmap.gov.il/api/search-service/parcel/autocomplete
+    layer_keys: [parcels]
+    provenance_level: official_national
+    reuse_status: restricted
+    geometry_status: official_geometry
+    display_status: official_with_caveat
+    source_is_official: true
+    reuse_is_verified: false
+    display_as_official: false
+    enabled: true
+    notes: Undocumented public GovMap frontend fallback for single-parcel POC import when MAPI ZIP download is blocked.
+    metadata:
+      shape_url: https://www.govmap.gov.il/api/search-service/getShape
+      bulk_source_preferred: mapi_parcels
   - source_id: mot_gtfs_stops
     provider_key: mot
     source_kind: national_official
-    name_he: תחנות תחבורה ציבורית - GTFS
-    name_en: Public Transport GTFS Stops
+    name_he: תחנות תחבורה ציבורית
+    name_en: Public Transport Bus Stops
     owner_name: Ministry of Transport
+    source_url: https://data.gov.il/api/3/action/datastore_search?resource_id=e873e6a2-66c1-494f-a677-f5e77348edb0
     layer_keys: [poi_points]
     provenance_level: official_national
     reuse_status: verified
@@ -69,6 +92,7 @@ sources:
     name_he: מוסדות חינוך - משרד החינוך
     name_en: Ministry of Education School Coordinates
     owner_name: Ministry of Education
+    source_url: https://data.gov.il/api/3/action/datastore_search?resource_id=5c5d6bb0-755d-470d-84b6-d7dd3135ba9c
     layer_keys: [poi_points]
     provenance_level: official_national
     reuse_status: verified

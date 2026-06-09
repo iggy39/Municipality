@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx
 from sqlalchemy import create_engine
@@ -21,13 +24,23 @@ def main() -> None:
     parser.add_argument("--source-id", default="xplan_blue_lines")
     parser.add_argument("--plan-number-field", default="plan_number")
     parser.add_argument("--plan-name-field", default="plan_name")
+    parser.add_argument("--where", default="1=1")
     parser.add_argument("--raw-root", default="storage/raw/gis")
     args = parser.parse_args()
 
     def fetch_json(url: str, params: dict[str, object]) -> dict[str, object]:
-        response = httpx.get(url, params=params, timeout=60.0)
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = httpx.get(url, params=params, timeout=60.0)
+            response.raise_for_status()
+            return response.json()
+        except httpx.ConnectError:
+            completed = subprocess.run(
+                ["curl", "-sS", f"{url}?{urlencode(params)}"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return json.loads(completed.stdout)
 
     engine = create_engine(os.environ["DATABASE_URL"], future=True)
     with Session(engine) as session, session.begin():
@@ -39,6 +52,7 @@ def main() -> None:
             raw_storage=ImmutableRawStorage(Path(args.raw_root)),
             plan_number_field=args.plan_number_field,
             plan_name_field=args.plan_name_field,
+            where=args.where,
         )
     print(f"inserted_or_updated={summary.inserted_or_updated} rejected={summary.rejected}")
 
