@@ -15,6 +15,7 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 ## Solution Principles
 - Prefer generic, reusable solutions over logic tailored to one document, municipality, or text pattern.
 - Do not hardcode assumptions about protocol layout, terminology, metadata, or attachment structure.
+- Always add helpful comments when writing code, especially where intent, assumptions, or non-obvious behavior need clarification.
 - If unsure, pause and ask the user. If documentation or best practices are needed, research them before proceeding.
 
 ## AI Model Preferences
