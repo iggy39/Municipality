@@ -6,6 +6,7 @@ All agents working in this repository MUST follow this file.
 - Print minimal information unless the user explicitly asks for more detail.
 - Always show estimated build/execution time before starting implementation or running commands.
 - Prefer concise status updates, concise findings, and concise verification output.
+- When printing file paths in the session, always use full absolute paths instead of paths relative to the project.
 - Ask targeted follow-up questions whenever requirements, context, or implementation choices are unclear.
 
 ## Project Goal
