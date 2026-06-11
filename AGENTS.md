@@ -7,6 +7,8 @@ All agents working in this repository MUST follow this file.
 - Always show estimated build/execution time before starting implementation or running commands.
 - Prefer concise status updates, concise findings, and concise verification output.
 - When printing file paths in the session, always use full absolute paths instead of paths relative to the project.
+- Do not print a "Relevant Files" section in the session unless the current action is committing those files.
+- Assume the user is not a software engineer; explain actions, findings, and tradeoffs clearly in plain language.
 - Ask targeted follow-up questions whenever requirements, context, or implementation choices are unclear.
 
 ## Project Goal
