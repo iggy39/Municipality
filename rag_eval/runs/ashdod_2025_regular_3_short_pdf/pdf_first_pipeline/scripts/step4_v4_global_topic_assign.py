@@ -23,6 +23,7 @@ from municipality.pdf_first_v4_topic_tree import (  # noqa: E402
     ROOT_BY_ID,
     TOPIC_ASSIGNMENT_BACKEND,
     TOPIC_TREE_VERSION,
+    V4_ROOT_TOPICS,
     attachment_contexts_from_retrieval_chunks,
     child_topic_id,
     clean_topic_label,
@@ -40,11 +41,12 @@ from municipality.pdf_first_v4_topic_policy import (  # noqa: E402
     topic_policy_matches,
     topic_policy_prompt_payload,
 )
+from municipality.pdf_first_v4_topic_classifier import build_topic_profile_index, find_topic_candidates  # noqa: E402
 
 DEFAULT_MODEL = "dicta-il/DictaLM-3.0-24B-Thinking:bf16"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 EXCLUDED_STRUCTURAL_ROLES = {"noise", "table_header_only"}
-CACHE_VERSION = "step4_v4_global_topic_assign_v16_final_policy_preserve"
+CACHE_VERSION = "step4_v4_global_topic_assign_v22_unknown_root_positive_alignment"
 
 
 def main() -> int:
@@ -61,6 +63,7 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=float, default=300.0)
     parser.add_argument("--max-units-per-call", type=int, default=4)
     parser.add_argument("--max-raw-chars", type=int, default=1200)
+    parser.add_argument("--dicta-mode", choices=["auto", "disabled", "required"], default="auto", help="auto uses Dicta only for ambiguous items; disabled imports ambiguous items as candidate topics; required sends topic-bearing items to Dicta")
     args = parser.parse_args()
 
     structure_path = Path(args.structure_units_json).expanduser().resolve()
@@ -82,6 +85,7 @@ def main() -> int:
     document_context = _document_context(input_pdf=args.input_pdf, packet_role=str(args.packet_role), units=units)
     document_child_candidates = _document_child_candidates(units=units, document_context=document_context, topic_contexts_by_unit=topic_contexts_by_unit)
     tree_payload = global_topic_tree_payload(existing_tree=existing_tree, attachment_contexts=[])
+    topic_profile_index = build_topic_profile_index(tree_payload)
     items = []
     for unit in units:
         unit_id = str(unit.get("structure_unit_id") or unit.get("semantic_unit_id") or "")
@@ -95,14 +99,29 @@ def main() -> int:
                 topic_context=topic_contexts_by_unit.get(unit_id, {}),
                 document_child_candidates=document_child_candidates,
                 topic_tree=tree_payload,
+                topic_index=topic_profile_index,
             )
         )
+    for item in items:
+        item["dicta_mode"] = str(args.dicta_mode)
     assignments_by_id: dict[str, dict[str, Any]] = {}
     model_items: list[dict[str, Any]] = []
+    deterministic_count = 0
+    low_confidence_candidate_count = 0
     for item in items:
         if _preassign_without_model(item):
             assignment = _non_topic_assignment(item)
             assignments_by_id[item["structure_unit_id"]] = assignment
+            _write_cached_assignment(checkpoint_dir=checkpoint_dir, item=item, model=str(args.model), assignment=assignment)
+        elif str(args.dicta_mode) != "required" and _preassign_with_candidate_finder(item):
+            assignment = _assignment_from_candidate_finder(item)
+            assignments_by_id[item["structure_unit_id"]] = assignment
+            deterministic_count += 1
+            _write_cached_assignment(checkpoint_dir=checkpoint_dir, item=item, model=str(args.model), assignment=assignment)
+        elif str(args.dicta_mode) == "disabled":
+            assignment = _candidate_review_assignment(item=item, reason="dicta_disabled")
+            assignments_by_id[item["structure_unit_id"]] = assignment
+            low_confidence_candidate_count += 1
             _write_cached_assignment(checkpoint_dir=checkpoint_dir, item=item, model=str(args.model), assignment=assignment)
         else:
             model_items.append(item)
@@ -128,7 +147,7 @@ def main() -> int:
     assignments = [assignments_by_id.get(item["structure_unit_id"]) or _fallback_assignment(item, reason="missing_after_retry") for item in items]
     assignments = _mark_inherited_duplicate_topic_rows(assignments)
 
-    validation = _validate(assignments=assignments, item_count=len(items), model_errors=model_errors)
+    validation = _validate(assignments=assignments, items=items, item_count=len(items), model_errors=model_errors, deterministic_count=deterministic_count, low_confidence_candidate_count=low_confidence_candidate_count, dicta_mode=str(args.dicta_mode))
     output = {
         "step": "step4_v4_global_topic_assignment",
         "topic_tree_version": TOPIC_TREE_VERSION,
@@ -148,15 +167,20 @@ def main() -> int:
     }
     assignments_path = output_dir / "topic_assignments.json"
     validation_path = output_dir / "validation_report.json"
+    quality_path = output_dir / "classifier_quality_report.json"
+    quality_md_path = output_dir / "classifier_quality_report.md"
     mirror_queue_path = output_dir / "assistant_mirror_queue.json"
     assignments_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
     validation_path.write_text(json.dumps(validation, ensure_ascii=False, indent=2), encoding="utf-8")
+    quality_report = validation.get("classifier_quality_report") or {}
+    quality_path.write_text(json.dumps(quality_report, ensure_ascii=False, indent=2), encoding="utf-8")
+    quality_md_path.write_text(_classifier_quality_markdown(quality_report), encoding="utf-8")
     _write_assistant_mirror_queue(model_call_dir=model_call_dir, output_path=mirror_queue_path)
-    print(json.dumps({"topic_assignments": str(assignments_path), "validation_report": str(validation_path), **validation}, ensure_ascii=False))
+    print(json.dumps({"topic_assignments": str(assignments_path), "validation_report": str(validation_path), "classifier_quality_report_json": str(quality_path), "classifier_quality_report_md": str(quality_md_path), **validation}, ensure_ascii=False))
     return 0 if validation["accept_for_next_step"] else 2
 
 
-def _build_item(*, unit: dict[str, Any], facts: list[dict[str, Any]], max_raw_chars: int, attachment_contexts: list[dict[str, Any]], document_context: dict[str, Any], topic_context: dict[str, Any], document_child_candidates: list[dict[str, Any]], topic_tree: dict[str, Any]) -> dict[str, Any]:
+def _build_item(*, unit: dict[str, Any], facts: list[dict[str, Any]], max_raw_chars: int, attachment_contexts: list[dict[str, Any]], document_context: dict[str, Any], topic_context: dict[str, Any], document_child_candidates: list[dict[str, Any]], topic_tree: dict[str, Any], topic_index: dict[str, Any]) -> dict[str, Any]:
     unit_id = str(unit.get("structure_unit_id") or unit.get("semantic_unit_id") or "")
     raw_text = _compact(unit.get("raw_text"))
     summary = _compact(unit.get("summary_he"))
@@ -189,6 +213,15 @@ def _build_item(*, unit: dict[str, Any], facts: list[dict[str, Any]], max_raw_ch
         topic_tree=topic_tree,
         structural_role=str(unit.get("structural_role") or ""),
     )
+    candidate_finder = find_topic_candidates(
+        text=classification_text,
+        evidence_text="" if packet_role == "protocol" else evidence_text,
+        topic_tree=topic_tree,
+        topic_index=topic_index,
+        policy_matches=policy_matches,
+        child_candidates=candidate_child_topics,
+        is_topic_bearing=bool(topic_contract.get("is_topic_bearing")),
+    )
     return {
         "structure_unit_id": unit_id,
         "semantic_unit_id": str(unit.get("semantic_unit_id") or unit_id),
@@ -216,18 +249,32 @@ def _build_item(*, unit: dict[str, Any], facts: list[dict[str, Any]], max_raw_ch
         "accepted_entity_spans": [str(fact.get("canonical_raw_span") or "") for fact in facts[:16] if str(fact.get("canonical_raw_span") or "").strip()],
         "document_context": document_context,
         "candidate_child_topics": candidate_child_topics,
+        "root_topic_candidates": candidate_finder.get("candidates") or [],
+        "deterministic_topic_decision": candidate_finder.get("decision") or {},
+        "deterministic_classifier_method": candidate_finder.get("method"),
         "topic_policy_matches": policy_matches,
         "referenced_attachment_contexts": referenced_contexts,
     }
 
 
 def _call_dictalm(*, items: list[dict[str, Any]], topic_tree: dict[str, Any], model: str, base_url: str, timeout_seconds: float, model_call_dir: Path | None = None, call_context: dict[str, Any] | None = None) -> dict[str, Any]:
+    allowed_root_topics = _allowed_root_topics(topic_tree)
     request_payload = {
         "task": "pdf_first_v4_global_topic_assignment",
         "requirements": [
             "Return strict JSON only with key assignments.",
             "Return exactly one assignment per structure_unit_id.",
-            "Choose root_topic_id only from topic_tree.root_topics.root_topic_id.",
+            "Choose root_topic_id only by copying an exact root_topic_id from allowed_root_topics.",
+            "Do not invent, translate, rename, paraphrase, or compose root_topic_id values.",
+            "If your preferred semantic category is named differently than the allowed labels, choose the closest allowed root by meaning and copy its exact root_topic_id.",
+            "If no allowed root reasonably covers the subject, set root_topic_id null, needs_taxonomy_review true, and proposed_new_root_label_he to the missing category label.",
+            "You are not creating a taxonomy. You are assigning each item to the closest existing root in allowed_root_topics.",
+            "Use item.root_topic_candidates as the deterministic classifier shortlist; prefer the highest scored candidate unless the current evidence clearly contradicts it.",
+            "If item.deterministic_topic_decision.action is needs_judge, decide between the shortlisted candidates; do not invent a new root.",
+            "When item.root_topic_candidates is empty, still choose from allowed_root_topics if one reasonably covers the subject.",
+            "For topic-bearing protocol rows, do not choose procedural carrier roots such as root_agenda_queries or root_order_proposals merely because the text contains שאילתה or הצעה לסדר.",
+            "Choose root_agenda_queries/root_order_proposals only when the row is about the council procedure itself and no substantive municipal subject is present.",
+            "If the row says שאילתה/הצעה לסדר בנושא X, classify X, not the carrier.",
             "Use existing child topics from the supplied tree when they match evidence.",
             "Choose child_choice_id from item.candidate_child_topics when a candidate is evidence-backed and more specific than the root.",
             "Treat candidate_child_topics as a closed classifier label set; prefer evidence-backed existing_tree candidates over new document-specific phrasing.",
@@ -255,7 +302,7 @@ def _call_dictalm(*, items: list[dict[str, Any]], topic_tree: dict[str, Any], mo
             "assignments": [
                 {
                     "structure_unit_id": "string",
-                    "root_topic_id": "string",
+                    "root_topic_id": "string|null",
                     "is_topic_bearing": "boolean",
                     "agenda_carrier_he": "string|null",
                     "topic_subject_he": "string|null",
@@ -263,6 +310,8 @@ def _call_dictalm(*, items: list[dict[str, Any]], topic_tree: dict[str, Any], mo
                     "primary_action_he": "string|null",
                     "service_domain_he": "string|null",
                     "policy_id": "string|null",
+                    "needs_taxonomy_review": "boolean",
+                    "proposed_new_root_label_he": "string|null",
                     "attribution_he": "string|null",
                     "child_choice_id": "string|null",
                     "child_label_he": "string|null",
@@ -273,6 +322,8 @@ def _call_dictalm(*, items: list[dict[str, Any]], topic_tree: dict[str, Any], mo
                 }
             ]
         },
+        "allowed_root_topics": allowed_root_topics,
+        "allowed_root_topic_ids": [row["root_topic_id"] for row in allowed_root_topics],
         "topic_tree": topic_tree,
         "topic_policies": topic_policy_prompt_payload(),
         "items": items,
@@ -323,30 +374,44 @@ def _assign_items_with_retry(
     model_call_dir: Path,
     split_depth: int = 0,
     omission_retry_depth: int = 0,
+    invalid_root_retry_depth: int = 0,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not items:
         return [], []
     started = time.perf_counter()
-    response = _call_dictalm(items=items, topic_tree=topic_tree, model=model, base_url=base_url, timeout_seconds=timeout_seconds, model_call_dir=model_call_dir, call_context={"split_depth": split_depth, "omission_retry_depth": omission_retry_depth})
+    response = _call_dictalm(items=items, topic_tree=topic_tree, model=model, base_url=base_url, timeout_seconds=timeout_seconds, model_call_dir=model_call_dir, call_context={"split_depth": split_depth, "omission_retry_depth": omission_retry_depth, "invalid_root_retry_depth": invalid_root_retry_depth})
     elapsed = round(time.perf_counter() - started, 3)
     if not response.get("error_code"):
-        assignments, omitted_items = _assignments_from_response(response=response, items_by_id={item["structure_unit_id"]: item for item in items})
+        items_by_id = {item["structure_unit_id"]: item for item in items}
+        invalid_root_items = _items_with_invalid_model_roots(response=response, items_by_id=items_by_id)
+        invalid_root_assignments: list[dict[str, Any]] = []
+        invalid_root_errors: list[dict[str, Any]] = []
+        if invalid_root_items and invalid_root_retry_depth < 1:
+            invalid_ids = [item["structure_unit_id"] for item in invalid_root_items]
+            valid_items_by_id = {unit_id: item for unit_id, item in items_by_id.items() if unit_id not in set(invalid_ids)}
+            assignments, omitted_items = _assignments_from_response(response=response, items_by_id=valid_items_by_id)
+            print(json.dumps({"batch": invalid_ids, "status": "retry_invalid_root", "elapsed_seconds": elapsed, "split_depth": split_depth, "invalid_root_retry_depth": invalid_root_retry_depth}, ensure_ascii=False), flush=True)
+            invalid_root_assignments, invalid_root_errors = _assign_items_with_retry(items=invalid_root_items, topic_tree=topic_tree, model=model, base_url=base_url, timeout_seconds=timeout_seconds, checkpoint_dir=checkpoint_dir, model_call_dir=model_call_dir, split_depth=split_depth + 1, omission_retry_depth=omission_retry_depth, invalid_root_retry_depth=invalid_root_retry_depth + 1)
+        else:
+            assignments, omitted_items = _assignments_from_response(response=response, items_by_id=items_by_id)
+            if invalid_root_items:
+                invalid_root_errors = [{"structure_unit_ids": [item["structure_unit_id"]], "error_code": "MODEL_INVALID_ROOT_TOPIC_ID", "error_text": "model returned a root_topic_id outside allowed_root_topics after retry"} for item in invalid_root_items]
         omitted_assignments: list[dict[str, Any]] = []
         omitted_errors: list[dict[str, Any]] = []
         if omitted_items and omission_retry_depth < 2:
             print(json.dumps({"batch": [item["structure_unit_id"] for item in omitted_items], "status": "retry_omitted_units", "elapsed_seconds": elapsed, "split_depth": split_depth, "omission_retry_depth": omission_retry_depth}, ensure_ascii=False), flush=True)
-            omitted_assignments, omitted_errors = _assign_items_with_retry(items=omitted_items, topic_tree=topic_tree, model=model, base_url=base_url, timeout_seconds=timeout_seconds, checkpoint_dir=checkpoint_dir, model_call_dir=model_call_dir, split_depth=split_depth + 1, omission_retry_depth=omission_retry_depth + 1)
+            omitted_assignments, omitted_errors = _assign_items_with_retry(items=omitted_items, topic_tree=topic_tree, model=model, base_url=base_url, timeout_seconds=timeout_seconds, checkpoint_dir=checkpoint_dir, model_call_dir=model_call_dir, split_depth=split_depth + 1, omission_retry_depth=omission_retry_depth + 1, invalid_root_retry_depth=invalid_root_retry_depth)
         elif omitted_items:
             omitted_assignments = [_fallback_assignment(item, reason="model_omitted_unit") for item in omitted_items]
             omitted_errors = [{"structure_unit_ids": [item["structure_unit_id"]], "error_code": "MODEL_OMITTED_UNIT", "error_text": "model returned valid JSON but omitted the unit after retries"} for item in omitted_items]
             print(json.dumps({"batch": [item["structure_unit_id"] for item in omitted_items], "status": "omitted_after_retry", "elapsed_seconds": elapsed, "split_depth": split_depth, "omission_retry_depth": omission_retry_depth}, ensure_ascii=False), flush=True)
-        assignments = assignments + omitted_assignments
+        assignments = assignments + omitted_assignments + invalid_root_assignments
         for assignment in assignments:
             item = next((candidate for candidate in items if candidate["structure_unit_id"] == assignment.get("structure_unit_id")), None)
             if item is not None:
                 _write_cached_assignment(checkpoint_dir=checkpoint_dir, item=item, model=model, assignment=assignment)
         print(json.dumps({"batch": [item["structure_unit_id"] for item in items], "status": "ok", "elapsed_seconds": elapsed, "split_depth": split_depth, "omitted_count": len(omitted_items)}, ensure_ascii=False), flush=True)
-        return assignments, omitted_errors
+        return assignments, omitted_errors + invalid_root_errors
     if len(items) == 1:
         item = items[0]
         assignment = _fallback_assignment(item, reason="model_error")
@@ -355,9 +420,41 @@ def _assign_items_with_retry(
         return [assignment], [error]
     print(json.dumps({"batch": [item["structure_unit_id"] for item in items], "status": "split_retry", "elapsed_seconds": elapsed, "split_depth": split_depth, "error_code": response.get("error_code")}, ensure_ascii=False), flush=True)
     midpoint = max(1, len(items) // 2)
-    left_assignments, left_errors = _assign_items_with_retry(items=items[:midpoint], topic_tree=topic_tree, model=model, base_url=base_url, timeout_seconds=timeout_seconds, checkpoint_dir=checkpoint_dir, model_call_dir=model_call_dir, split_depth=split_depth + 1, omission_retry_depth=omission_retry_depth)
-    right_assignments, right_errors = _assign_items_with_retry(items=items[midpoint:], topic_tree=topic_tree, model=model, base_url=base_url, timeout_seconds=timeout_seconds, checkpoint_dir=checkpoint_dir, model_call_dir=model_call_dir, split_depth=split_depth + 1, omission_retry_depth=omission_retry_depth)
+    left_assignments, left_errors = _assign_items_with_retry(items=items[:midpoint], topic_tree=topic_tree, model=model, base_url=base_url, timeout_seconds=timeout_seconds, checkpoint_dir=checkpoint_dir, model_call_dir=model_call_dir, split_depth=split_depth + 1, omission_retry_depth=omission_retry_depth, invalid_root_retry_depth=invalid_root_retry_depth)
+    right_assignments, right_errors = _assign_items_with_retry(items=items[midpoint:], topic_tree=topic_tree, model=model, base_url=base_url, timeout_seconds=timeout_seconds, checkpoint_dir=checkpoint_dir, model_call_dir=model_call_dir, split_depth=split_depth + 1, omission_retry_depth=omission_retry_depth, invalid_root_retry_depth=invalid_root_retry_depth)
     return left_assignments + right_assignments, left_errors + right_errors
+
+
+def _items_with_invalid_model_roots(*, response: dict[str, Any], items_by_id: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = response.get("assignments") if isinstance(response.get("assignments"), list) else []
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        unit_id = str(row.get("structure_unit_id") or "")
+        root_topic_id = str(row.get("root_topic_id") or "").strip()
+        if not unit_id or not root_topic_id:
+            continue
+        if root_topic_id not in ROOT_BY_ID and unit_id in items_by_id:
+            out.append(items_by_id[unit_id])
+    return out
+
+
+def _allowed_root_topics(topic_tree: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = topic_tree.get("root_topics") or topic_tree.get("roots") or []
+    out = []
+    for row in rows:
+        root_topic_id = str(row.get("root_topic_id") or "")
+        if root_topic_id not in ROOT_BY_ID:
+            continue
+        out.append(
+            {
+                "root_topic_id": root_topic_id,
+                "root_label_he": row.get("root_label_he") or root_label_for_id(root_topic_id),
+                "keywords": [str(value) for value in (row.get("keywords") or [])[:16] if str(value).strip()],
+            }
+        )
+    return out
 
 
 def _load_cached_assignment(*, checkpoint_dir: Path, item: dict[str, Any], model: str) -> dict[str, Any] | None:
@@ -397,7 +494,10 @@ def _assignment_checkpoint_path(*, checkpoint_dir: Path, item: dict[str, Any], m
         "structural_role": item.get("structural_role"),
         "row_type": item.get("row_type"),
         "skip_model_assignment": item.get("skip_model_assignment"),
+        "dicta_mode": item.get("dicta_mode"),
         "candidate_child_topics": item.get("candidate_child_topics") or [],
+        "root_topic_candidates": item.get("root_topic_candidates") or [],
+        "deterministic_topic_decision": item.get("deterministic_topic_decision") or {},
         "topic_policy_matches": item.get("topic_policy_matches") or [],
         "referenced_attachment_contexts": item.get("referenced_attachment_contexts") or [],
     }
@@ -483,11 +583,16 @@ def _assignment_from_parsed(*, item: dict[str, Any], parsed: dict[str, Any] | No
     parsed_subject = clean_protocol_subject_text(parsed.get("clean_subject_he") or parsed.get("topic_subject_he"))
     if _is_protocol_item(item) and parsed_subject:
         topic_text = parsed_subject
-    dicta_root_topic_id = str(parsed.get("root_topic_id") or "")
-    if dicta_root_topic_id not in ROOT_BY_ID:
-        dicta_root_topic_id = None
+    raw_dicta_root_topic_id = str(parsed.get("root_topic_id") or "").strip()
+    dicta_root_topic_id = raw_dicta_root_topic_id if raw_dicta_root_topic_id in ROOT_BY_ID else None
+    if raw_dicta_root_topic_id and dicta_root_topic_id is None:
+        dicta_root_topic_id = _align_unknown_dicta_root(item=item, parsed=parsed, subject=topic_text or text)
+        if dicta_root_topic_id is None:
+            return _unknown_root_candidate_assignment(item=item, parsed=parsed, raw_dicta_root_topic_id=raw_dicta_root_topic_id, subject=topic_text or text)
     fallback_root_topic_id = infer_root_topic_id(topic_text or text)
     root_adjudication = _adjudicate_assignment_root(item=item, parsed=parsed, subject=topic_text or text, dicta_root_topic_id=dicta_root_topic_id, fallback_root_topic_id=fallback_root_topic_id)
+    if raw_dicta_root_topic_id and raw_dicta_root_topic_id not in ROOT_BY_ID:
+        root_adjudication = {**root_adjudication, "unknown_dicta_root_topic_id": raw_dicta_root_topic_id, "decision": f"{root_adjudication.get('decision') or 'root_adjudicated'}:unknown_dicta_root_aligned" if dicta_root_topic_id else f"{root_adjudication.get('decision') or 'root_adjudicated'}:unknown_dicta_root_unresolved"}
     root_topic_id = str(root_adjudication.get("root_topic_id") or "")
     if root_topic_id not in ROOT_BY_ID:
         root_topic_id = fallback_root_topic_id if fallback_root_topic_id in ROOT_BY_ID else "root_agenda_queries"
@@ -575,6 +680,130 @@ def _adjudicate_assignment_root(*, item: dict[str, Any], parsed: dict[str, Any],
     }
 
 
+def _align_unknown_dicta_root(*, item: dict[str, Any], parsed: dict[str, Any], subject: str) -> str | None:
+    """Map an invented Dicta root to the closest allowed root using generic evidence.
+
+    This is not a hardcoded root-pair repair. It reuses the allowed root keyword
+    inference over Dicta's own rationale/quote plus bounded item context, and only
+    accepts a concrete allowed root. Procedural carrier roots are not accepted for
+    topic-bearing rows here because the caller already treats those as review cases.
+    """
+    alignment_text = _join_unique(
+        [
+            parsed.get("root_topic_id"),
+            parsed.get("selected_allowed_root_label_he"),
+            parsed.get("proposed_new_root_label_he"),
+            _positive_alignment_text(parsed.get("rationale_he")),
+            parsed.get("topic_supporting_quote_he"),
+            parsed.get("topic_subject_he"),
+            subject,
+            item.get("topic_headline_he"),
+        ]
+    )
+    if bool(parsed.get("needs_taxonomy_review")):
+        return None
+    scored = _allowed_root_alignment_scores(alignment_text)
+    if _is_protocol_item(item) and bool(item.get("is_topic_bearing")):
+        scored = [row for row in scored if str(row.get("root_topic_id") or "") not in {"root_agenda_queries", "root_order_proposals"}]
+    if not scored:
+        return None
+    best = scored[0]
+    second = scored[1] if len(scored) > 1 else {"score": 0.0}
+    best_root = str(best.get("root_topic_id") or "")
+    best_score = float(best.get("score") or 0.0)
+    margin = best_score - float(second.get("score") or 0.0)
+    # Only align invented roots when one allowed root is a clear semantic fit.
+    # Otherwise preserve the unknown root as a candidate taxonomy gap.
+    if best_score >= 0.82 and margin >= 0.14:
+        return best_root
+    return None
+
+
+def _positive_alignment_text(value: Any) -> str:
+    """Keep affirmative rationale sentences; negative comparisons can name false rival roots."""
+    text = _compact(value)
+    if not text:
+        return ""
+    negative_markers = ("אין ", "אינו", "אינה", "אינם", "לא ", "ללא ", "אחרים", "other", "not ", "without")
+    parts = re.split(r"(?<=[.!?])\s+|[\n;]+", text)
+    kept = [part for part in parts if part.strip() and not any(marker in part.casefold() for marker in negative_markers)]
+    return _compact(" ".join(kept))
+
+
+def _allowed_root_alignment_scores(text: str) -> list[dict[str, Any]]:
+    normalized = _norm(text)
+    if not normalized:
+        return []
+    out: list[dict[str, Any]] = []
+    for root in V4_ROOT_TOPICS:
+        root_topic_id = str(root.get("root_topic_id") or "")
+        if root_topic_id not in ROOT_BY_ID:
+            continue
+        label = str(root.get("root_label_he") or root_label_for_id(root_topic_id) or "")
+        scores = [_alignment_phrase_score(label, normalized) * 0.92]
+        hits: list[str] = []
+        for keyword in root.get("keywords") or []:
+            score = _alignment_phrase_score(str(keyword), normalized)
+            if score > 0.0:
+                scores.append(score)
+                hits.append(str(keyword))
+        best_score = max(scores or [0.0])
+        if best_score <= 0.0:
+            continue
+        out.append({"root_topic_id": root_topic_id, "root_label_he": label, "score": round(min(1.0, best_score), 4), "matched_terms": _dedupe_strings(hits)[:8]})
+    out.sort(key=lambda row: float(row.get("score") or 0.0), reverse=True)
+    return out
+
+
+def _alignment_phrase_score(phrase: str, normalized_text: str) -> float:
+    phrase_norm = _norm(phrase)
+    if not phrase_norm or not normalized_text:
+        return 0.0
+    if phrase_norm in normalized_text:
+        return 0.9 if len(_hebrew_tokens(phrase_norm)) <= 1 else 0.96
+    phrase_tokens = _hebrew_tokens(phrase_norm)
+    if not phrase_tokens:
+        return 0.0
+    text_tokens = set(_hebrew_tokens(normalized_text))
+    hits = [token for token in phrase_tokens if token in text_tokens]
+    if len(hits) >= min(len(phrase_tokens), max(2, len(phrase_tokens) - 1)):
+        return 0.72
+    return 0.0
+
+
+def _unknown_root_candidate_assignment(*, item: dict[str, Any], parsed: dict[str, Any], raw_dicta_root_topic_id: str, subject: str) -> dict[str, Any]:
+    alignment_text = _join_unique([subject, parsed.get("topic_subject_he"), parsed.get("topic_supporting_quote_he"), parsed.get("rationale_he")])
+    root_topic_id = infer_root_topic_id(alignment_text)
+    if root_topic_id not in ROOT_BY_ID:
+        root_topic_id = "root_agenda_queries"
+    root_label = root_label_for_id(root_topic_id) or root_label_for_id("root_agenda_queries") or ""
+    root_adjudication = {
+        "root_topic_id": root_topic_id,
+        "dicta_root_topic_id": None,
+        "fallback_root_topic_id": root_topic_id,
+        "fallback_root_label_he": root_label,
+        "unknown_dicta_root_topic_id": raw_dicta_root_topic_id,
+        "decision": "unknown_dicta_root_candidate_root",
+    }
+    proposed = _compact(parsed.get("proposed_new_root_label_he")) or _compact(parsed.get("root_topic_id"))
+    return _assignment_payload(
+        item=item,
+        root_topic_id=root_topic_id,
+        root_label=root_label,
+        child_label=None,
+        raw_child_label=None,
+        status="candidate",
+        reject_reason=f"candidate_root:unknown_dicta_root:{raw_dicta_root_topic_id}",
+        aliases=[proposed] if proposed else [],
+        confidence=min(0.6, _confidence(parsed.get("confidence"))),
+        quote=_grounded_quote(item=item, parsed_quote=_compact(parsed.get("topic_supporting_quote_he")), fallback_text=str(item.get("raw_text") or "")),
+        route="dictalm_v4_candidate_root:unknown_dicta_root",
+        rationale_he=_compact(parsed.get("rationale_he"))[:180] or "Dicta proposed a root outside the allowed tree; kept as taxonomy candidate.",
+        parsed_contract=_parsed_topic_contract(parsed),
+        root_adjudication=root_adjudication,
+    )
+
+
 def _parsed_subject_should_preserve_item_subject(*, parsed_contract: dict[str, Any], item: dict[str, Any], root_label: str) -> bool:
     if not _is_protocol_item(item) or not item.get("topic_subject_he"):
         return False
@@ -624,7 +853,7 @@ def _fallback_assignment(item: dict[str, Any], *, reason: str) -> dict[str, Any]
 
 
 def _review_assignment(*, item: dict[str, Any], root_topic_id: str, root_label: str, reason: str) -> dict[str, Any]:
-    return _assignment_payload(item=item, root_topic_id=root_topic_id, root_label=root_label, child_label=None, raw_child_label=None, status="needs_review", reject_reason=f"topic_bearing_fallback_requires_review:{reason}", aliases=[], confidence=0.0, quote=str(item.get("raw_text") or "")[:500], route=f"deterministic_v4_review:{reason}", rationale_he="model did not produce a usable assignment for a topic-bearing protocol row")
+    return _assignment_payload(item=item, root_topic_id=root_topic_id, root_label=root_label, child_label=None, raw_child_label=None, status="candidate", reject_reason=f"non_blocking_topic_review:{reason}", aliases=[], confidence=0.25, quote=str(item.get("raw_text") or "")[:500], route=f"deterministic_v4_candidate_review:{reason}", rationale_he="topic assignment is imported as a candidate instead of blocking the protocol")
 
 
 def _fallback_requires_review(*, item: dict[str, Any], root_topic_id: str, reason: str) -> bool:
@@ -639,6 +868,66 @@ def _fallback_requires_review(*, item: dict[str, Any], root_topic_id: str, reaso
 
 def _preassign_without_model(item: dict[str, Any]) -> bool:
     return _skip_model_for_row_type(row_type=str(item.get("row_type") or ""), packet_role=str((item.get("document_context") or {}).get("packet_role") or ""))
+
+
+def _preassign_with_candidate_finder(item: dict[str, Any]) -> bool:
+    decision = item.get("deterministic_topic_decision") if isinstance(item.get("deterministic_topic_decision"), dict) else {}
+    return (
+        str(decision.get("action") or "") == "choose_existing_topic"
+        and not bool(decision.get("needs_dicta"))
+        and str(decision.get("root_topic_id") or "") in ROOT_BY_ID
+    )
+
+
+def _assignment_from_candidate_finder(item: dict[str, Any]) -> dict[str, Any]:
+    decision = item.get("deterministic_topic_decision") if isinstance(item.get("deterministic_topic_decision"), dict) else {}
+    text = str(item.get("raw_text") or "")
+    topic_text = _topic_basis_text(item)
+    root_topic_id = str(decision.get("root_topic_id") or infer_root_topic_id(topic_text or text))
+    if root_topic_id not in ROOT_BY_ID:
+        root_topic_id = infer_root_topic_id(topic_text or text)
+    root_label = root_label_for_id(root_topic_id) or ""
+    candidate_by_id = {str(row.get("candidate_child_id") or ""): row for row in item.get("candidate_child_topics") or []}
+    selected_candidate = candidate_by_id.get(str(decision.get("child_choice_id") or ""))
+    raw_child = clean_topic_label((selected_candidate or {}).get("label_he") or decision.get("child_label_he"))
+    if selected_candidate is None and raw_child:
+        selected_candidate = _matching_candidate_by_label(item=item, root_topic_id=root_topic_id, label=raw_child)
+    if selected_candidate and str(selected_candidate.get("root_topic_id") or "") in ROOT_BY_ID:
+        root_topic_id = str(selected_candidate.get("root_topic_id"))
+        root_label = root_label_for_id(root_topic_id) or root_label
+    quote = _grounded_quote(item=item, parsed_quote=str((selected_candidate or {}).get("evidence_quote_he") or ""), fallback_text=text)
+    validation_evidence = _validation_evidence_text(item=item, quote=quote, selected_candidate=selected_candidate)
+    validation = validate_child_label(raw_label=raw_child, root_label_he=root_label, evidence_text=validation_evidence, selected_existing=bool(selected_candidate), structural_role=str(item.get("structural_role") or "")) if raw_child else None
+    resolved = resolve_child_topic_assignment(root_topic_id=root_topic_id, root_label_he=root_label, child_label_he=validation.cleaned_label if validation and validation.status == "active" else raw_child, evidence_text=validation_evidence, structural_role=str(item.get("structural_role") or ""))
+    root_topic_id = str(resolved["root_topic_id"])
+    root_label = str(resolved["root_label_he"])
+    child_label = resolved.get("child_label_he")
+    status = str(resolved.get("status") or "active")
+    reject_reason = resolved.get("reason") or (validation.reason if validation else None)
+    if child_label and selected_candidate and str(selected_candidate.get("evidence_source") or "") not in {"existing_tree", "referenced_attachment"}:
+        status = "candidate"
+        reject_reason = reject_reason or "new_child_candidate"
+    root_adjudication = _adjudicate_assignment_root(item=item, parsed={"policy_id": decision.get("policy_id")}, subject=topic_text or text, dicta_root_topic_id=None, fallback_root_topic_id=root_topic_id)
+    if root_topic_id != str(root_adjudication.get("root_topic_id") or ""):
+        root_adjudication = {**root_adjudication, "resolved_root_topic_id": root_topic_id, "resolved_root_label_he": root_label, "decision": f"{root_adjudication.get('decision') or 'root_adjudication'}:candidate_finder_resolved_root"}
+    route = f"deterministic_v4_candidate_finder:{decision.get('reason') or 'strong_match'}"
+    if selected_candidate and child_label:
+        route = f"{route}:{selected_candidate.get('evidence_source') or 'child_candidate'}"
+    if resolved.get("route_suffix"):
+        route = f"{route}:{resolved.get('route_suffix')}"
+    aliases = _dedupe_strings([*(resolved.get("aliases_he") or []), *(((selected_candidate or {}).get("aliases_he") or []) if selected_candidate else [])])
+    return _assignment_payload(item=item, root_topic_id=root_topic_id, root_label=root_label, child_label=child_label, raw_child_label=raw_child, status=status, reject_reason=reject_reason, aliases=aliases, confidence=_confidence(decision.get("confidence")), quote=quote, route=route, rationale_he="deterministic topic-tree candidate finder selected a high-confidence existing topic", root_adjudication=root_adjudication)
+
+
+def _candidate_review_assignment(*, item: dict[str, Any], reason: str) -> dict[str, Any]:
+    decision = item.get("deterministic_topic_decision") if isinstance(item.get("deterministic_topic_decision"), dict) else {}
+    text = str(item.get("raw_text") or "")
+    topic_text = _topic_basis_text(item)
+    root_topic_id = str(decision.get("root_topic_id") or infer_root_topic_id(topic_text or text))
+    if root_topic_id not in ROOT_BY_ID:
+        root_topic_id = infer_root_topic_id(topic_text or text)
+    root_label = root_label_for_id(root_topic_id) or ""
+    return _assignment_payload(item=item, root_topic_id=root_topic_id, root_label=root_label, child_label=None, raw_child_label=None, status="candidate", reject_reason=f"non_blocking_topic_review:{reason}:{decision.get('reason') or 'no_decision'}", aliases=[], confidence=min(0.71, max(0.25, _confidence(decision.get("confidence")))), quote=text[:500], route=f"deterministic_v4_candidate_review:{reason}:{decision.get('reason') or 'no_decision'}", rationale_he="ambiguous topic imported as candidate so protocol ingestion can continue", root_adjudication=_adjudicate_assignment_root(item=item, parsed={}, subject=topic_text or text, dicta_root_topic_id=None, fallback_root_topic_id=root_topic_id))
 
 
 def _skip_model_for_row_type(*, row_type: str, packet_role: str) -> bool:
@@ -721,6 +1010,11 @@ def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label:
         "topic_policy_matched_terms": root_adjudication.get("matched_terms") or [],
         "topic_policy_matches": item.get("topic_policy_matches") or root_adjudication.get("policy_matches") or [],
         "dicta_policy_id": root_adjudication.get("dicta_policy_id"),
+        "unknown_dicta_root_topic_id": root_adjudication.get("unknown_dicta_root_topic_id"),
+        "root_topic_candidates": item.get("root_topic_candidates") or [],
+        "deterministic_topic_decision": item.get("deterministic_topic_decision") or {},
+        "deterministic_classifier_method": item.get("deterministic_classifier_method"),
+        "topic_review_status": "needs_review" if status == "candidate" and reject_reason else None,
         "model_clean_subject_he": parsed_contract.get("clean_subject_he"),
         "model_primary_action_he": parsed_contract.get("primary_action_he"),
         "model_service_domain_he": parsed_contract.get("service_domain_he"),
@@ -843,22 +1137,70 @@ def _quote_supported_by_item(*, item: dict[str, Any], quote: str) -> bool:
     return len(hits) >= min(len(quote_tokens), max(3, int(len(quote_tokens) * 0.75)))
 
 
-def _validate(*, assignments: list[dict[str, Any]], item_count: int, model_errors: list[dict[str, Any]]) -> dict[str, Any]:
+def _validate(*, assignments: list[dict[str, Any]], items: list[dict[str, Any]], item_count: int, model_errors: list[dict[str, Any]], deterministic_count: int, low_confidence_candidate_count: int, dicta_mode: str) -> dict[str, Any]:
     status_counts = Counter(str(row.get("topic_node_status") or "") for row in assignments)
     row_type_counts = Counter(str(row.get("row_type") or "") for row in assignments)
+    route_counts = Counter(_route_bucket(str(row.get("topic_assignment_route") or "")) for row in assignments)
+    classifier_actions = Counter(str(((item.get("deterministic_topic_decision") or {}) if isinstance(item.get("deterministic_topic_decision"), dict) else {}).get("action") or "") for item in items)
+    classifier_needs_dicta = sum(1 for item in items if bool(((item.get("deterministic_topic_decision") or {}) if isinstance(item.get("deterministic_topic_decision"), dict) else {}).get("needs_dicta")))
     missing_roots = [row.get("structure_unit_id") for row in assignments if str(row.get("root_topic_id") or "") not in ROOT_BY_ID]
     needs_review = [row for row in assignments if str(row.get("topic_node_status") or "") == "needs_review"]
+    non_blocking_review = [row for row in assignments if str(row.get("topic_review_status") or "") == "needs_review" or str(row.get("topic_node_status") or "") == "candidate"]
     return {
         "unit_count": item_count,
         "assignment_count": len(assignments),
         "status_counts": dict(status_counts),
         "row_type_counts": dict(row_type_counts),
+        "route_counts": dict(route_counts),
+        "classifier_quality_report": {
+            "dicta_mode": dicta_mode,
+            "candidate_finder_action_counts": dict(classifier_actions),
+            "candidate_finder_needs_dicta_count": classifier_needs_dicta,
+            "deterministic_preassigned_count": deterministic_count,
+            "low_confidence_candidate_count": low_confidence_candidate_count,
+            "dicta_or_cached_assignment_count": int(route_counts.get("dicta", 0)),
+            "dicta_calls_avoided_estimate": deterministic_count,
+            "non_blocking_review_count": len(non_blocking_review),
+        },
         "missing_or_invalid_root_count": len(missing_roots),
         "needs_review_count": len(needs_review),
         "needs_review_units": [row.get("structure_unit_id") for row in needs_review[:50]],
+        "non_blocking_review_count": len(non_blocking_review),
+        "non_blocking_review_units": [row.get("structure_unit_id") for row in non_blocking_review[:50]],
         "model_error_count": len(model_errors),
-        "accept_for_next_step": item_count > 0 and len(assignments) == item_count and not missing_roots and not needs_review,
+        "accept_for_next_step": item_count > 0 and len(assignments) == item_count and not missing_roots,
     }
+
+
+def _route_bucket(route: str) -> str:
+    if route.startswith("deterministic_v4_candidate_finder"):
+        return "candidate_finder"
+    if route.startswith("deterministic_v4_candidate_review"):
+        return "non_blocking_review"
+    if route.startswith("dictalm_v4_global_tree"):
+        return "dicta"
+    if route.startswith("deterministic_v4_row_type"):
+        return "row_type"
+    if route.startswith("deterministic_v4_fallback"):
+        return "fallback"
+    return "other"
+
+
+def _classifier_quality_markdown(report: dict[str, Any]) -> str:
+    lines = ["# PDF-first v4 Topic Classifier Quality Report", ""]
+    lines.append(f"- Dicta mode: `{report.get('dicta_mode')}`")
+    lines.append(f"- Candidate finder needs Dicta: `{report.get('candidate_finder_needs_dicta_count')}`")
+    lines.append(f"- Deterministic preassigned: `{report.get('deterministic_preassigned_count')}`")
+    lines.append(f"- Low-confidence candidates: `{report.get('low_confidence_candidate_count')}`")
+    lines.append(f"- Dicta/cached assignments: `{report.get('dicta_or_cached_assignment_count')}`")
+    lines.append(f"- Estimated Dicta calls avoided: `{report.get('dicta_calls_avoided_estimate')}`")
+    lines.append(f"- Non-blocking review rows: `{report.get('non_blocking_review_count')}`")
+    lines.append("")
+    lines.append("## Candidate Finder Actions")
+    for key, value in sorted((report.get("candidate_finder_action_counts") or {}).items()):
+        lines.append(f"- `{key or '<none>'}`: `{value}`")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _adaptive_batches(items: list[dict[str, Any]], default_size: int) -> list[list[dict[str, Any]]]:

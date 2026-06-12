@@ -41,6 +41,7 @@ def main() -> int:
     rows = [dict(row) for row in payload.get("topic_assignments") or [] if isinstance(row, dict)]
     invalid = []
     demoted_children = []
+    non_blocking_reviews = []
     for row in rows:
         row["topic_tree_version"] = TOPIC_TREE_VERSION
         row["topic_assignment_backend"] = TOPIC_ASSIGNMENT_BACKEND
@@ -48,8 +49,10 @@ def main() -> int:
             invalid.append({"structure_unit_id": row.get("structure_unit_id"), "reason": "invalid_root_topic_id"})
             continue
         if str(row.get("topic_node_status") or "") == "needs_review":
-            invalid.append({"structure_unit_id": row.get("structure_unit_id"), "reason": row.get("topic_reject_reason") or "needs_review"})
-            continue
+            row["topic_node_status"] = "candidate"
+            row["topic_review_status"] = "needs_review"
+            row["topic_reject_reason"] = row.get("topic_reject_reason") or "non_blocking_topic_review"
+            non_blocking_reviews.append({"structure_unit_id": row.get("structure_unit_id"), "reason": row.get("topic_reject_reason")})
         root_label = str(row.get("root_label_he") or root_label_for_id(str(row.get("root_topic_id") or "")) or "")
         child_label = str(row.get("child_label_he") or "").strip()
         if child_label:
@@ -79,6 +82,11 @@ def main() -> int:
     audit_warnings = _audit_tree_assignments(rows)
     critical_audit_warnings = [row for row in audit_warnings if row.get("severity") == "critical"]
     status_counts = Counter(str(row.get("topic_node_status") or "") for row in rows)
+    non_blocking_reviews.extend(
+        {"structure_unit_id": row.get("structure_unit_id"), "reason": row.get("topic_reject_reason") or "candidate_topic"}
+        for row in rows
+        if str(row.get("topic_node_status") or "") == "candidate" and row.get("structure_unit_id") not in {item.get("structure_unit_id") for item in non_blocking_reviews}
+    )
     output = {
         "step": "step4_5_v4_validate_topics",
         "topic_tree_version": TOPIC_TREE_VERSION,
@@ -89,6 +97,8 @@ def main() -> int:
     validation = {
         "assignment_count": len(rows),
         "status_counts": dict(status_counts),
+        "non_blocking_review_count": len(non_blocking_reviews),
+        "non_blocking_reviews": non_blocking_reviews[:50],
         "demoted_child_topic_count": len(demoted_children),
         "demoted_child_topics": demoted_children[:50],
         "tree_audit_warning_count": len(audit_warnings),

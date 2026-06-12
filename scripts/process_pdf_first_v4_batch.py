@@ -62,6 +62,7 @@ def main() -> int:
     parser.add_argument("--pages", help="Optional page list/ranges passed to model-heavy steps")
     parser.add_argument("--vision-model", default="mistral-small3.1:latest")
     parser.add_argument("--dictalm-model", default="dicta-il/DictaLM-3.0-24B-Thinking:bf16")
+    parser.add_argument("--dicta-mode", choices=["auto", "disabled", "required"], default="auto", help="auto uses Dicta only for ambiguous topic items; disabled imports ambiguous topics as candidates")
     parser.add_argument("--ollama-base-url", default="http://localhost:11434")
     parser.add_argument("--timeout-seconds", type=float, default=180.0)
     parser.add_argument("--api-base-url", help="Optional running API base URL for /semantic/tree and /ask checks")
@@ -119,7 +120,7 @@ def main() -> int:
                         source_site_id = _source_site_id_for_docver(session=session, docver_id=docver_id)
                         existing_tree_json = _write_existing_tree_snapshot(session=session, run_dir=run_dir, source_site_id=source_site_id)
                         session.commit()
-                    paths = _run_v4_pipeline(scripts_dir=scripts_dir, pdf_path=pdf_path, run_dir=run_dir, docver_id=docver_id, packet_role=packet_role, pages=args.pages, vision_model=args.vision_model, dictalm_model=args.dictalm_model, ollama_base_url=args.ollama_base_url, timeout_seconds=args.timeout_seconds, attachment_context_paths=attachment_context_paths if packet_role == "protocol" else [], existing_tree_json=existing_tree_json)
+                    paths = _run_v4_pipeline(scripts_dir=scripts_dir, pdf_path=pdf_path, run_dir=run_dir, docver_id=docver_id, packet_role=packet_role, pages=args.pages, vision_model=args.vision_model, dictalm_model=args.dictalm_model, dicta_mode=str(args.dicta_mode), ollama_base_url=args.ollama_base_url, timeout_seconds=args.timeout_seconds, attachment_context_paths=attachment_context_paths if packet_role == "protocol" else [], existing_tree_json=existing_tree_json)
                     with Session(engine) as session:
                         extracted_id = _upsert_extracted_document(session=session, docver_id=docver_id, pages_json=paths["pages_json"])
                         session.commit()
@@ -160,7 +161,7 @@ def main() -> int:
     return 0
 
 
-def _run_v4_pipeline(*, scripts_dir: Path, pdf_path: Path, run_dir: Path, docver_id: int, packet_role: str, pages: str | None, vision_model: str, dictalm_model: str, ollama_base_url: str, timeout_seconds: float, attachment_context_paths: list[Path], existing_tree_json: Path | None) -> dict[str, Path]:
+def _run_v4_pipeline(*, scripts_dir: Path, pdf_path: Path, run_dir: Path, docver_id: int, packet_role: str, pages: str | None, vision_model: str, dictalm_model: str, dicta_mode: str, ollama_base_url: str, timeout_seconds: float, attachment_context_paths: list[Path], existing_tree_json: Path | None) -> dict[str, Path]:
     outputs = run_dir / "pdf_first_pipeline" / "outputs"
     step1 = outputs / "step1_page_dissect"
     overlays = outputs / "step1_bbox_overlays"
@@ -197,7 +198,7 @@ def _run_v4_pipeline(*, scripts_dir: Path, pdf_path: Path, run_dir: Path, docver
         attachment_args.extend(["--attachment-context-json", str(context_path)])
     existing_tree_args = ["--existing-tree-json", str(existing_tree_json)] if existing_tree_json else []
     topic_assignments = step4 / "topic_assignments.json"
-    _run_or_skip([sys.executable, str(scripts_dir / "step4_v4_global_topic_assign.py"), "--structure-units-json", str(structure_units), "--entity-facts-json", str(entity_facts), "--output-dir", str(step4), "--input-pdf", str(pdf_path), "--packet-role", packet_role, "--model", dictalm_model, "--ollama-base-url", ollama_base_url, "--timeout-seconds", str(timeout_seconds), *existing_tree_args, *attachment_args], outputs=[topic_assignments])
+    _run_or_skip([sys.executable, str(scripts_dir / "step4_v4_global_topic_assign.py"), "--structure-units-json", str(structure_units), "--entity-facts-json", str(entity_facts), "--output-dir", str(step4), "--input-pdf", str(pdf_path), "--packet-role", packet_role, "--model", dictalm_model, "--dicta-mode", dicta_mode, "--ollama-base-url", ollama_base_url, "--timeout-seconds", str(timeout_seconds), *existing_tree_args, *attachment_args], outputs=[topic_assignments])
     canonical_topics = step45 / "canonical_topics.json"
     _run_or_skip([sys.executable, str(scripts_dir / "step4_5_v4_validate_topics.py"), "--topic-assignments-json", str(topic_assignments), "--output-dir", str(step45)], outputs=[canonical_topics])
     _run_or_skip([sys.executable, str(scripts_dir / "step5_v4_build_retrieval_chunks.py"), "--structure-units-json", str(structure_units), "--canonical-topics-json", str(canonical_topics), "--entity-facts-json", str(entity_facts), "--output-dir", str(step5), "--input-pdf", str(pdf_path), "--document-version-id", str(docver_id)], outputs=[step5 / "retrieval_chunks.json", step5 / "validation_report.json"], allowed_returncodes={0, 2})
