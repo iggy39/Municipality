@@ -27,7 +27,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
 
 from municipality.db import build_engine  # noqa: E402
 from municipality.migrations import apply_all  # noqa: E402
-from municipality.models import ArtifactSemanticLink, RetrievalArtifact, SemanticAlias, SemanticNode  # noqa: E402
+from municipality.models import ArtifactSemanticLink, Document, DocumentVersion, RetrievalArtifact, SemanticAlias, SemanticNode  # noqa: E402
 from municipality.pdf_first_v4_topic_tree import alias_lines, current_tree_from_db, tree_lines  # noqa: E402
 from municipality.storage import RawStorage  # noqa: E402
 from process_pdf_first_batch import _register_pdf, _step1_quality, _text_from_pages, _upsert_extracted_document  # noqa: E402
@@ -58,7 +58,7 @@ def main() -> int:
     parser.add_argument("--packet", type=Path, help="Specific meeting packet folder to process")
     parser.add_argument("--limit-packets", type=int)
     parser.add_argument("--limit-pdfs", type=int, help="Stop after this many PDFs across selected packets")
-    parser.add_argument("--protocol-mode", choices=["all", "full-only", "short-only"], default="all")
+    parser.add_argument("--protocol-mode", choices=["preferred", "all", "full-only", "short-only"], default="preferred", help="preferred selects one protocol per packet, using a short protocol when available")
     parser.add_argument("--pages", help="Optional page list/ranges passed to model-heavy steps")
     parser.add_argument("--vision-model", default="mistral-small3.1:latest")
     parser.add_argument("--dictalm-model", default="dicta-il/DictaLM-3.0-24B-Thinking:bf16")
@@ -77,11 +77,12 @@ def main() -> int:
     packets = _select_packets(input_root=input_root, years=_parse_years(str(args.years)), packet=args.packet, limit=args.limit_packets)
     if not packets:
         raise SystemExit(f"no meeting packets found under {input_root}")
-    selected_pdf_count = sum(len(packet.attachments) + len(packet.protocols) for packet in packets)
+    selected_pdf_count = sum(len(packet.attachments) + len(_filter_protocols(packet.protocols, mode=str(args.protocol_mode))) for packet in packets)
     print(json.dumps({"selected_packet_count": len(packets), "selected_pdf_count": selected_pdf_count, "dry_run": bool(args.dry_run)}, ensure_ascii=False), flush=True)
     if args.dry_run:
         for packet in packets:
-            print(json.dumps({"packet": str(packet.path), "attachments": [str(path) for path in packet.attachments], "protocols": [str(path) for path in packet.protocols]}, ensure_ascii=False), flush=True)
+            protocols = _filter_protocols(packet.protocols, mode=str(args.protocol_mode))
+            print(json.dumps({"packet": str(packet.path), "attachments": [str(path) for path in packet.attachments], "protocols": [str(path) for path in protocols]}, ensure_ascii=False), flush=True)
         return 0
 
     output_root.mkdir(parents=True, exist_ok=True)
@@ -101,18 +102,24 @@ def main() -> int:
                     print(json.dumps({"status": "stopped_limit_pdfs", "processed_pdf_count": processed}, ensure_ascii=False), flush=True)
                     return 0
                 key = _item_key(pdf_path)
+                run_dir = output_root / _packet_run_name(packet.path, input_root=input_root) / _pdf_run_name(pdf_path)
                 if key in completed:
+                    if packet_role == "attachment":
+                        retrieval_chunks_json = _retrieval_chunks_path(run_dir)
+                        if retrieval_chunks_json.exists() and retrieval_chunks_json.stat().st_size > 0:
+                            attachment_context_paths.append(retrieval_chunks_json)
                     print(json.dumps({"packet_index": packet_index, "pdf_index": pdf_index, "pdf": str(pdf_path), "status": "skipped_completed"}, ensure_ascii=False), flush=True)
                     continue
                 processed += 1
                 item_started = time.perf_counter()
                 source_kind = f"pdf_first_v4_{packet_role}"
-                run_dir = output_root / _packet_run_name(packet.path, input_root=input_root) / _pdf_run_name(pdf_path)
                 try:
                     with Session(engine) as session:
                         docver_id = _register_pdf(session=session, storage=storage, city=str(args.city), input_root=input_root, pdf_path=pdf_path, source_kind=source_kind)
+                        source_site_id = _source_site_id_for_docver(session=session, docver_id=docver_id)
+                        existing_tree_json = _write_existing_tree_snapshot(session=session, run_dir=run_dir, source_site_id=source_site_id)
                         session.commit()
-                    paths = _run_v4_pipeline(scripts_dir=scripts_dir, pdf_path=pdf_path, run_dir=run_dir, docver_id=docver_id, packet_role=packet_role, pages=args.pages, vision_model=args.vision_model, dictalm_model=args.dictalm_model, ollama_base_url=args.ollama_base_url, timeout_seconds=args.timeout_seconds, attachment_context_paths=attachment_context_paths if packet_role == "protocol" else [])
+                    paths = _run_v4_pipeline(scripts_dir=scripts_dir, pdf_path=pdf_path, run_dir=run_dir, docver_id=docver_id, packet_role=packet_role, pages=args.pages, vision_model=args.vision_model, dictalm_model=args.dictalm_model, ollama_base_url=args.ollama_base_url, timeout_seconds=args.timeout_seconds, attachment_context_paths=attachment_context_paths if packet_role == "protocol" else [], existing_tree_json=existing_tree_json)
                     with Session(engine) as session:
                         extracted_id = _upsert_extracted_document(session=session, docver_id=docver_id, pages_json=paths["pages_json"])
                         session.commit()
@@ -153,7 +160,7 @@ def main() -> int:
     return 0
 
 
-def _run_v4_pipeline(*, scripts_dir: Path, pdf_path: Path, run_dir: Path, docver_id: int, packet_role: str, pages: str | None, vision_model: str, dictalm_model: str, ollama_base_url: str, timeout_seconds: float, attachment_context_paths: list[Path]) -> dict[str, Path]:
+def _run_v4_pipeline(*, scripts_dir: Path, pdf_path: Path, run_dir: Path, docver_id: int, packet_role: str, pages: str | None, vision_model: str, dictalm_model: str, ollama_base_url: str, timeout_seconds: float, attachment_context_paths: list[Path], existing_tree_json: Path | None) -> dict[str, Path]:
     outputs = run_dir / "pdf_first_pipeline" / "outputs"
     step1 = outputs / "step1_page_dissect"
     overlays = outputs / "step1_bbox_overlays"
@@ -188,8 +195,9 @@ def _run_v4_pipeline(*, scripts_dir: Path, pdf_path: Path, run_dir: Path, docver
     attachment_args = []
     for context_path in attachment_context_paths:
         attachment_args.extend(["--attachment-context-json", str(context_path)])
+    existing_tree_args = ["--existing-tree-json", str(existing_tree_json)] if existing_tree_json else []
     topic_assignments = step4 / "topic_assignments.json"
-    _run_or_skip([sys.executable, str(scripts_dir / "step4_v4_global_topic_assign.py"), "--structure-units-json", str(structure_units), "--entity-facts-json", str(entity_facts), "--output-dir", str(step4), "--input-pdf", str(pdf_path), "--packet-role", packet_role, "--model", dictalm_model, "--ollama-base-url", ollama_base_url, "--timeout-seconds", str(timeout_seconds), *attachment_args], outputs=[topic_assignments])
+    _run_or_skip([sys.executable, str(scripts_dir / "step4_v4_global_topic_assign.py"), "--structure-units-json", str(structure_units), "--entity-facts-json", str(entity_facts), "--output-dir", str(step4), "--input-pdf", str(pdf_path), "--packet-role", packet_role, "--model", dictalm_model, "--ollama-base-url", ollama_base_url, "--timeout-seconds", str(timeout_seconds), *existing_tree_args, *attachment_args], outputs=[topic_assignments])
     canonical_topics = step45 / "canonical_topics.json"
     _run_or_skip([sys.executable, str(scripts_dir / "step4_5_v4_validate_topics.py"), "--topic-assignments-json", str(topic_assignments), "--output-dir", str(step45)], outputs=[canonical_topics])
     _run_or_skip([sys.executable, str(scripts_dir / "step5_v4_build_retrieval_chunks.py"), "--structure-units-json", str(structure_units), "--canonical-topics-json", str(canonical_topics), "--entity-facts-json", str(entity_facts), "--output-dir", str(step5), "--input-pdf", str(pdf_path), "--document-version-id", str(docver_id)], outputs=[step5 / "retrieval_chunks.json", step5 / "validation_report.json"], allowed_returncodes={0, 2})
@@ -200,6 +208,23 @@ def _run_v4_import(*, docver_id: int, source_kind: str, retrieval_chunks_json: P
     result = _run_cmd([sys.executable, str(PROJECT_ROOT / "scripts" / "import_pdf_first_v4_retrieval_chunks.py"), "--retrieval-chunks-json", str(retrieval_chunks_json), "--docver-id", str(docver_id), "--source-kind", source_kind, "--model-name", model_name, "--replace-existing", "--write"], capture=True)
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     return json.loads(lines[-1]) if lines else {}
+
+
+def _source_site_id_for_docver(*, session: Session, docver_id: int) -> int:
+    row = session.execute(select(Document.source_site_id).join(DocumentVersion, DocumentVersion.document_id == Document.id).where(DocumentVersion.id == docver_id)).scalar_one()
+    return int(row)
+
+
+def _write_existing_tree_snapshot(*, session: Session, run_dir: Path, source_site_id: int) -> Path:
+    path = run_dir / "pdf_first_pipeline" / "outputs" / "step4_v4_global_topic_assignment" / "existing_tree_before_step4.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tree = current_tree_from_db(session, source_site_id=source_site_id, include_candidates=True, include_profiles=True)
+    path.write_text(json.dumps(tree, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _retrieval_chunks_path(run_dir: Path) -> Path:
+    return run_dir / "pdf_first_pipeline" / "outputs" / "step5_v4_retrieval_chunks" / "retrieval_chunks.json"
 
 
 def _acceptable_step31_validation(path: Path) -> bool:
@@ -308,10 +333,14 @@ def _is_attachment(path: Path) -> bool:
 
 
 def _filter_protocols(protocols: list[Path], *, mode: str) -> list[Path]:
-    if mode == "all":
-        return list(protocols)
     full = [path for path in protocols if "מלא" in path.name.casefold() or "full" in path.name.casefold()]
     short = [path for path in protocols if "מקוצר" in path.name.casefold() or "קצר" in path.name.casefold() or "short" in path.name.casefold()]
+    if mode == "preferred":
+        # Protocol packets can contain both transcript/full and concise versions; topic work should use the concise protocol when it exists.
+        non_full = [path for path in protocols if path not in set(full)]
+        return short[:1] or non_full[:1] or full[:1] or list(protocols[:1])
+    if mode == "all":
+        return list(protocols)
     if mode == "full-only":
         return full or [path for path in protocols if path not in set(short)] or list(protocols[:1])
     if mode == "short-only":
@@ -321,9 +350,11 @@ def _filter_protocols(protocols: list[Path], *, mode: str) -> list[Path]:
 
 def _pdf_sort_key(path: Path) -> tuple[int, str]:
     folded = path.name.casefold()
-    full_priority = 0 if "מלא" in folded or "full" in folded else 1
-    short_priority = 2 if "קצר" in folded or "short" in folded else full_priority
-    return (short_priority, folded)
+    if "מקוצר" in folded or "קצר" in folded or "short" in folded:
+        return (0, folded)
+    if "מלא" in folded or "full" in folded:
+        return (2, folded)
+    return (1, folded)
 
 
 def _parse_years(value: str) -> list[int]:

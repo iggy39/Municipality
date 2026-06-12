@@ -28,6 +28,7 @@ from municipality.models import (  # noqa: E402
     RetrievalArtifact,
     RetrievalArtifactEmbedding,
     SemanticDocumentRun,
+    SemanticNode,
 )
 from municipality.pdf_first_v4_topic_tree import (  # noqa: E402
     BACKEND_VERSION,
@@ -152,6 +153,7 @@ def main() -> int:
                 semantic_linked += 1
             written += 1
 
+        _refresh_semantic_support_counts(session=session, source_site_id=int(document.source_site_id))
         semantic_run.finished_at = datetime.utcnow()
         semantic_run.status = "succeeded"
         semantic_run.api_call_count = int(payload.get("api_call_count") or 0)
@@ -187,6 +189,45 @@ def _delete_artifacts(*, session: Session, artifact_ids: list[str]) -> None:
     session.query(RetrievalArtifact).filter(RetrievalArtifact.artifact_id.in_(artifact_ids)).delete(synchronize_session=False)
     session.execute(text("DELETE FROM artifact_fts WHERE artifact_id = :artifact_id"), [{"artifact_id": artifact_id} for artifact_id in artifact_ids])
     session.execute(text("DELETE FROM retrieval_artifact_trigram WHERE artifact_id = :artifact_id"), [{"artifact_id": artifact_id} for artifact_id in artifact_ids])
+
+
+def _refresh_semantic_support_counts(*, session: Session, source_site_id: int) -> None:
+    nodes = session.execute(select(SemanticNode).where(SemanticNode.source_site_id == source_site_id, SemanticNode.node_kind == "topic")).scalars().all()
+    nodes_by_id = {int(node.id): node for node in nodes}
+    root_counts: dict[str, int] = {}
+    child_counts: dict[int, int] = {}
+    links = session.execute(select(ArtifactSemanticLink).where(ArtifactSemanticLink.semantic_node_id.in_(nodes_by_id))).scalars().all()
+    for link in links:
+        node = nodes_by_id.get(int(link.semantic_node_id))
+        if node is None:
+            continue
+        metadata = _loads_dict(link.metadata_json)
+        root_topic_id = str(metadata.get("root_topic_id") or _loads_dict(node.metadata_json).get("root_topic_id") or "")
+        if root_topic_id:
+            root_counts[root_topic_id] = root_counts.get(root_topic_id, 0) + 1
+        if node.parent_node_id is not None:
+            child_counts[int(node.id)] = child_counts.get(int(node.id), 0) + 1
+    for node in nodes:
+        metadata = _loads_dict(node.metadata_json)
+        root_topic_id = str(metadata.get("root_topic_id") or "")
+        if node.parent_node_id is None:
+            node.support_count = int(root_counts.get(root_topic_id, 0))
+            node.status = "active"
+        else:
+            support_count = int(child_counts.get(int(node.id), 0))
+            node.support_count = support_count
+            if support_count <= 0:
+                node.status = "rejected"
+
+
+def _loads_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    try:
+        loaded = json.loads(value or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _upsert_semantic_run(*, session: Session, document_version_id: int, chunks_path: Path, model_name: str, payload: dict[str, Any]) -> SemanticDocumentRun:

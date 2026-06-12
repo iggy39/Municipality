@@ -20,6 +20,7 @@ from municipality.models import (
     SemanticDocumentRun,
     SemanticNode,
 )
+from municipality.pdf_first_v4_topic_policy import best_topic_policy_match
 from municipality.topic_label_quality import is_low_quality_topic_label
 
 
@@ -51,20 +52,21 @@ V4_ROOT_TOPICS: tuple[dict[str, Any], ...] = (
     {"root_topic_id": "root_planning_building", "root_label_he": "תכנון ובנייה", "keywords": ["תכנון", "בנייה", "בניה", "תוכנית", "תכנית", "היתר", "הסכם הגג", "טופס"]},
     {"root_topic_id": "root_transport_safety", "root_label_he": "תחבורה ובטיחות", "keywords": ["תחבורה", "בטיחות", "תמרור", "חניה", "כביש", "אוטובוס", "תאונות"]},
     {"root_topic_id": "root_education", "root_label_he": "חינוך", "keywords": ["חינוך", "בית ספר", "בתי ספר", "גן", "גנים", "תלמידים", "צהרון", "מעונות"]},
-    {"root_topic_id": "root_welfare_social", "root_label_he": "רווחה ושירותים חברתיים", "keywords": ["רווחה", "שירותים חברתיים", "נזקקים", "קשישים", "הגיל השלישי"]},
-    {"root_topic_id": "root_culture_sport", "root_label_he": "תרבות וספורט", "keywords": ["תרבות", "ספורט", "איצטדיון", "אצטדיון", "כדורסל", "משכן"]},
+    {"root_topic_id": "root_welfare_social", "root_label_he": "רווחה ושירותים חברתיים", "keywords": ["רווחה", "שירותים חברתיים", "נזקקים", "קשישים", "הגיל השלישי", "עריריים", "אלמנים", "אלמנות", "היפוטרמיה"]},
+    {"root_topic_id": "root_culture_sport", "root_label_he": "תרבות וספורט", "keywords": ["תרבות", "ספורט", "איצטדיון", "אצטדיון", "כדורסל", "משכן", "אומנויות הבמה", "אמנויות הבמה"]},
     {"root_topic_id": "root_infrastructure_environment", "root_label_he": "תשתיות וסביבה", "keywords": ["תשתיות", "סביבה", "הצפות", "ניקיון", "ביוב", "מים", "פארק", "זיהום"]},
-    {"root_topic_id": "root_religious_services", "root_label_he": "דת ושירותי דת", "keywords": ["דת", "דתית", "מועצה דתית", "בית כנסת", "רב", "הרבצת תורה"]},
-    {"root_topic_id": "root_administration", "root_label_he": "מנהל עירוני ומינויים", "keywords": ["מינוי", "מינויים", "מורשי חתימה", "האצלת סמכויות", "ועדה", "דירקטוריון", "תאגידים"]},
-    {"root_topic_id": "root_security_enforcement", "root_label_he": "ביטחון ואכיפה", "keywords": ["ביטחון", "בטחון", "אכיפה", "אלימות", "משטרה", "מיגון", "מקלט"]},
+    {"root_topic_id": "root_religious_services", "root_label_he": "דת ושירותי דת", "keywords": ["דת", "דתית", "שירותי דת", "מועצה דתית", "בית כנסת", "מקווה", "מקווה טהרה", "רב", "הרבצת תורה"]},
+    {"root_topic_id": "root_administration", "root_label_he": "מנהל עירוני ומינויים", "keywords": ["מינוי", "מינויים", "מורשי חתימה", "האצלת סמכויות", "ועדה", "דירקטוריון", "דירקטוריונים", "תאגידים", "ביקורת", "דוח ביקורת", "דו\"ח ביקורת", "החלטות מועצה", "חילופי גברי", "קריאת רחוב", "שם רחוב", "שמות רחובות"]},
+    {"root_topic_id": "root_security_enforcement", "root_label_he": "ביטחון ואכיפה", "keywords": ["ביטחון", "בטחון", "אכיפה", "אלימות", "אלימות במשפחה", "משטרה", "מיגון", "מקלט"]},
     {"root_topic_id": "root_travel_approvals", "root_label_he": "אישורי נסיעות", "keywords": ["אישור נסיעה", "נסיעה", "משלחת", "דוח נסיעה"]},
     {"root_topic_id": "root_guard_services", "root_label_he": "שמירה והיטלים", "keywords": ["שמירה", "היטל שמירה", "שירותי שמירה"]},
     {"root_topic_id": "root_commerce_assets", "root_label_he": "נכסים ומרכזים מסחריים", "keywords": ["נכס", "נכסים", "מרכז מסחרי", "מרכזים מסחריים", "קניון", "מבנה"]},
-    {"root_topic_id": "root_hr_labor", "root_label_he": "כוח אדם ועובדים", "keywords": ["כוח אדם", "כח אדם", "עובדים", "עובדי עירייה", "עבודה נוספת", "שכר", "תקן"]},
+    {"root_topic_id": "root_hr_labor", "root_label_he": "כוח אדם ועובדים", "keywords": ["כוח אדם", "כח אדם", "עובדים", "עובדי עירייה", "עבודה נוספת", "תחילת עבודה", "תחילת עבודתו", "שכר", "שכרו", "תקן", "מנהל אגף"]},
 )
 
 ROOT_BY_ID = {row["root_topic_id"]: row for row in V4_ROOT_TOPICS}
 ROOT_BY_NORM = {normalize_for_search(row["root_label_he"]): row for row in V4_ROOT_TOPICS}
+PROCEDURAL_ROOT_ONLY_IDS = {"root_agenda_queries"}
 
 
 @dataclass(slots=True)
@@ -87,6 +89,7 @@ class V4NodeWriteResult:
 
 def global_topic_tree_payload(*, existing_tree: dict[str, Any] | None = None, attachment_contexts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     children_by_root = _children_by_root_from_tree(existing_tree or {})
+    roots_by_id = _roots_by_id_from_tree(existing_tree or {})
     return {
         "topic_tree_version": TOPIC_TREE_VERSION,
         "backend_version": BACKEND_VERSION,
@@ -95,6 +98,7 @@ def global_topic_tree_payload(*, existing_tree: dict[str, Any] | None = None, at
                 "root_topic_id": root["root_topic_id"],
                 "root_label_he": root["root_label_he"],
                 "keywords": list(root.get("keywords") or []),
+                "profile": roots_by_id.get(root["root_topic_id"], {}).get("profile"),
                 "children": children_by_root.get(root["root_topic_id"], []),
             }
             for root in V4_ROOT_TOPICS
@@ -126,7 +130,7 @@ def seed_root_nodes(session: Session, *, source_site_id: int, document_version_i
     return out
 
 
-def current_tree_from_db(session: Session, *, source_site_id: int | None = None, include_candidates: bool = True) -> dict[str, Any]:
+def current_tree_from_db(session: Session, *, source_site_id: int | None = None, include_candidates: bool = True, include_profiles: bool = False, example_limit: int = 3) -> dict[str, Any]:
     stmt = select(SemanticNode).where(SemanticNode.node_kind == "topic")
     if source_site_id is not None:
         stmt = stmt.where(SemanticNode.source_site_id == int(source_site_id))
@@ -138,28 +142,34 @@ def current_tree_from_db(session: Session, *, source_site_id: int | None = None,
     for node in nodes:
         if node.parent_node_id is not None:
             children_by_parent.setdefault(int(node.parent_node_id), []).append(node)
+    profiles_by_node_id = _topic_profiles_by_node_id(session=session, nodes=nodes, example_limit=example_limit) if include_profiles else {}
     roots = []
     for root in roots_by_id.values():
         root_topic_id = semantic_node_root_id(root) or root_id_for_label(root.pref_label_he)
-        roots.append(
-            {
-                "root_topic_id": root_topic_id,
-                "root_label_he": root.pref_label_he,
-                "semantic_node_id": int(root.id),
-                "support_count": int(root.support_count or 0),
-                "status": root.status,
-                "children": [
-                    {
-                        "child_topic_id": semantic_node_child_id(child) or child_topic_id(root_topic_id or "root", child.pref_label_he),
-                        "child_label_he": child.pref_label_he,
-                        "semantic_node_id": int(child.id),
-                        "support_count": int(child.support_count or 0),
-                        "status": child.status,
-                    }
-                    for child in children_by_parent.get(int(root.id), [])
-                ],
+        root_payload = {
+            "root_topic_id": root_topic_id,
+            "root_label_he": root.pref_label_he,
+            "semantic_node_id": int(root.id),
+            "support_count": int(root.support_count or 0),
+            "status": root.status,
+            "children": [],
+        }
+        if include_profiles:
+            root_payload["profile"] = profiles_by_node_id.get(int(root.id), _generic_topic_profile(label=root.pref_label_he, aliases=[], examples=[]))
+        children = []
+        for child in children_by_parent.get(int(root.id), []):
+            child_payload = {
+                "child_topic_id": semantic_node_child_id(child) or child_topic_id(root_topic_id or "root", child.pref_label_he),
+                "child_label_he": child.pref_label_he,
+                "semantic_node_id": int(child.id),
+                "support_count": int(child.support_count or 0),
+                "status": child.status,
             }
-        )
+            if include_profiles:
+                child_payload["profile"] = profiles_by_node_id.get(int(child.id), _generic_topic_profile(label=child.pref_label_he, aliases=[], examples=[]))
+            children.append(child_payload)
+        root_payload["children"] = children
+        roots.append(root_payload)
     return {"topic_tree_version": TOPIC_TREE_VERSION, "roots": roots}
 
 
@@ -188,6 +198,69 @@ def alias_lines(session: Session, *, source_site_id: int | None = None) -> list[
     return [f"{alias.alias_label_he} -> {node.pref_label_he}" for alias, node in rows]
 
 
+def _topic_profiles_by_node_id(*, session: Session, nodes: list[SemanticNode], example_limit: int) -> dict[int, dict[str, Any]]:
+    node_ids = [int(node.id) for node in nodes]
+    if not node_ids:
+        return {}
+    aliases_by_node: dict[int, list[str]] = {int(node.id): [] for node in nodes}
+    examples_by_node: dict[int, list[dict[str, Any]]] = {int(node.id): [] for node in nodes}
+    for alias in session.execute(select(SemanticAlias).where(SemanticAlias.semantic_node_id.in_(node_ids)).order_by(SemanticAlias.alias_label_norm.asc())).scalars().all():
+        aliases_by_node.setdefault(int(alias.semantic_node_id), []).append(alias.alias_label_he)
+    rows = session.execute(
+        select(ArtifactSemanticLink, RetrievalArtifact)
+        .join(RetrievalArtifact, RetrievalArtifact.artifact_id == ArtifactSemanticLink.artifact_id)
+        .where(ArtifactSemanticLink.semantic_node_id.in_(node_ids))
+        .order_by(ArtifactSemanticLink.semantic_node_id.asc(), RetrievalArtifact.document_version_id.asc(), RetrievalArtifact.ordinal.asc())
+    ).all()
+    for link, artifact in rows:
+        node_id = int(link.semantic_node_id)
+        examples = examples_by_node.setdefault(node_id, [])
+        if len(examples) >= max(0, int(example_limit)):
+            continue
+        example = _topic_profile_example(link=link, artifact=artifact)
+        if example:
+            examples.append(example)
+    return {int(node.id): _generic_topic_profile(label=node.pref_label_he, aliases=aliases_by_node.get(int(node.id), []), examples=examples_by_node.get(int(node.id), []), metadata=_loads_dict(node.metadata_json)) for node in nodes}
+
+
+def _generic_topic_profile(*, label: str, aliases: list[str], examples: list[dict[str, Any]], metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    metadata = metadata or {}
+    summary = str(metadata.get("summary_he") or metadata.get("description_he") or "").strip()
+    if not summary:
+        summary = f"נושא מוניציפלי שהראיות שלו עוסקות ב{label}."
+    return {
+        "summary_he": summary,
+        "aliases_he": _dedupe_labels(aliases),
+        "positive_examples": examples,
+        "negative_examples": [row for row in metadata.get("negative_examples") or [] if isinstance(row, dict)][:5],
+        "curation_status": str(metadata.get("curation_status") or "auto_profile"),
+    }
+
+
+def _topic_profile_example(*, link: ArtifactSemanticLink, artifact: RetrievalArtifact) -> dict[str, Any] | None:
+    artifact_metadata = _loads_dict(artifact.metadata_json)
+    link_metadata = _loads_dict(link.metadata_json)
+    evidence = artifact_metadata.get("evidence_contract") if isinstance(artifact_metadata.get("evidence_contract"), dict) else {}
+    quote = str(evidence.get("quote_he") or "").strip()
+    if not quote:
+        for ref in artifact_metadata.get("evidence_refs") or []:
+            if isinstance(ref, dict) and str(ref.get("quote_he") or "").strip():
+                quote = str(ref.get("quote_he") or "").strip()
+                break
+    if not quote:
+        quote = str(artifact.body_text or artifact.retrieval_text or "").strip()
+    quote = " ".join(quote.split())[:500]
+    if not quote:
+        return None
+    return {
+        "artifact_id": artifact.artifact_id,
+        "source_kind": artifact.source_kind,
+        "source_page": artifact.start_page,
+        "quote_he": quote,
+        "route": link_metadata.get("route") or artifact_metadata.get("topic_assignment_route"),
+    }
+
+
 def validate_child_label(
     *,
     raw_label: Any,
@@ -206,6 +279,7 @@ def validate_child_label(
     cleaned = clean_topic_label(raw)
     if not cleaned:
         return TopicValidationResult("rejected", raw, None, "empty_after_cleaning")
+    cleaned_aliases = [raw] if normalize_for_search(raw) != normalize_for_search(cleaned) else []
     if normalize_for_search(cleaned) == normalize_for_search("נושא כללי"):
         return TopicValidationResult("rejected", raw, None, "general_topic_forbidden")
     if normalize_for_search(cleaned) == normalize_for_search(root_label_he):
@@ -216,10 +290,10 @@ def validate_child_label(
     if reason:
         stripped = strip_decision_prose(cleaned)
         if stripped and stripped != cleaned and not noisy_label_reason(stripped) and evidence_supports_label(stripped, evidence_text):
-            return TopicValidationResult("active", raw, stripped, None, aliases_he=[cleaned], route="cleaned_decision_prose")
+            return TopicValidationResult("active", raw, stripped, None, aliases_he=_dedupe_labels([*cleaned_aliases, cleaned]), route="cleaned_decision_prose")
         return TopicValidationResult("rejected", raw, cleaned, reason)
     if selected_existing or evidence_supports_label(cleaned, evidence_text):
-        return TopicValidationResult("active", raw, cleaned, None)
+        return TopicValidationResult("active", raw, cleaned, None, aliases_he=cleaned_aliases)
     return TopicValidationResult("rejected", raw, cleaned, "label_not_supported_by_evidence")
 
 
@@ -254,14 +328,169 @@ def derive_child_candidate(*, text: str, canonical_label_he: str | None = None, 
 
 def infer_root_topic_id(text: str, *, fallback: str | None = None) -> str:
     normalized = normalize_for_search(text)
+    policy_root = _policy_root_override(normalized)
+    if policy_root:
+        return policy_root
+    tokens = set(_search_token_variants(normalized))
     best_id = fallback if fallback in ROOT_BY_ID else None
-    best_score = 0
+    best_score = 0.0
     for root in V4_ROOT_TOPICS:
-        score = sum(1 for keyword in root.get("keywords") or [] if normalize_for_search(keyword) in normalized)
+        score = sum(_root_keyword_score(keyword=str(keyword), normalized=normalized, tokens=tokens) for keyword in root.get("keywords") or [])
         if score > best_score:
             best_id = root["root_topic_id"]
             best_score = score
     return best_id or "root_agenda_queries"
+
+
+def _policy_root_override(normalized: str) -> str | None:
+    match = best_topic_policy_match(normalized)
+    root_topic_id = str((match or {}).get("root_topic_id") or "")
+    return root_topic_id if root_topic_id in ROOT_BY_ID else None
+
+
+def _root_keyword_score(*, keyword: str, normalized: str, tokens: set[str]) -> float:
+    keyword_norm = normalize_for_search(keyword)
+    if not keyword_norm or not normalized:
+        return 0.0
+    keyword_tokens = _search_tokens(keyword_norm)
+    if len(keyword_tokens) >= 2:
+        return float(len(keyword_tokens)) if keyword_norm in normalized else 0.0
+    if not keyword_tokens:
+        return 0.0
+    token = keyword_tokens[0]
+    if token in tokens:
+        return 1.0
+    # Avoid short substrings such as "דת" matching inside unrelated words like "עבודתו".
+    if len(token) >= 4 and any(value.startswith(token) for value in tokens):
+        return 0.9
+    return 0.0
+
+
+def _search_tokens(value: str) -> list[str]:
+    return re.findall(r"[\w\u0590-\u05FF]+", normalize_for_search(value))
+
+
+def _search_token_variants(value: str) -> list[str]:
+    tokens = _search_tokens(value)
+    variants = set(tokens)
+    for token in tokens:
+        if len(token) >= 4 and token[0] in "ובכלמהש" and len(token[1:]) >= 3:
+            variants.add(token[1:])
+    return list(variants)
+
+
+def resolve_child_topic_assignment(
+    *,
+    root_topic_id: str,
+    root_label_he: str,
+    child_label_he: str | None,
+    evidence_text: str,
+    structural_role: str | None = None,
+) -> dict[str, Any]:
+    root_id = root_topic_id if root_topic_id in ROOT_BY_ID else infer_root_topic_id(evidence_text)
+    root_label = root_label_for_id(root_id) or root_label_he or ""
+    validation = validate_child_label(
+        raw_label=child_label_he,
+        root_label_he=root_label,
+        evidence_text=evidence_text,
+        structural_role=structural_role,
+    ) if child_label_he else None
+    if not validation or validation.status != "active" or not validation.cleaned_label:
+        return {
+            "root_topic_id": root_id,
+            "root_label_he": root_label,
+            "child_label_he": None,
+            "child_topic_id": None,
+            "status": "active",
+            "reason": validation.reason if validation else None,
+            "route_suffix": f"child_demoted:{validation.reason}" if validation and validation.reason else "root_only",
+            "aliases_he": validation.aliases_he if validation else [],
+        }
+    child_label = canonical_child_label(validation.cleaned_label, evidence_text=evidence_text) or validation.cleaned_label
+    aliases_he = list(validation.aliases_he)
+    if normalize_for_search(child_label) != normalize_for_search(validation.cleaned_label):
+        aliases_he.append(validation.cleaned_label)
+    semantic_root_id = semantic_root_for_child_label(child_label, evidence_text=evidence_text, fallback=root_id)
+    procedural_reason = procedural_child_label_reason(child_label, evidence_text=evidence_text)
+    if procedural_reason:
+        target_root_id = semantic_root_id if semantic_root_id not in PROCEDURAL_ROOT_ONLY_IDS else root_id
+        return {
+            "root_topic_id": target_root_id,
+            "root_label_he": root_label_for_id(target_root_id) or root_label,
+            "child_label_he": None,
+            "child_topic_id": None,
+            "status": "active",
+            "reason": procedural_reason,
+            "route_suffix": f"child_demoted:{procedural_reason}",
+            "aliases_he": aliases_he,
+        }
+    unsupported_reason = unsupported_child_domain_reason(child_label, evidence_text=evidence_text)
+    if unsupported_reason:
+        return {
+            "root_topic_id": root_id,
+            "root_label_he": root_label,
+            "child_label_he": None,
+            "child_topic_id": None,
+            "status": "active",
+            "reason": unsupported_reason,
+            "route_suffix": f"child_demoted:{unsupported_reason}",
+            "aliases_he": aliases_he,
+        }
+    if root_id in PROCEDURAL_ROOT_ONLY_IDS:
+        if semantic_root_id in PROCEDURAL_ROOT_ONLY_IDS:
+            return {
+                "root_topic_id": root_id,
+                "root_label_he": root_label,
+                "child_label_he": None,
+                "child_topic_id": None,
+                "status": "active",
+                "reason": "procedural_root_child_demoted",
+                "route_suffix": "procedural_root_child_demoted",
+                "aliases_he": aliases_he,
+            }
+        root_id = semantic_root_id
+        root_label = root_label_for_id(root_id) or root_label
+    elif semantic_root_id != root_id and _semantic_root_override_is_strong(child_label, evidence_text):
+        root_id = semantic_root_id
+        root_label = root_label_for_id(root_id) or root_label
+    return {
+        "root_topic_id": root_id,
+        "root_label_he": root_label,
+        "child_label_he": child_label,
+        "child_topic_id": child_topic_id(root_id, child_label),
+        "status": "active",
+        "reason": None,
+        "route_suffix": "semantic_reparent" if root_id != root_topic_id else validation.route,
+        "aliases_he": aliases_he,
+    }
+
+
+def semantic_root_for_child_label(label: str | None, *, evidence_text: str = "", fallback: str | None = None) -> str:
+    normalized = normalize_for_search(" ".join([str(label or ""), str(evidence_text or "")]))
+    label_norm = normalize_for_search(label or "")
+    if label_norm == normalize_for_search("ניקיון ואכיפה סביבתית במרחב הציבורי"):
+        return "root_infrastructure_environment"
+    if label_norm == normalize_for_search("שימוש ארעי במגרשים ריקים"):
+        return "root_allocations"
+    if any(term in normalized for term in ["תחבורה ציבורית", "פרויקט תחבורה", "כיכר רמון", "משרד התחבורה"]):
+        return "root_transport_safety"
+    if any(term in normalized for term in ["גללי כלבים", "ניקיון העיר", "אכיפה סביבתית", "סכנה תברואתית"]):
+        return "root_infrastructure_environment"
+    if any(term in normalized for term in ["מלח", "מל ח", "מל\"ח", "חירום", "פקער", "פיקוד העורף", "מקלטים חכמים", "ביטחון"]):
+        return "root_security_enforcement"
+    if any(term in normalized for term in ["בית ספר", "חינוך", "למידה חדשנית", "סמינר מקצועי", "מערכת החינוך"]):
+        return "root_education"
+    if "ועדת ביקורת" in label_norm or "מבקר" in normalized:
+        return "root_administration"
+    if "מלגות" in normalized:
+        return "root_education"
+    if any(term in normalized for term in ["תמיכות", "ועדת משנה לתמיכות"]):
+        return "root_supports"
+    if any(term in normalized for term in ["הקצאות", "הקצאת", "קרקע", "שימוש ארעי במגרשים"]):
+        return "root_allocations"
+    if any(term in normalized for term in ["האצלת סמכויות", "מורשי חתימה", "מינוי", "מינויים", "גזבר העירייה"]):
+        return "root_administration"
+    return infer_root_topic_id(" ".join([str(label or ""), str(evidence_text or "")]), fallback=fallback)
 
 
 def root_id_for_label(label: str | None) -> str | None:
@@ -509,11 +738,27 @@ def compact_label(value: Any) -> str:
     return " ".join(str(value or "").replace("‫", " ").replace("‬", " ").split()).strip()
 
 
+def _dedupe_labels(values: list[Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        label = compact_label(value)
+        if not label:
+            continue
+        key = normalize_for_search(label)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(label)
+    return out
+
+
 def clean_topic_label(value: Any) -> str | None:
     label = compact_label(value)
     if not label or label.casefold() in {"none", "null"}:
         return None
     label = re.sub(r"^(?:הנדון|נדון|בנושא|נושא)\s*[:\-–]?\s*", "", label).strip()
+    label = re.sub(r"^שאיל(?:תא|תה)\s+(?:רקע\s+)?", "", label).strip()
     label = re.sub(r"^סעיף\s*\d+(?:\.\d+)?\s*[:.)-]*\s*", "", label).strip()
     label = re.sub(r"^[\d\s'.:()\-–]+", "", label).strip()
     label = re.sub(r"^פרוטוקול\s+מישיבת\s+", "", label).strip()
@@ -529,10 +774,76 @@ def clean_topic_label(value: Any) -> str | None:
     label = re.split(r"\s+[–-]\s+מצ[\"'״]?ל", label, maxsplit=1)[0].strip()
     label = re.split(r"\s+[–-]\s+", label, maxsplit=1)[0].strip()
     label = re.sub(r"\b(?:גוש|חלקה|מגרש)\b.*$", "", label).strip()
+    label = re.sub(r"\b(?:תנועת\s+אשדודים|אין\s+לנו\s+עוד\s+אשדוד)\b.*$", "", label).strip()
+    label = re.sub(r"\b(?:בסך\s*)?\d+\s*(?:מיליון|מל(?:יון)?|שח|ש\"ח|₪)\b", "", label).strip()
+    label = re.sub(r"\b(?:שח|ש\"ח|₪)\b", "", label).strip()
     label = re.sub(r"\d+$", "", label).strip()
     label = label.strip(" .,:;()[]{}\"'׳״-–*")
     label = re.sub(r"\s+", " ", label).strip()
+    label = canonical_child_label(label)
     return label or None
+
+
+def canonical_child_label(value: str | None, *, evidence_text: str = "") -> str | None:
+    label = compact_label(value)
+    normalized = normalize_for_search(" ".join([label, evidence_text]))
+    label_norm = normalize_for_search(label)
+    if not label:
+        return None
+    if any(term in normalized for term in ["מקור לכיסוי", "כיסוי גרעון", "כיסוי גירעון", "גרעון", "גירעון"]) and any(term in normalized for term in ["תחבורה", "תחבורה ציבורית"]):
+        return "מימון פרויקט תחבורה ציבורית"
+    if "גללי כלבים" in normalized:
+        return "ניקיון ואכיפה סביבתית במרחב הציבורי"
+    if "ועדת ביקורת" in label_norm:
+        return "ועדת ביקורת"
+    if "ועדת מלגות" in label_norm or label_norm.startswith("מלגות"):
+        return "ועדת מלגות"
+    if "ועדת מל ח" in label_norm or "ועדת מלח" in label_norm or "ועדת מל\"ח" in label_norm:
+        return "ועדת מל\"ח"
+    if "ועדת משנה לתמיכות" in label_norm or "ועדת משנה תמיכות" in label_norm:
+        return "ועדת משנה לתמיכות"
+    if "שימוש ארעי במגרשים ריקים" in normalized:
+        return "שימוש ארעי במגרשים ריקים"
+    if "האצלת סמכויות" in label_norm:
+        return "האצלת סמכויות חתימה"
+    if "למידה חדשנית" in normalized and any(term in normalized for term in ["סמינר", "נסיעה"]):
+        return "סמינר למידה חדשנית"
+    if "עתיד בית ספר יד שבתאי" in normalized:
+        return "עתיד בית ספר יד שבתאי"
+    if "העתקת" in normalized and "אלתא" in normalized:
+        return "העתקת פעילות מפעל אלתא"
+    return label
+
+
+def procedural_child_label_reason(label: str | None, *, evidence_text: str = "") -> str | None:
+    label_norm = normalize_for_search(label or "")
+    evidence_norm = normalize_for_search(evidence_text or "")
+    if not label_norm:
+        return "empty_label"
+    if label_norm in {
+        normalize_for_search("ועדת משנה לתמיכות"),
+        normalize_for_search("ועדת המשנה להקצאות קרקע"),
+        normalize_for_search("ועדת ביקורת"),
+        normalize_for_search("ועדת מל\"ח"),
+        normalize_for_search("ועדת מלגות"),
+    }:
+        return "procedural_committee_label"
+    if re.fullmatch(r"ועדת\s+[^\s]+(?:\s+[^\s]+){0,3}", label_norm):
+        return "procedural_committee_label"
+    if any(term in label_norm for term in ["פרוטוקול ועדת", "פרוטוקול מישיבת ועדת"]):
+        return "procedural_protocol_label"
+    if label_norm.startswith("ועדת ") and any(term in evidence_norm for term in ["פרוטוקול", "מישיבת", "מס", "מיום", "מצ ל", "מצל"]):
+        return "procedural_committee_context"
+    return None
+
+
+def unsupported_child_domain_reason(label: str | None, *, evidence_text: str = "") -> str | None:
+    normalized = normalize_for_search(" ".join([str(label or ""), str(evidence_text or "")]))
+    if any(term in normalized for term in ["מקור לכיסוי", "כיסוי גרעון", "כיסוי גירעון", "גרעון", "גירעון"]) and not any(term in normalized for term in ["תחבורה", "תחבורה ציבורית", "משרד התחבורה"]):
+        return "unsupported_semantic_domain"
+    if "אלתא" in normalized:
+        return "unsupported_semantic_domain"
+    return None
 
 
 def noisy_label_reason(value: str | None) -> str | None:
@@ -552,6 +863,15 @@ def noisy_label_reason(value: str | None) -> str | None:
         return "section_only"
     if len(label) > 90 or len(label.split()) > 10:
         return "overlong_sentence_fragment"
+    if "משא ומתן" in normalized and any(term in normalized for term in ["להיכנס", "כנס", "לתקן"]):
+        return "verb_phrase_label"
+    if any(term in normalized for term in ["שנוגע", "שנוגעת", "שקשור", "שקשורה"]):
+        return "clause_fragment_label"
+    procedural_reason = procedural_child_label_reason(label)
+    if procedural_reason:
+        return procedural_reason
+    if _looks_like_person_only_label(label):
+        return "person_only_label"
     if _looks_like_clause_fragment(label):
         return "clause_fragment_label"
     if _looks_like_dialogue_fragment(label):
@@ -579,6 +899,8 @@ def evidence_supports_label(label: str, evidence_text: str) -> bool:
     evidence_norm = normalize_for_search(evidence_text)
     if not label_norm or not evidence_norm:
         return False
+    if label_norm == normalize_for_search("ניקיון ואכיפה סביבתית במרחב הציבורי") and any(term in evidence_norm for term in ["גללי כלבים", "ניקיון העיר", "אכיפה", "סכנה תברואתית", "פגיעה סביבתית"]):
+        return True
     if label_norm in evidence_norm:
         return True
     label_tokens = [token for token in re.findall(r"[\u0590-\u05FF]{2,}", label_norm) if len(token) >= 2]
@@ -594,7 +916,7 @@ def referenced_attachment_contexts(*, text: str, attachment_contexts: list[dict[
     normalized_text = normalize_for_search(text)
     scored: list[tuple[float, dict[str, Any]]] = []
     local_subject, _route = derive_child_candidate(text=text)
-    local_tokens = set(_topic_tokens(local_subject or text))
+    local_tokens = set(_topic_tokens(local_subject or ""))
     for item in attachment_contexts:
         label_values = [
             item.get("pdf_path"),
@@ -618,7 +940,7 @@ def referenced_attachment_contexts(*, text: str, attachment_contexts: list[dict[
         root_norm = normalize_for_search(str(item.get("root_label_he") or ""))
         if root_norm and root_norm in normalized_text:
             score += 0.18
-        if score > 0.0:
+        if score >= 0.65:
             payload = dict(item)
             payload["attachment_match_score"] = round(min(1.0, score), 4)
             scored.append((score, payload))
@@ -794,7 +1116,9 @@ def upsert_semantic_node(
 
 
 def upsert_alias(session: Session, *, semantic_node: SemanticNode, alias_label: str, document_version_id: int | None) -> None:
-    alias = clean_topic_label(alias_label)
+    raw_alias = compact_label(alias_label)
+    cleaned_alias = clean_topic_label(raw_alias)
+    alias = cleaned_alias if cleaned_alias and normalize_for_search(cleaned_alias) != normalize_for_search(semantic_node.pref_label_he) else raw_alias
     if not alias or normalize_for_search(alias) == normalize_for_search(semantic_node.pref_label_he):
         return
     if noisy_label_reason(alias) or is_low_quality_topic_label(alias):
@@ -880,6 +1204,15 @@ def _children_by_root_from_tree(tree: dict[str, Any]) -> dict[str, list[dict[str
     return out
 
 
+def _roots_by_id_from_tree(tree: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for root in tree.get("roots") or tree.get("root_topics") or []:
+        root_id = str(root.get("root_topic_id") or root.get("root_id") or "")
+        if root_id:
+            out[root_id] = dict(root)
+    return out
+
+
 def _has_repeated_phrase(label: str) -> bool:
     tokens = label.split()
     for size in (1, 2, 3):
@@ -934,6 +1267,34 @@ def _looks_like_procedural_fragment(label: str) -> bool:
             "מי נמנע",
             "מי נגד",
             "ללא שישה חברי האופוזיציה",
+        ]
+    )
+
+
+def _looks_like_person_only_label(label: str) -> bool:
+    normalized = normalize_for_search(label)
+    tokens = normalized.split()
+    if len(tokens) <= 3 and tokens and tokens[0] in {"מר", "גברת", "גב", "עוד", "דוקטור"}:
+        return True
+    return False
+
+
+def _semantic_root_override_is_strong(label: str, evidence_text: str) -> bool:
+    normalized = normalize_for_search(" ".join([label, evidence_text]))
+    return any(
+        term in normalized
+        for term in [
+            "תחבורה ציבורית",
+            "פרויקט תחבורה",
+            "גללי כלבים",
+            "ועדת מל ח",
+            "ועדת מל\"ח",
+            "ועדת מלח",
+            "למידה חדשנית",
+            "האצלת סמכויות",
+            "ועדת ביקורת",
+            "מלגות",
+            "הקצאות",
         ]
     )
 
