@@ -5,6 +5,7 @@ All agents working in this repository MUST follow this file.
 ## Communication
 - Print minimal information unless the user explicitly asks for more detail.
 - Always show estimated build/execution time before starting implementation or running commands.
+- During builds, print only concise progress and summary information unless the user explicitly asks for detailed output.
 - Prefer concise status updates, concise findings, and concise verification output.
 - When printing file paths in the session, always use full absolute paths instead of paths relative to the project.
 - Do not print a "Relevant Files" section in the session unless the current action is committing those files.
@@ -18,7 +19,7 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 ## Solution Principles
 - Prefer generic, reusable solutions over logic tailored to one document, municipality, or text pattern.
 - Do not hardcode assumptions about protocol layout, terminology, metadata, or attachment structure.
-- Always add helpful comments when writing code, especially where intent, assumptions, or non-obvious behavior need clarification.
+- Add helpful comments when writing code, especially where intent, assumptions, or non-obvious behavior need clarification.
 - If unsure, pause and ask the user. If documentation or best practices are needed, research them before proceeding.
 
 ## AI Model Preferences
