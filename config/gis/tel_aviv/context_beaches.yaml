@@ -1,0 +1,10 @@
+layer_key: context_geometries
+context_layer: municipal_beaches
+municipality_code: "5000"
+municipality_name_he: תל אביב-יפו
+default_category: beach
+expected_geometry_types: [MultiPolygon, Polygon]
+field_mappings:
+  source_object_id: [OBJECTID, beach_code, station_num]
+  name_he: [beach_name]
+  category: [beach_code]

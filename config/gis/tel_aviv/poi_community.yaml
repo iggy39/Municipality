@@ -1,0 +1,9 @@
+layer_key: poi_points
+municipality_code: "5000"
+municipality_name_he: תל אביב-יפו
+default_poi_category: community_center
+source_object_prefix: community
+field_mappings:
+  source_object_id: [oid_mosad, UniqueId]
+  official_identifier: [oid_mosad, UniqueId]
+  name_he: [shem]

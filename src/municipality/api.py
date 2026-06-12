@@ -3615,8 +3615,8 @@ def rag_dashboard_evidence(evidence_id: str, db=Depends(get_db)) -> dict[str, An
 
 
 @app.get("/api/ui/rag-dashboard/gis-map")
-def rag_dashboard_gis_map(gush: str = "7103", helka: str = "43", radius_m: float = 750.0, db=Depends(get_db)) -> dict[str, Any]:
-    return build_dashboard_gis_map_payload(db, gush=gush, helka=helka, radius_m=radius_m)
+def rag_dashboard_gis_map(gush: str = "7103", helka: str = "43", radius_m: float = 3000.0, example: str = "tel_aviv_parcel", profile: str = "initial", db=Depends(get_db)) -> dict[str, Any]:
+    return build_dashboard_gis_map_payload(db, gush=gush, helka=helka, radius_m=radius_m, example=example, profile=profile)
 
 
 @app.post("/api/ui/rag-dashboard/query")
@@ -4103,7 +4103,7 @@ def ask_playground_page(db=Depends(get_db)) -> HTMLResponse:
     initial_gis_map_payload = None
     if hasattr(db, "execute"):
         try:
-            initial_gis_map_payload = build_dashboard_gis_map_payload(db)
+            initial_gis_map_payload = build_dashboard_gis_map_payload(db, profile="initial")
         except Exception:  # noqa: BLE001 - dashboard must remain available if GIS is unavailable.
             initial_gis_map_payload = None
     return HTMLResponse(

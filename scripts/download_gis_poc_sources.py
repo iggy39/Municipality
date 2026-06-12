@@ -3,12 +3,15 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
 XPLAN_BLUE_LINES_URL = "https://ags.iplan.gov.il/arcgisiplan/rest/services/PlanningPublic/Xplan/MapServer/1"
+MOIN_BOUNDARIES_URL = "https://ags.iplan.gov.il/arcgisiplan/rest/services/PlanningPublic/gvulot_retzef/MapServer/1"
 MAPI_PARCELS_URL = "https://e.data.gov.il/dataset/dff8a168-af6c-4e0f-bbe3-c4bd3646084c/resource/c68b4df6-c809-4bb5-a546-61fa1528fed5/download/parcels.zip"
 MOE_COORDINATES_RESOURCE_ID = "5c5d6bb0-755d-470d-84b6-d7dd3135ba9c"
 MOT_BUS_STOPS_RESOURCE_ID = "e873e6a2-66c1-494f-a677-f5e77348edb0"
@@ -35,11 +38,23 @@ def main() -> None:
             "sample_where": "pl_number='101-0057273'",
             "status": "service_url_recorded",
         },
+        "moin_municipal_boundaries": {
+            "service_url": MOIN_BOUNDARIES_URL,
+            "code_field": "CR_PNIM",
+            "name_he_field": "Muni_Heb",
+            "status": "service_url_recorded",
+        },
         "mapi_parcels": {"url": MAPI_PARCELS_URL, "status": "skipped_large_download"},
         "mot_gtfs_stops": {"url": MOT_GTFS_URL, "status": "skipped_by_default"},
     }
 
     with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+        boundaries_path = out_dir / "moin_municipal_boundaries.geojson"
+        boundary_count = _download_arcgis_geojson(client, MOIN_BOUNDARIES_URL, boundaries_path)
+        manifest["moin_municipal_boundaries"].update(
+            {"path": str(boundaries_path), "features": boundary_count, "status": "downloaded_from_arcgis_geojson"}
+        )
+
         moe_path = out_dir / "moe_mosdot_coordinates.csv"
         moe_count = _download_ckan_datastore_csv(
             client,
@@ -120,6 +135,60 @@ def _download_ckan_datastore_csv(
             if len(records) < limit or (total and offset >= total):
                 break
     return count
+
+
+def _download_arcgis_geojson(client: httpx.Client, service_url: str, output_path: Path) -> int:
+    url = service_url.rstrip("/") + "/query"
+    ids_payload = _arcgis_get_json(client, url, {"f": "json", "where": "1=1", "returnIdsOnly": "true"})
+    object_ids = [int(value) for value in ids_payload.get("objectIds") or []]
+    features: list[dict[str, Any]] = []
+    for offset in range(0, len(object_ids), 50):
+        chunk = object_ids[offset : offset + 50]
+        payload = _arcgis_get_json(
+            client,
+            url,
+            {
+                "f": "geojson",
+                "objectIds": ",".join(str(object_id) for object_id in chunk),
+                "outFields": "*",
+                "returnGeometry": "true",
+                "outSR": "4326",
+            },
+        )
+        for feature in payload.get("features") or []:
+            if isinstance(feature, dict) and isinstance(feature.get("geometry"), dict):
+                feature["geometry"] = _strip_extra_coordinate_dimensions(feature["geometry"])
+            features.append(feature)
+    payload = {"type": "FeatureCollection", "features": features}
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return len(features)
+
+
+def _arcgis_get_json(client: httpx.Client, url: str, params: dict[str, str]) -> dict[str, Any]:
+    try:
+        response = client.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
+    except httpx.ConnectError:
+        completed = subprocess.run(
+            ["curl", "-sS", f"{url}?{urlencode(params)}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(completed.stdout)
+
+
+def _strip_extra_coordinate_dimensions(geometry: dict[str, Any]) -> dict[str, Any]:
+    return {**geometry, "coordinates": _strip_coordinate_values(geometry.get("coordinates"))}
+
+
+def _strip_coordinate_values(value: Any) -> Any:
+    if isinstance(value, list) and len(value) >= 2 and all(isinstance(item, (int, float)) for item in value[:2]):
+        return [value[0], value[1]]
+    if isinstance(value, list):
+        return [_strip_coordinate_values(item) for item in value]
+    return value
 
 
 def _download_url(client: httpx.Client, url: str, output_path: Path) -> dict[str, Any]:

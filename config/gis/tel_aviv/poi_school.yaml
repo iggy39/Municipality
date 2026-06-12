@@ -1,0 +1,9 @@
+layer_key: poi_points
+municipality_code: "5000"
+municipality_name_he: תל אביב-יפו
+default_poi_category: municipal_school
+source_object_prefix: school_2027
+field_mappings:
+  source_object_id: [oid_mosad, k_mosad, UniqueId]
+  official_identifier: [k_mosad, oid_mosad, UniqueId]
+  name_he: [shem_mosad]

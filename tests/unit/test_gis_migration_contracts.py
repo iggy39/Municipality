@@ -37,6 +37,14 @@ def test_gis_migration_creates_provenance_and_canonical_tables() -> None:
         assert f'"{table_name}"' in MIGRATION_SQL
 
 
+def test_gis_context_geometry_migration_supports_map_context_layers() -> None:
+    migration_sql = Path("alembic/versions/0002_context_geometries.py").read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS context_geometries" in migration_sql
+    assert "context_layer text NOT NULL" in migration_sql
+    assert "geom geometry(Geometry, 4326) NOT NULL" in migration_sql
+    assert "USING gist(geom_2039)" in migration_sql
+
+
 def test_gis_migration_creates_coverage_model() -> None:
     assert "CREATE TABLE IF NOT EXISTS layer_coverage" in MIGRATION_SQL
     assert "'not_found'" in MIGRATION_SQL

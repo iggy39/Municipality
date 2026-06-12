@@ -185,10 +185,12 @@ def test_rag_dashboard_mock_payload_covers_current_dashboard_visual_data() -> No
         "מזרח העיר",
         "דרום העיר",
         "מקרא",
-        "אזור נבחר",
-        "פארקים",
-        "מבני ציבור",
-        "מוקדי עניין",
+        "חלקה נבחרת",
+        "תכנית / גבול תכנון",
+        "שכונה / גבול עירוני",
+        "מוסד חינוך",
+        "מבנה הקשר OSM",
+        "מוקד הקשר OSM",
         "מרכז מפה",
         "התקרבות",
         "התרחקות",
@@ -241,8 +243,14 @@ def test_rag_dashboard_mock_payload_covers_current_dashboard_visual_data() -> No
         "כל הרמות",
     }
 
+    expected_body_strings = (
+        expected_visual_strings
+        - {"חלקה נבחרת", "תכנית / גבול תכנון", "שכונה / גבול עירוני"}
+        | {"חלקת MAPI רשמית", "תכנית אם קיימת בנקודה", "גבול תל אביב רשמי"}
+    )
+
     assert expected_visual_strings <= endpoint_strings
-    assert all(value in ask_body for value in expected_visual_strings)
+    assert all(value in ask_body for value in expected_body_strings)
 
     assert [row["count"] for row in payload["start_discovery_panel"]["categories"]] == [342, 128, 95, 76, 64]
     assert [row["count"] for row in payload["start_discovery_panel"]["hot_topics"]] == [23, 18, 14, 11]
@@ -267,10 +275,40 @@ def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None
     body = bytes(ask_playground_page().body).decode("utf-8")
 
     assert "/api/ui/rag-dashboard/gis-map" in body
+    assert "maplibre-gl" not in body
     assert "id=\"real-gis-map\"" in body
     assert "id=\"real-gis-static-map\"" in body
-    assert "fallback ללא CDN" in body
+    assert "id=\"map-example-select\"" in body
+    assert "create_gis_map_examples" not in body
+    assert "window.__municipalSvgGisController" in body
+    assert "SVG GIS פעיל" in body
     assert "מפת GIS אמיתית" in body
+
+
+def test_rag_dashboard_page_wires_stage_6_point_report_and_coverage_ui() -> None:
+    body = bytes(ask_playground_page().body).decode("utf-8")
+
+    assert 'const POINT_REPORT_ENDPOINT = "/v1/point-report"' in body
+    assert 'const COVERAGE_ENDPOINT = "/v1/coverage"' in body
+    assert 'id="point-report-panel"' in body
+    assert 'id="coverage-panel"' in body
+    assert 'id="coverage-matrix-button"' in body
+    assert 'class="sourceBadge" data-status="official"' in body
+    assert 'class="sourceBadge" data-status="municipal_license_under_review"' in body
+    assert 'class="sourceBadge" data-status="context_only"' in body
+    assert "loadPointReport" in body
+    assert "loadCoverage" in body
+    assert "selected_example" in body
+    assert "mapExampleLayers" in body
+    assert "mapExampleCopy" in body
+    assert "visualBasemapCollections" in body
+    assert "ensurePocBasemap" in body
+    assert "gisMapMarker" in body
+    assert "visibleLayers.pois" in body
+    assert "dashboard-plans-fill" in body
+    assert "dashboard-nearby-parcels-fill" in body
+    assert "dashboard-context-pois-circle" in body
+    assert "חלקת MAPI רשמית" in body
 
 
 def test_rag_dashboard_gis_map_endpoint_returns_real_layers_with_provenance() -> None:
@@ -291,17 +329,54 @@ def test_rag_dashboard_gis_map_endpoint_returns_real_layers_with_provenance() ->
     payload = response.json()
     assert payload["status"] == "found"
     assert payload["real_gis_available"] is True
+    assert payload["selected_example"] == "tel_aviv_parcel"
+    assert [item["id"] for item in payload["examples"]] == ["tel_aviv_parcel"]
     assert payload["basemap"]["display_status"] == "context_only"
-    assert payload["parcel"]["gush"] == "7103"
-    assert payload["parcel"]["helka"] == "43"
-    assert payload["parcel"]["source"]["source_id"] == "govmap_public_parcels"
-    assert payload["parcel"]["provenance_id"] == "prov-parcel-dashboard"
-    assert payload["parcel"]["geometry"]["type"] == "MultiPolygon"
+    assert payload["focus"] == "tel_aviv_parcel"
+    assert payload["query"]["gush"] == "7103"
+    assert payload["query"]["helka"] == "43"
+    assert payload["parcel"]["source_id"] == "mapi_parcels"
+    assert payload["parcel"]["provenance_id"] == "prov-mapi-parcel-dashboard"
+    assert payload["layers"]["nearby_parcels"]["count"] == 2
+    assert payload["layers"]["nearby_parcels"]["total_count"] == 2
+    assert payload["layers"]["nearby_parcels"]["items"][0]["source_id"] == "mapi_parcels"
+    assert payload["layers"]["nearby_parcels"]["items"][0]["provenance_id"]
     assert payload["nearby_pois"]["count"] == 2
+    assert payload["nearby_pois"]["categories"]["transport_stop"]["total_count"] == 1
+    assert payload["nearby_pois"]["categories"]["school"]["total_count"] == 1
+    assert {"nearby_parcels", "plans", "municipal_boundaries", "neighborhoods", "context_pois", "buildings"} <= set(payload["layers"].keys())
+    assert payload["layers"]["plans"]["status"] == "not_found"
+    assert payload["layers"]["municipal_boundaries"]["items"][0]["source_id"] == "moin_municipal_boundaries"
+    assert payload["layers"]["context_pois"]["items"][0]["source"]["display_status"] == "context_only"
+    assert payload["layers"]["buildings"]["items"][0]["source"]["display_status"] == "context_only"
     for item in payload["nearby_pois"]["items"]:
         assert item["source"]
         assert item["provenance_id"]
         assert item["geometry"]["type"] == "Point"
+
+
+def test_rag_dashboard_gis_map_endpoint_keeps_tel_aviv_parcel_caveat() -> None:
+    engine = _seed_gis_dashboard_sqlite()
+
+    def override_db():
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_db
+    try:
+        client = TestClient(app)
+        response = client.get("/api/ui/rag-dashboard/gis-map?example=tel_aviv_parcel")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_example"] == "tel_aviv_parcel"
+    assert payload["parcel"]["gush"] == "7103"
+    assert payload["parcel"]["helka"] == "43"
+    assert payload["parcel"]["source"]["source_id"] == "mapi_parcels"
+    assert payload["parcel"]["source"]["display_status"] == "official"
+    assert any("MAPI" in caveat for caveat in payload["caveats"])
 
 
 def test_rag_dashboard_can_server_render_visible_gis_map() -> None:
@@ -332,7 +407,7 @@ def test_rag_dashboard_can_server_render_visible_gis_map() -> None:
     assert 'data-server-rendered-gis="true"' in body
     assert 'id="real-gis-static-map"' in body
     assert 'id="real-gis-static-map" class="realGisStaticMap" viewBox="0 0 900 620" role="img" aria-label="מפת GIS אמיתית ללא ספריית מפה חיצונית" hidden' not in body
-    assert "מפת GIS אמיתית - נטענה מהשרת" in body
+    assert "מפת GIS אמיתית - נטענה מהשרת" not in body
     assert "7103 / 43" in body
 
 
@@ -793,6 +868,39 @@ def _seed_gis_dashboard_sqlite():
                   parcel_label TEXT,
                   validation_status TEXT NOT NULL,
                   geom TEXT NOT NULL,
+                  geom_2039 TEXT NOT NULL,
+                  fetched_at TEXT
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE plans (
+                  id TEXT PRIMARY KEY,
+                  source_id TEXT NOT NULL,
+                  provenance_id TEXT NOT NULL,
+                  plan_number TEXT NOT NULL,
+                  plan_name TEXT,
+                  validation_status TEXT NOT NULL,
+                  geom TEXT NOT NULL,
+                  fetched_at TEXT
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE official_municipal_boundaries (
+                  id TEXT PRIMARY KEY,
+                  source_id TEXT NOT NULL,
+                  provenance_id TEXT NOT NULL,
+                  municipality_code TEXT NOT NULL,
+                  municipality_name_he TEXT,
+                  validation_status TEXT NOT NULL,
+                  geom TEXT NOT NULL,
                   fetched_at TEXT
                 )
                 """
@@ -819,10 +927,59 @@ def _seed_gis_dashboard_sqlite():
         connection.execute(
             text(
                 """
+                CREATE TABLE context_pois (
+                  id TEXT PRIMARY KEY,
+                  source_id TEXT NOT NULL,
+                  provenance_id TEXT NOT NULL,
+                  source_object_id TEXT,
+                  poi_category TEXT NOT NULL,
+                  name TEXT,
+                  geom TEXT NOT NULL,
+                  geom_2039 TEXT NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE buildings (
+                  id TEXT PRIMARY KEY,
+                  source_id TEXT NOT NULL,
+                  provenance_id TEXT NOT NULL,
+                  source_object_id TEXT,
+                  municipality_code TEXT,
+                  validation_status TEXT NOT NULL,
+                  geom TEXT NOT NULL,
+                  geom_2039 TEXT NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE layer_coverage (
+                  municipality_code TEXT NOT NULL,
+                  municipality_name_he TEXT,
+                  layer_key TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  source_id TEXT,
+                  feature_count INTEGER NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
                 INSERT INTO source_registry VALUES
-                ('govmap_public_parcels', 'חלקות GovMap', 'GovMap parcels', 'govmap', 'official_national', 'restricted', 'official_with_caveat', 1, 0, 0, NULL, NULL, NULL),
+                ('mapi_parcels', 'חלקות MAPI', 'MAPI parcels', 'mapi', 'official_national', 'verified', 'official', 1, 1, 1, NULL, NULL, NULL),
                 ('moe_school_coordinates', 'מוסדות חינוך', 'Schools', 'moe', 'official_national', 'verified', 'official', 1, 1, 1, NULL, NULL, NULL),
-                ('mot_gtfs_stops', 'תחנות תחבורה ציבורית', 'Bus stops', 'mot', 'official_national', 'verified', 'official', 1, 1, 1, NULL, NULL, NULL)
+                ('mot_gtfs_stops', 'תחנות תחבורה ציבורית', 'Bus stops', 'mot', 'official_national', 'verified', 'official', 1, 1, 1, NULL, NULL, NULL),
+                ('xplan_blue_lines', 'תכניות XPLAN', 'XPLAN plans', 'xplan', 'official_national', 'verified', 'official', 1, 1, 1, NULL, NULL, NULL),
+                ('moin_municipal_boundaries', 'גבולות רשויות', 'Municipal boundaries', 'moin', 'official_national', 'verified', 'official', 1, 1, 1, NULL, NULL, NULL),
+                ('osm_context', 'OSM הקשר', 'OSM context', 'osm', 'context', 'verified', 'context_only', 0, 1, 0, 'OpenStreetMap contributors', NULL, NULL)
                 """
             )
         )
@@ -830,10 +987,34 @@ def _seed_gis_dashboard_sqlite():
             text(
                 """
                 INSERT INTO parcels VALUES
-                ('parcel-dashboard', 'govmap_public_parcels', 'prov-parcel-dashboard', '1063604', '7103', '43', '7103 / 43', 'valid', :parcel_geom, '2026-06-10')
+                ('parcel-dashboard', 'mapi_parcels', 'prov-mapi-parcel-dashboard', '7103-43', '7103', '43', '7103 / 43', 'valid', :parcel_geom, :parcel_geom, '2026-06-10'),
+                ('parcel-neighbor-dashboard-1', 'mapi_parcels', 'prov-mapi-parcel-neighbor-1', '7103-44', '7103', '44', '7103 / 44', 'valid', :neighbor_geom_1, :neighbor_geom_1, '2026-06-10'),
+                ('parcel-neighbor-dashboard-2', 'mapi_parcels', 'prov-mapi-parcel-neighbor-2', '7103-45', '7103', '45', '7103 / 45', 'valid', :neighbor_geom_2, :neighbor_geom_2, '2026-06-10')
                 """
             ),
-            {"parcel_geom": _gis_polygon_json(34.779, 32.079, 34.783, 32.083)},
+            {
+                "parcel_geom": _gis_polygon_json(34.779, 32.079, 34.783, 32.083),
+                "neighbor_geom_1": _gis_polygon_json(34.783, 32.079, 34.786, 32.083),
+                "neighbor_geom_2": _gis_polygon_json(34.776, 32.079, 34.779, 32.083),
+            },
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO plans VALUES
+                ('plan-dashboard', 'xplan_blue_lines', 'prov-plan-dashboard', '101-0057273', 'תכנית ירושלים בדיקה', 'valid', :plan_geom, '2026-06-10')
+                """
+            ),
+            {"plan_geom": _gis_polygon_json(35.2216, 31.7951, 35.2224, 31.7959)},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO official_municipal_boundaries VALUES
+                ('boundary-dashboard', 'moin_municipal_boundaries', 'prov-boundary-dashboard', '5000', 'תל אביב-יפו', 'valid', :boundary_geom, '2026-06-10')
+                """
+            ),
+            {"boundary_geom": _gis_polygon_json(34.74, 32.03, 34.86, 32.15)},
         )
         connection.execute(
             text(
@@ -843,7 +1024,40 @@ def _seed_gis_dashboard_sqlite():
                 ('stop-dashboard', 'mot_gtfs_stops', 'prov-stop-dashboard', 'stop-1', 'transport_stop', 'תחנה סמוכה', 'Nearby stop', '2001', :stop_geom, :stop_geom)
                 """
             ),
-            {"school_geom": _gis_point_json(34.781, 32.081), "stop_geom": _gis_point_json(34.782, 32.082)},
+            {
+                "school_geom": _gis_point_json(34.781, 32.081),
+                "stop_geom": _gis_point_json(34.782, 32.082),
+            },
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO context_pois VALUES
+                ('context-dashboard', 'osm_context', 'prov-context-dashboard', 'osm-1', 'library', 'ספרייה OSM', :context_geom, :context_geom)
+                """
+            ),
+            {"context_geom": _gis_point_json(34.7815, 32.0815)},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO buildings VALUES
+                ('building-dashboard', 'osm_context', 'prov-building-dashboard', 'building-1', '5000', 'valid', :building_geom, :building_geom)
+                """
+            ),
+            {"building_geom": _gis_polygon_json(34.7812, 32.0812, 34.7816, 32.0816)},
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO layer_coverage VALUES
+                ('5000', 'תל אביב-יפו', 'parcels', 'national_available', 'mapi_parcels', 1),
+                ('5000', 'תל אביב-יפו', 'boundaries', 'national_available', 'moin_municipal_boundaries', 1),
+                ('5000', 'תל אביב-יפו', 'buildings', 'context_available', 'osm_context', 1),
+                ('5000', 'תל אביב-יפו', 'context_pois', 'context_available', 'osm_context', 1),
+                ('5000', 'תל אביב-יפו', 'neighborhoods', 'not_enabled', NULL, 0)
+                """
+            )
         )
     return engine
 
@@ -854,6 +1068,8 @@ def _register_gis_spatial_sqlite_functions(connection: object, _record: object) 
     connection.create_function("ST_Transform", 2, lambda geom, _srid: geom)
     connection.create_function("ST_Point", 2, _gis_point_json)
     connection.create_function("ST_Centroid", 1, _gis_centroid_json)
+    connection.create_function("ST_PointOnSurface", 1, _gis_centroid_json)
+    connection.create_function("ST_Covers", 2, lambda geom, point: 1 if _gis_contains_point(geom, point) else 0)
     connection.create_function("ST_DWithin", 3, lambda geom, point, radius: 1 if _gis_distance_m(geom, point) <= float(radius) else 0)
     connection.create_function("ST_Distance", 2, _gis_distance_m)
 
@@ -885,6 +1101,16 @@ def _gis_distance_m(geom: object, point: object) -> float:
     if left is None or right is None:
         return 1_000_000.0
     return sqrt(((left[0] - right[0]) * 111_000) ** 2 + ((left[1] - right[1]) * 111_000) ** 2)
+
+
+def _gis_contains_point(geom: object, point: object) -> bool:
+    bbox = _gis_bbox(geom)
+    coordinates = _gis_point_coordinates(point)
+    if bbox is None or coordinates is None:
+        return False
+    min_lon, min_lat, max_lon, max_lat = bbox
+    lon, lat = coordinates
+    return min_lon <= lon <= max_lon and min_lat <= lat <= max_lat
 
 
 def _gis_point_coordinates(value: object) -> tuple[float, float] | None:

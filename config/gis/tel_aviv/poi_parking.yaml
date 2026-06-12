@@ -1,0 +1,9 @@
+layer_key: poi_points
+municipality_code: "5000"
+municipality_name_he: תל אביב-יפו
+default_poi_category: parking
+source_object_prefix: parking
+field_mappings:
+  source_object_id: [OBJECTID, oid_hanyon, oid, UniqueId]
+  official_identifier: [OBJECTID, oid_hanyon, oid, UniqueId]
+  name_he: [shem, name, shem_hanyon]

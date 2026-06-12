@@ -1,0 +1,9 @@
+layer_key: context_geometries
+context_layer: municipal_bike_paths
+municipality_code: "5000"
+municipality_name_he: תל אביב-יפו
+default_category: bike_path
+expected_geometry_types: [MultiLineString, LineString]
+field_mappings:
+  source_object_id: [OBJECTID, oid, UniqueId]
+  name_he: [shem, name, t_rechov]

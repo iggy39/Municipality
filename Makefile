@@ -3,7 +3,7 @@ COMPOSE ?= docker compose
 DATABASE_URL ?= postgresql+psycopg://municipality:municipality@localhost:5432/municipality
 SOURCE_REGISTRY_SEED ?= config/gis/source_registry.seed.yaml
 
-.PHONY: up migrate seed-sources download-gis-poc-sources verify-gis-demo verify-gis-poc test
+.PHONY: up migrate seed-sources download-gis-poc-sources import-osm-context import-municipal-source create-gis-map-examples verify-gis-demo verify-gis-poc test
 
 up:
 	$(COMPOSE) up --build -d
@@ -16,6 +16,15 @@ seed-sources:
 
 download-gis-poc-sources:
 	$(PYTHON) scripts/download_gis_poc_sources.py
+
+import-osm-context:
+	DATABASE_URL="$(DATABASE_URL)" $(PYTHON) scripts/import_osm_context.py
+
+import-municipal-source:
+	DATABASE_URL="$(DATABASE_URL)" $(PYTHON) scripts/import_municipal_source.py $(MUNICIPAL_IMPORT_ARGS)
+
+create-gis-map-examples:
+	DATABASE_URL="$(DATABASE_URL)" $(PYTHON) scripts/create_gis_map_examples.py
 
 verify-gis-demo:
 	DATABASE_URL="$(DATABASE_URL)" $(PYTHON) scripts/verify_gis_demo.py

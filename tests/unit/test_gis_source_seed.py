@@ -51,8 +51,44 @@ def test_committed_seed_has_required_coverage_statuses_and_poc_municipalities() 
     municipality_codes = {row["municipality_code"] for row in coverage}
     statuses = {row["status"] for row in coverage}
 
-    assert {"4000", "9000", "3000", "0070", "5000", "8310"} <= municipality_codes
+    assert {"4000", "9000", "3000", "0070", "5000", "0831"} <= municipality_codes
     assert {"not_found", "not_ingested", "not_enabled"} <= statuses
+
+
+def test_committed_osm_source_is_context_only_with_geofabrik_metadata() -> None:
+    payload = load_seed_file(Path("config/gis/source_registry.seed.yaml"))
+    validate_seed_payload(payload)
+
+    osm_source = next(source for source in payload["sources"] if source["source_id"] == "osm_context")
+
+    assert osm_source["provider_key"] == "osm"
+    assert osm_source["display_status"] == "context_only"
+    assert osm_source["display_as_official"] is False
+    assert "geofabrik" in osm_source["source_url"].lower()
+    assert osm_source["license_name"] == "ODbL 1.0"
+
+
+def test_committed_seed_configures_stage_5_poc_municipal_sources() -> None:
+    payload = load_seed_file(Path("config/gis/source_registry.seed.yaml"))
+    validate_seed_payload(payload)
+
+    sources = {source["source_id"]: source for source in payload["sources"]}
+    required = {
+        "haifa_municipal_gis_discovered": "4000",
+        "beer_sheva_municipal_gis_discovered": "9000",
+        "jerusalem_municipal_gis_discovered": "3000",
+        "ashdod_quarter_candidate": "0070",
+        "tel_aviv_open_data_discovered": "5000",
+        "yeruham_municipal_gis_discovered": "0831",
+    }
+
+    for source_id, municipality_code in required.items():
+        assert sources[source_id]["municipality_code"] == municipality_code
+        assert sources[source_id]["display_as_official"] is False
+        assert sources[source_id]["reuse_status"] == "municipal_license_under_review"
+        assert sources[source_id]["metadata"]["import_config"]["municipality_code"] == municipality_code
+    assert sources["tel_aviv_open_data_discovered"]["enabled"] is True
+    assert sources["tel_aviv_open_data_discovered"]["display_status"] == "municipal_license_under_review"
 
 
 def _source(source_id: str, **overrides: object) -> dict[str, object]:

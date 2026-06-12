@@ -1,0 +1,6 @@
+layer_key: neighborhoods
+municipality_code: "5000"
+municipality_name_he: תל אביב-יפו
+field_mappings:
+  source_object_id: [oid_shchuna, ms_shchuna]
+  name_he: [shem_shchuna]

@@ -1,0 +1,8 @@
+layer_key: address_points
+municipality_code: "5000"
+municipality_name_he: תל אביב-יפו
+field_mappings:
+  source_object_id: [oid_ktovet, id_ktovet, UniqueId]
+  street_name_he: [t_rechov]
+  house_number: [t_bayit_veknisa, ms_bayit]
+  full_address_he: [t_ktovet_melea]

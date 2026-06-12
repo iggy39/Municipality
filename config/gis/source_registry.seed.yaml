@@ -5,6 +5,7 @@ sources:
     name_he: גבולות רשויות מקומיות - משרד הפנים
     name_en: Ministry of Interior Municipal Boundaries
     owner_name: Ministry of Interior
+    source_url: https://ags.iplan.gov.il/arcgisiplan/rest/services/PlanningPublic/gvulot_retzef/MapServer/1
     layer_keys: [boundaries]
     provenance_level: official_national
     reuse_status: verified
@@ -109,7 +110,8 @@ sources:
     name_he: OpenStreetMap - שכבות הקשר
     name_en: OpenStreetMap Context
     owner_name: OpenStreetMap contributors
-    layer_keys: [context_pois, buildings]
+    source_url: https://download.geofabrik.de/asia/israel-and-palestine-latest-free.shp.zip
+    layer_keys: [context_pois, buildings, context_geometries]
     provenance_level: context
     reuse_status: verified
     geometry_status: context_geometry
@@ -118,8 +120,12 @@ sources:
     reuse_is_verified: true
     display_as_official: false
     enabled: true
+    license_name: ODbL 1.0
+    license_url: https://opendatacommons.org/licenses/odbl/1-0/
     attribution: OpenStreetMap contributors
-    metadata: {}
+    metadata:
+      extract_provider: Geofabrik
+      extract_format: free_shp_zip
   - source_id: ashdod_quarter_candidate
     provider_key: ashdod
     source_kind: municipal_candidate
@@ -136,7 +142,79 @@ sources:
     display_as_official: false
     enabled: true
     notes: Candidate data must not be displayed as verified official.
-    metadata: {}
+    metadata:
+      import_config:
+        layer_key: neighborhoods
+        municipality_code: "0070"
+        field_mappings:
+          source_object_id: [id, objectid, OBJECTID]
+          name_he: [name_he, shem_rova, NAME_HE]
+  - source_id: haifa_municipal_gis_discovered
+    provider_key: haifa
+    source_kind: municipal_open_data
+    name_he: חיפה - מקורות GIS שנמצאו
+    name_en: Haifa Municipal GIS Discovered Sources
+    municipality_code: "4000"
+    layer_keys: [address_points, neighborhoods, poi_points, context_geometries]
+    provenance_level: official_municipal
+    reuse_status: municipal_license_under_review
+    geometry_status: unknown
+    display_status: municipal_license_under_review
+    source_is_official: true
+    reuse_is_verified: false
+    display_as_official: false
+    enabled: true
+    notes: Generic municipal importer config placeholder; legal/source review is still open.
+    metadata:
+      import_config:
+        municipality_code: "4000"
+        field_mappings:
+          source_object_id: [id, objectid, OBJECTID]
+          name_he: [name_he, name, shem]
+  - source_id: beer_sheva_municipal_gis_discovered
+    provider_key: beer_sheva
+    source_kind: municipal_open_data
+    name_he: באר שבע - מקורות GIS שנמצאו
+    name_en: Beer Sheva Municipal GIS Discovered Sources
+    municipality_code: "9000"
+    layer_keys: [address_points, neighborhoods, poi_points]
+    provenance_level: official_municipal
+    reuse_status: municipal_license_under_review
+    geometry_status: unknown
+    display_status: municipal_license_under_review
+    source_is_official: true
+    reuse_is_verified: false
+    display_as_official: false
+    enabled: true
+    notes: Generic municipal importer config placeholder; legal/source review is still open.
+    metadata:
+      import_config:
+        municipality_code: "9000"
+        field_mappings:
+          source_object_id: [id, objectid, OBJECTID]
+          name_he: [name_he, name, shem]
+  - source_id: jerusalem_municipal_gis_discovered
+    provider_key: jerusalem
+    source_kind: municipal_open_data
+    name_he: ירושלים - מקורות GIS שנמצאו
+    name_en: Jerusalem Municipal GIS Discovered Sources
+    municipality_code: "3000"
+    layer_keys: [address_points, neighborhoods, poi_points]
+    provenance_level: official_municipal
+    reuse_status: municipal_license_under_review
+    geometry_status: unknown
+    display_status: municipal_license_under_review
+    source_is_official: true
+    reuse_is_verified: false
+    display_as_official: false
+    enabled: true
+    notes: Generic municipal importer config placeholder; legal/source review is still open.
+    metadata:
+      import_config:
+        municipality_code: "3000"
+        field_mappings:
+          source_object_id: [id, objectid, OBJECTID]
+          name_he: [name_he, name, shem]
   - source_id: tel_aviv_open_data_discovered
     provider_key: tel_aviv
     source_kind: municipal_open_data
@@ -147,13 +225,40 @@ sources:
     provenance_level: official_municipal
     reuse_status: municipal_license_under_review
     geometry_status: unknown
-    display_status: unavailable
+    display_status: municipal_license_under_review
     source_is_official: true
     reuse_is_verified: false
     display_as_official: false
-    enabled: false
-    notes: Disabled until legal review.
-    metadata: {}
+    enabled: true
+    notes: Visible in demos as municipal data under license/reuse review; do not display as approved official reuse.
+    metadata:
+      import_config:
+        municipality_code: "5000"
+        field_mappings:
+          source_object_id: [id, objectid, OBJECTID]
+          name_he: [name_he, name, shem]
+  - source_id: yeruham_municipal_gis_discovered
+    provider_key: yeruham
+    source_kind: municipal_open_data
+    name_he: ירוחם - מקורות GIS שנמצאו
+    name_en: Yeruham Municipal GIS Discovered Sources
+    municipality_code: "0831"
+    layer_keys: [address_points, neighborhoods, poi_points]
+    provenance_level: official_municipal
+    reuse_status: municipal_license_under_review
+    geometry_status: unknown
+    display_status: municipal_license_under_review
+    source_is_official: true
+    reuse_is_verified: false
+    display_as_official: false
+    enabled: true
+    notes: Small-authority generic municipal importer config placeholder; legal/source review is still open.
+    metadata:
+      import_config:
+        municipality_code: "0831"
+        field_mappings:
+          source_object_id: [id, objectid, OBJECTID]
+          name_he: [name_he, name, shem]
 
 coverage:
   - municipality_code: "4000"
@@ -166,6 +271,11 @@ coverage:
     layer_key: parcels
     status: not_ingested
     source_id: mapi_parcels
+  - municipality_code: "4000"
+    municipality_name_he: חיפה
+    layer_key: neighborhoods
+    status: municipal_license_under_review
+    source_id: haifa_municipal_gis_discovered
   - municipality_code: "9000"
     municipality_name_he: באר שבע
     layer_key: boundaries
@@ -176,6 +286,11 @@ coverage:
     layer_key: plans
     status: not_ingested
     source_id: xplan_blue_lines
+  - municipality_code: "9000"
+    municipality_name_he: באר שבע
+    layer_key: neighborhoods
+    status: municipal_license_under_review
+    source_id: beer_sheva_municipal_gis_discovered
   - municipality_code: "3000"
     municipality_name_he: ירושלים
     layer_key: boundaries
@@ -186,6 +301,11 @@ coverage:
     layer_key: context_pois
     status: not_enabled
     source_id: osm_context
+  - municipality_code: "3000"
+    municipality_name_he: ירושלים
+    layer_key: address_points
+    status: municipal_license_under_review
+    source_id: jerusalem_municipal_gis_discovered
   - municipality_code: "0070"
     municipality_name_he: אשדוד
     layer_key: neighborhoods
@@ -206,12 +326,17 @@ coverage:
     layer_key: neighborhoods
     status: not_enabled
     source_id: tel_aviv_open_data_discovered
-  - municipality_code: "8310"
+  - municipality_code: "0831"
     municipality_name_he: ירוחם
     layer_key: boundaries
     status: not_ingested
     source_id: moin_municipal_boundaries
-  - municipality_code: "8310"
+  - municipality_code: "0831"
     municipality_name_he: ירוחם
     layer_key: neighborhoods
     status: not_found
+  - municipality_code: "0831"
+    municipality_name_he: ירוחם
+    layer_key: poi_points
+    status: municipal_license_under_review
+    source_id: yeruham_municipal_gis_discovered
