@@ -31,8 +31,8 @@ def build_source_fragment(session: Session, source_id: str) -> dict[str, Any]:
 def source_fragment_from_row(row: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "source_id": row["source_id"],
-        "name_he": row.get("name_he"),
-        "name_en": row.get("name_en"),
+        "name_he": row.get("source_name_he") or row.get("name_he"),
+        "name_en": row.get("source_name_en") or row.get("name_en"),
         "provider_key": row.get("provider_key"),
         "provenance_level": _string_value(row.get("provenance_level")),
         "reuse_status": _string_value(row.get("reuse_status")),

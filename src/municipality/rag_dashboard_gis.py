@@ -13,8 +13,8 @@ from municipality.gis_provenance import source_fragment_from_row
 
 SOURCE_COLUMNS = """
 sr.source_id AS source_id,
-sr.name_he,
-sr.name_en,
+sr.name_he AS source_name_he,
+sr.name_en AS source_name_en,
 sr.provider_key,
 sr.provenance_level,
 sr.reuse_status,

@@ -863,7 +863,6 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       stroke: rgba(255, 255, 255, 0.94);
       stroke-width: 4px;
       stroke-linejoin: round;
-      font-size: 13px;
       font-weight: 900;
       fill: #172033;
       text-anchor: middle;
@@ -2087,6 +2086,10 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
                 גודל אייקונים: <strong id="map-icon-size-label">קטן</strong>
                 <input id="map-icon-size" type="range" min="0.12" max="0.6" step="0.02" value="0.18" />
               </label>
+              <label class="mapIconSizeControl" for="map-label-size">
+                גודל שמות: <strong id="map-label-size-label">קטן</strong>
+                <input id="map-label-size" type="range" min="0.18" max="0.9" step="0.03" value="0.28" />
+              </label>
               <button id="map-toggle-all-filters" class="mapLayerToolButton" type="button">כיבוי כל המסננים</button>
             </div>
             <p class="mapLayerPopoverSectionTitle">מקורות</p>
@@ -2541,8 +2544,10 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       let realGisDecorations = [];
       let currentMapExample = mapExampleSelect?.value || "tel_aviv_parcel";
       let currentMapIconScale = 0.18;
+      let currentMapLabelScale = 0.28;
       let gisMapProfileRequest = null;
       window.__municipalMapIconScale = currentMapIconScale;
+      window.__municipalMapLabelScale = currentMapLabelScale;
       const MAP_POI_ICON_LIMIT = 10;
       const MAP_MUNICIPAL_ICON_LIMIT = 6;
       const MAP_PARK_ICON_LIMIT = 3;
@@ -3430,7 +3435,16 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         text.classList.add("realGisStaticLabel");
         text.setAttribute("x", point[0].toFixed(1));
         text.setAttribute("y", point[1].toFixed(1));
+        const baseFontSize = Number(attrs["font-size"] || 13);
+        text.setAttribute("data-map-label", "true");
+        text.setAttribute("data-base-font-size", String(baseFontSize));
+        const scaledFontSize = baseFontSize * (window.__municipalMapLabelScale || 0.28);
+        text.setAttribute("font-size", String(scaledFontSize));
+        text.style.fontSize = `${scaledFontSize}px`;
         for (const [key, value] of Object.entries(attrs)) {
+          if (key === "font-size") {
+            continue;
+          }
           text.setAttribute(key, value);
         }
         text.textContent = label;
@@ -4905,6 +4919,8 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         popover: document.getElementById("map-layer-popover"),
         iconSize: document.getElementById("map-icon-size"),
         iconSizeLabel: document.getElementById("map-icon-size-label"),
+        labelSize: document.getElementById("map-label-size"),
+        labelSizeLabel: document.getElementById("map-label-size-label"),
         toggleAll: document.getElementById("map-toggle-all-filters")
       };
       if (!frame || !staticMap) {
@@ -5042,6 +5058,11 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         if (scale <= 0.38) return "בינוני";
         return "גדול";
       };
+      const labelSizeText = (scale) => {
+        if (scale <= 0.32) return "קטן";
+        if (scale <= 0.6) return "בינוני";
+        return "גדול";
+      };
       const applyMapIconScale = (scale) => {
         const normalized = Math.max(0.12, Math.min(0.6, Number(scale) || 0.18));
         window.__municipalMapIconScale = normalized;
@@ -5051,6 +5072,19 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         for (const icon of staticMap.querySelectorAll("[data-map-icon]")) {
           const baseTransform = icon.getAttribute("data-base-transform") || "";
           icon.setAttribute("transform", `${baseTransform} scale(${normalized})`);
+        }
+      };
+      const applyMapLabelScale = (scale) => {
+        const normalized = Math.max(0.18, Math.min(0.9, Number(scale) || 0.28));
+        window.__municipalMapLabelScale = normalized;
+        if (controls.labelSizeLabel) {
+          controls.labelSizeLabel.textContent = labelSizeText(normalized);
+        }
+        for (const label of staticMap.querySelectorAll("[data-map-label]")) {
+          const baseFontSize = Number(label.getAttribute("data-base-font-size") || 13);
+          const fontSize = baseFontSize * normalized;
+          label.setAttribute("font-size", String(fontSize));
+          label.style.fontSize = `${fontSize}px`;
         }
       };
       const applyStaticMapFilters = () => {
@@ -5067,6 +5101,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         if (window.__municipalDashboardGisMap && typeof window.__renderMunicipalSvgGisMap === "function") {
           window.__renderMunicipalSvgGisMap(window.__municipalDashboardGisMap);
           applyMapIconScale(controls.iconSize?.value || window.__municipalMapIconScale || 0.18);
+          applyMapLabelScale(controls.labelSize?.value || window.__municipalMapLabelScale || 0.28);
           return;
         }
         applyStaticMapFilters();
@@ -5089,8 +5124,15 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         }
         applyMapIconScale(event.target.value);
       });
+      controls.labelSize?.addEventListener("input", (event) => {
+        if (!isStaticMapActive()) {
+          return;
+        }
+        applyMapLabelScale(event.target.value);
+      });
       window.__applyMunicipalSvgFilters = applyStaticMapFilters;
       applyMapIconScale(controls.iconSize?.value || window.__municipalMapIconScale || 0.18);
+      applyMapLabelScale(controls.labelSize?.value || window.__municipalMapLabelScale || 0.28);
       applyStaticMapFilters();
 
       let pan = null;
@@ -5494,7 +5536,7 @@ def _layer_text_labels(payload: dict[str, Any], layer_key: str, project, object_
             continue
         x, y = point
         labels.append(
-            f'<text class="realGisStaticLabel" data-map-layer="municipal" data-map-object="{object_type}" x="{x:.1f}" y="{y:.1f}">{_escape_text(label)}</text>'
+            f'<text class="realGisStaticLabel" data-map-layer="municipal" data-map-object="{object_type}" data-map-label="true" data-base-font-size="15" font-size="4.2" style="font-size:4.2px" x="{x:.1f}" y="{y:.1f}">{_escape_text(label)}</text>'
         )
     return "".join(labels)
 
