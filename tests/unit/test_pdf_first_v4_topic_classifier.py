@@ -83,3 +83,21 @@ def test_indexed_candidate_finder_retrieves_auditorium_as_culture() -> None:
     )
 
     assert result["candidates"][0]["root_topic_id"] == "root_culture_sport"
+
+
+def test_policy_routes_municipal_tax_to_finance() -> None:
+    matches = topic_policy_matches("ביטול תוספת הארנונה לשנת 2022 לתושבי העיר")
+
+    assert matches[0]["root_topic_id"] == "root_budget_finance"
+
+
+def test_policy_routes_local_factory_relocation_to_economy() -> None:
+    matches = topic_policy_matches("העתקת חלק ניכר ממפעל אלתא באשדוד לבאר שבע ומעבר עובדים")
+
+    assert matches[0]["root_topic_id"] == "root_local_economy"
+
+
+def test_policy_routes_road_safety_and_speed_bumps_to_transport() -> None:
+    matches = topic_policy_matches("הצבת באמפרים והורדת מהירות כדי למנוע תאונות דרכים")
+
+    assert matches[0]["root_topic_id"] == "root_transport_safety"

@@ -46,7 +46,7 @@ from municipality.pdf_first_v4_topic_classifier import build_topic_profile_index
 DEFAULT_MODEL = "dicta-il/DictaLM-3.0-24B-Thinking:bf16"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 EXCLUDED_STRUCTURAL_ROLES = {"noise", "table_header_only"}
-CACHE_VERSION = "step4_v4_global_topic_assign_v22_unknown_root_positive_alignment"
+CACHE_VERSION = "step4_v4_global_topic_assign_v24_body_fragment_verification"
 
 
 def main() -> int:
@@ -146,6 +146,7 @@ def main() -> int:
 
     assignments = [assignments_by_id.get(item["structure_unit_id"]) or _fallback_assignment(item, reason="missing_after_retry") for item in items]
     assignments = _mark_inherited_duplicate_topic_rows(assignments)
+    assignments = _normalize_protocol_non_topic_assignments(assignments)
 
     validation = _validate(assignments=assignments, items=items, item_count=len(items), model_errors=model_errors, deterministic_count=deterministic_count, low_confidence_candidate_count=low_confidence_candidate_count, dicta_mode=str(args.dicta_mode))
     output = {
@@ -191,6 +192,9 @@ def _build_item(*, unit: dict[str, Any], facts: list[dict[str, Any]], max_raw_ch
     if repaired_topic_text:
         topic_text = repaired_topic_text
     topic_contract = _topic_contract_from_headline(topic_text, structural_role=str(unit.get("structural_role") or ""), packet_role=packet_role)
+    non_topic_reason = _non_topic_protocol_reason(headline=topic_text or raw_text, raw_text=raw_text, structural_role=str(unit.get("structural_role") or ""), packet_role=packet_role)
+    if non_topic_reason:
+        topic_contract = {**topic_contract, "is_topic_bearing": False, "topic_subject_he": None, "non_topic_reason": non_topic_reason}
     row_type = _row_type_for_unit(unit=unit, topic_contract=topic_contract, packet_role=packet_role)
     if row_type in {"metadata", "container", "vote_or_result", "fragment", "attribution_fragment"}:
         topic_contract = {**topic_contract, "is_topic_bearing": False, "topic_subject_he": None}
@@ -241,6 +245,7 @@ def _build_item(*, unit: dict[str, Any], facts: list[dict[str, Any]], max_raw_ch
         "topic_subject_he": topic_contract.get("topic_subject_he"),
         "attribution_he": topic_contract.get("attribution_he"),
         "is_topic_bearing": bool(topic_contract.get("is_topic_bearing")),
+        "non_topic_reason": topic_contract.get("non_topic_reason"),
         "agenda_item_title_he": topic_context.get("agenda_item_title_he"),
         "parent_agenda_unit_id": topic_context.get("parent_agenda_unit_id"),
         "topic_context_source": topic_context.get("context_source"),
@@ -275,6 +280,9 @@ def _call_dictalm(*, items: list[dict[str, Any]], topic_tree: dict[str, Any], mo
             "For topic-bearing protocol rows, do not choose procedural carrier roots such as root_agenda_queries or root_order_proposals merely because the text contains שאילתה or הצעה לסדר.",
             "Choose root_agenda_queries/root_order_proposals only when the row is about the council procedure itself and no substantive municipal subject is present.",
             "If the row says שאילתה/הצעה לסדר בנושא X, classify X, not the carrier.",
+            "If the item is only a section heading, procedural dialogue, speaking-time dispute, vote-order discussion, short continuation fragment, or has no municipal subject, set is_topic_bearing false and root_topic_id null.",
+            "Do not use root_agenda_queries as a substitute for non-topic. Use root_agenda_queries only for real agenda/query procedure topics.",
+            "If a substantive subject has no matching child topic, choose the closest allowed root_topic_id and leave child_choice_id/child_label_he null.",
             "Use existing child topics from the supplied tree when they match evidence.",
             "Choose child_choice_id from item.candidate_child_topics when a candidate is evidence-backed and more specific than the root.",
             "Treat candidate_child_topics as a closed classifier label set; prefer evidence-backed existing_tree candidates over new document-specific phrasing.",
@@ -288,7 +296,7 @@ def _call_dictalm(*, items: list[dict[str, Any]], topic_tree: dict[str, Any], mo
             "For protocol items, separate agenda carrier/type from semantic subject: carrier examples include question/proposal/approval/protocol form; classify the semantic subject, not the carrier.",
             "Return agenda_carrier_he, topic_subject_he, attribution_he, and is_topic_bearing for every item so the assignment can be audited.",
             "Do not include requester, submitter, signer, vote, date, or person attribution inside child_label_he or topic_subject_he.",
-            "If the headline/context is only a container, fragment, vote/result, person name, date, or generic procedural heading, set is_topic_bearing false and choose root-only.",
+            "If the headline/context is only a container, fragment, vote/result, person name, date, or generic procedural heading, set is_topic_bearing false and root_topic_id null.",
             "For protocol items, raw_text is evidence only; do not use transcript/body details as the primary topic source.",
             "topic_supporting_quote_he must be copied from raw_text, explicit_actions, document_context, or attachment context.",
             "Metadata role does not force root-only when explicit_actions or document_context contain a concrete municipal subject.",
@@ -452,6 +460,7 @@ def _allowed_root_topics(topic_tree: dict[str, Any]) -> list[dict[str, Any]]:
                 "root_topic_id": root_topic_id,
                 "root_label_he": row.get("root_label_he") or root_label_for_id(root_topic_id),
                 "keywords": [str(value) for value in (row.get("keywords") or [])[:16] if str(value).strip()],
+                "aliases": [str(value) for value in (((row.get("profile") if isinstance(row.get("profile"), dict) else {}) or {}).get("aliases_he") or [])[:8] if str(value).strip()],
             }
         )
     return out
@@ -580,6 +589,8 @@ def _assignment_from_parsed(*, item: dict[str, Any], parsed: dict[str, Any] | No
         return _fallback_assignment(item, reason="model_omitted_unit")
     text = str(item.get("raw_text") or "")
     topic_text = _topic_basis_text(item)
+    if _parsed_declares_non_topic(parsed) or _non_topic_protocol_reason(headline=topic_text, raw_text=text, structural_role=str(item.get("structural_role") or ""), packet_role=str((item.get("document_context") or {}).get("packet_role") or "")):
+        return _non_topic_assignment(item, reason="model_or_shape_non_topic")
     parsed_subject = clean_protocol_subject_text(parsed.get("clean_subject_he") or parsed.get("topic_subject_he"))
     if _is_protocol_item(item) and parsed_subject:
         topic_text = parsed_subject
@@ -590,7 +601,13 @@ def _assignment_from_parsed(*, item: dict[str, Any], parsed: dict[str, Any] | No
         if dicta_root_topic_id is None:
             return _unknown_root_candidate_assignment(item=item, parsed=parsed, raw_dicta_root_topic_id=raw_dicta_root_topic_id, subject=topic_text or text)
     fallback_root_topic_id = infer_root_topic_id(topic_text or text)
+    if _is_protocol_item(item) and bool(item.get("is_topic_bearing")) and dicta_root_topic_id in {"root_agenda_queries", "root_order_proposals"}:
+        recovered_root = _recover_root_only_topic(item=item, parsed=parsed, subject=topic_text or text, fallback_root_topic_id=fallback_root_topic_id)
+        if recovered_root:
+            dicta_root_topic_id = recovered_root
     root_adjudication = _adjudicate_assignment_root(item=item, parsed=parsed, subject=topic_text or text, dicta_root_topic_id=dicta_root_topic_id, fallback_root_topic_id=fallback_root_topic_id)
+    if dicta_root_topic_id and dicta_root_topic_id not in {raw_dicta_root_topic_id, None}:
+        root_adjudication = {**root_adjudication, "decision": f"{root_adjudication.get('decision') or 'root_adjudicated'}:procedural_root_recovered"}
     if raw_dicta_root_topic_id and raw_dicta_root_topic_id not in ROOT_BY_ID:
         root_adjudication = {**root_adjudication, "unknown_dicta_root_topic_id": raw_dicta_root_topic_id, "decision": f"{root_adjudication.get('decision') or 'root_adjudicated'}:unknown_dicta_root_aligned" if dicta_root_topic_id else f"{root_adjudication.get('decision') or 'root_adjudicated'}:unknown_dicta_root_unresolved"}
     root_topic_id = str(root_adjudication.get("root_topic_id") or "")
@@ -649,6 +666,20 @@ def _assignment_from_parsed(*, item: dict[str, Any], parsed: dict[str, Any] | No
     aliases = _dedupe_strings([*(resolved.get("aliases_he") or []), *(((selected_candidate or {}).get("aliases_he") or []) if selected_candidate else [])])
     if _assignment_requires_subject_review(item=item, root_topic_id=root_topic_id, child_label=child_label):
         return _review_assignment(item=item, root_topic_id=root_topic_id, root_label=root_label, reason="topic_subject_collapsed_to_procedural_root")
+    verified_root = _verified_body_root_override(item=item, root_topic_id=root_topic_id, root_adjudication=root_adjudication, child_label=child_label)
+    if verified_root and verified_root != root_topic_id:
+        root_topic_id = verified_root
+        root_label = root_label_for_id(root_topic_id) or root_label
+        child_label = None
+        raw_child = None
+        route = f"{route}:body_root_evidence_corrected"
+        root_adjudication = {
+            **root_adjudication,
+            "root_topic_id": root_topic_id,
+            "resolved_root_topic_id": root_topic_id,
+            "resolved_root_label_he": root_label,
+            "decision": f"{root_adjudication.get('decision') or 'root_adjudication'}:body_root_evidence_corrected",
+        }
     parsed_contract = _parsed_topic_contract(parsed)
     if _parsed_subject_should_preserve_item_subject(parsed_contract=parsed_contract, item=item, root_label=root_label):
         parsed_contract["topic_subject_he"] = item.get("topic_subject_he")
@@ -678,6 +709,42 @@ def _adjudicate_assignment_root(*, item: dict[str, Any], parsed: dict[str, Any],
         "adjudicated_root_label_he": root_label_for_id(str(adjudication.get("root_topic_id") or "")),
         "policy_matches": policy_matches,
     }
+
+
+def _parsed_declares_non_topic(parsed: dict[str, Any]) -> bool:
+    if "is_topic_bearing" not in parsed:
+        return False
+    if bool(parsed.get("is_topic_bearing")):
+        return False
+    root_topic_id = str(parsed.get("root_topic_id") or "").strip()
+    return not root_topic_id or root_topic_id in {"root_agenda_queries", "root_order_proposals"}
+
+
+def _recover_root_only_topic(*, item: dict[str, Any], parsed: dict[str, Any], subject: str, fallback_root_topic_id: str | None) -> str | None:
+    """Recover substantive root-only topics when Dicta falls back to a carrier root.
+
+    The recovery is intentionally root-only: it never creates/accepts a child topic,
+    and it avoids procedural roots. This covers one-off real subjects while keeping
+    child taxonomy maintenance separate from root classification.
+    """
+    if _non_topic_protocol_reason(headline=subject, raw_text=str(item.get("raw_text") or ""), structural_role=str(item.get("structural_role") or ""), packet_role=str((item.get("document_context") or {}).get("packet_role") or "")):
+        return None
+    for match in topic_policy_matches(subject, limit=3):
+        root_topic_id = str(match.get("root_topic_id") or "")
+        if root_topic_id in ROOT_BY_ID and root_topic_id not in {"root_agenda_queries", "root_order_proposals"}:
+            return root_topic_id
+    if fallback_root_topic_id in ROOT_BY_ID and fallback_root_topic_id not in {"root_agenda_queries", "root_order_proposals"}:
+        return fallback_root_topic_id
+    candidates = [row for row in item.get("root_topic_candidates") or [] if str(row.get("root_topic_id") or "") in ROOT_BY_ID and str(row.get("root_topic_id") or "") not in {"root_agenda_queries", "root_order_proposals"}]
+    candidates.sort(key=lambda row: float(row.get("score") or 0.0), reverse=True)
+    if not candidates:
+        return None
+    best = candidates[0]
+    score = float(best.get("score") or 0.0)
+    matched_terms = [str(term) for term in best.get("matched_terms") or [] if str(term).strip()]
+    if score >= 0.58 or (score >= 0.44 and matched_terms):
+        return str(best.get("root_topic_id") or "")
+    return None
 
 
 def _align_unknown_dicta_root(*, item: dict[str, Any], parsed: dict[str, Any], subject: str) -> str | None:
@@ -742,8 +809,10 @@ def _allowed_root_alignment_scores(text: str) -> list[dict[str, Any]]:
         label = str(root.get("root_label_he") or root_label_for_id(root_topic_id) or "")
         scores = [_alignment_phrase_score(label, normalized) * 0.92]
         hits: list[str] = []
-        for keyword in root.get("keywords") or []:
-            score = _alignment_phrase_score(str(keyword), normalized)
+        profile = root.get("profile") if isinstance(root.get("profile"), dict) else {}
+        phrases = [*(root.get("keywords") or []), *(profile.get("aliases_he") or []), *(profile.get("aliases_en") or []), profile.get("summary_he")]
+        for keyword in phrases:
+            score = _alignment_phrase_score(str(keyword or ""), normalized)
             if score > 0.0:
                 scores.append(score)
                 hits.append(str(keyword))
@@ -759,9 +828,13 @@ def _alignment_phrase_score(phrase: str, normalized_text: str) -> float:
     phrase_norm = _norm(phrase)
     if not phrase_norm or not normalized_text:
         return 0.0
+    phrase_tokens = _hebrew_tokens(phrase_norm)
+    if len(phrase_tokens) == 1 and phrase_norm == phrase_tokens[0]:
+        # Single Hebrew keywords are too short for substring matching:
+        # e.g. "רב" inside "הרלב\"ד" or "מים" inside an unrelated word.
+        return 0.9 if _single_hebrew_keyword_in_text(phrase_tokens[0], normalized_text) else 0.0
     if phrase_norm in normalized_text:
         return 0.9 if len(_hebrew_tokens(phrase_norm)) <= 1 else 0.96
-    phrase_tokens = _hebrew_tokens(phrase_norm)
     if not phrase_tokens:
         return 0.0
     text_tokens = set(_hebrew_tokens(normalized_text))
@@ -769,6 +842,19 @@ def _alignment_phrase_score(phrase: str, normalized_text: str) -> float:
     if len(hits) >= min(len(phrase_tokens), max(2, len(phrase_tokens) - 1)):
         return 0.72
     return 0.0
+
+
+def _single_hebrew_keyword_in_text(keyword: str, normalized_text: str) -> bool:
+    prefixes = {"ו", "ה", "ב", "כ", "ל", "מ"}
+    for token in _hebrew_tokens(normalized_text):
+        stripped = token
+        for _ in range(3):
+            if stripped == keyword:
+                return True
+            if len(stripped) <= len(keyword) or stripped[:1] not in prefixes:
+                break
+            stripped = stripped[1:]
+    return False
 
 
 def _unknown_root_candidate_assignment(*, item: dict[str, Any], parsed: dict[str, Any], raw_dicta_root_topic_id: str, subject: str) -> dict[str, Any]:
@@ -822,7 +908,16 @@ def _parsed_subject_should_preserve_item_subject(*, parsed_contract: dict[str, A
 def _fallback_assignment(item: dict[str, Any], *, reason: str) -> dict[str, Any]:
     text = str(item.get("raw_text") or "")
     topic_text = _topic_basis_text(item)
+    if _non_topic_protocol_reason(headline=topic_text, raw_text=text, structural_role=str(item.get("structural_role") or ""), packet_role=str((item.get("document_context") or {}).get("packet_role") or "")):
+        return _non_topic_assignment(item, reason=f"fallback_{reason}_non_topic")
     fallback_root_topic_id = infer_root_topic_id(topic_text or text)
+    if _is_protocol_item(item) and bool(item.get("is_topic_bearing")) and fallback_root_topic_id == "root_agenda_queries":
+        recovered_root = _recover_root_only_topic(item=item, parsed={}, subject=topic_text or text, fallback_root_topic_id=fallback_root_topic_id)
+        if recovered_root:
+            fallback_root_topic_id = recovered_root
+    evidence_root = _strong_body_evidence_root(item)
+    if evidence_root:
+        fallback_root_topic_id = evidence_root
     root_adjudication = _adjudicate_assignment_root(item=item, parsed={}, subject=topic_text or text, dicta_root_topic_id=None, fallback_root_topic_id=fallback_root_topic_id)
     root_topic_id = str(root_adjudication.get("root_topic_id") or fallback_root_topic_id)
     if root_topic_id not in ROOT_BY_ID:
@@ -905,14 +1000,18 @@ def _assignment_from_candidate_finder(item: dict[str, Any]) -> dict[str, Any]:
     status = str(resolved.get("status") or "active")
     reject_reason = resolved.get("reason") or (validation.reason if validation else None)
     if child_label and selected_candidate and str(selected_candidate.get("evidence_source") or "") not in {"existing_tree", "referenced_attachment"}:
-        status = "candidate"
-        reject_reason = reject_reason or "new_child_candidate"
+        raw_child = child_label
+        child_label = None
+        status = "active"
+        reject_reason = None
     root_adjudication = _adjudicate_assignment_root(item=item, parsed={"policy_id": decision.get("policy_id")}, subject=topic_text or text, dicta_root_topic_id=None, fallback_root_topic_id=root_topic_id)
     if root_topic_id != str(root_adjudication.get("root_topic_id") or ""):
         root_adjudication = {**root_adjudication, "resolved_root_topic_id": root_topic_id, "resolved_root_label_he": root_label, "decision": f"{root_adjudication.get('decision') or 'root_adjudication'}:candidate_finder_resolved_root"}
     route = f"deterministic_v4_candidate_finder:{decision.get('reason') or 'strong_match'}"
     if selected_candidate and child_label:
         route = f"{route}:{selected_candidate.get('evidence_source') or 'child_candidate'}"
+    elif raw_child and selected_candidate and str(selected_candidate.get("evidence_source") or "") not in {"existing_tree", "referenced_attachment"}:
+        route = f"{route}:{selected_candidate.get('evidence_source') or 'child_candidate'}:new_child_demoted_to_root"
     if resolved.get("route_suffix"):
         route = f"{route}:{resolved.get('route_suffix')}"
     aliases = _dedupe_strings([*(resolved.get("aliases_he") or []), *(((selected_candidate or {}).get("aliases_he") or []) if selected_candidate else [])])
@@ -926,6 +1025,9 @@ def _candidate_review_assignment(*, item: dict[str, Any], reason: str) -> dict[s
     root_topic_id = str(decision.get("root_topic_id") or infer_root_topic_id(topic_text or text))
     if root_topic_id not in ROOT_BY_ID:
         root_topic_id = infer_root_topic_id(topic_text or text)
+    evidence_root = _strong_body_evidence_root(item)
+    if evidence_root:
+        root_topic_id = evidence_root
     root_label = root_label_for_id(root_topic_id) or ""
     return _assignment_payload(item=item, root_topic_id=root_topic_id, root_label=root_label, child_label=None, raw_child_label=None, status="candidate", reject_reason=f"non_blocking_topic_review:{reason}:{decision.get('reason') or 'no_decision'}", aliases=[], confidence=min(0.71, max(0.25, _confidence(decision.get("confidence")))), quote=text[:500], route=f"deterministic_v4_candidate_review:{reason}:{decision.get('reason') or 'no_decision'}", rationale_he="ambiguous topic imported as candidate so protocol ingestion can continue", root_adjudication=_adjudicate_assignment_root(item=item, parsed={}, subject=topic_text or text, dicta_root_topic_id=None, fallback_root_topic_id=root_topic_id))
 
@@ -936,7 +1038,7 @@ def _skip_model_for_row_type(*, row_type: str, packet_role: str) -> bool:
     return row_type in {"metadata", "container", "vote_or_result", "fragment", "attribution_fragment"}
 
 
-def _non_topic_assignment(item: dict[str, Any]) -> dict[str, Any]:
+def _non_topic_assignment(item: dict[str, Any], *, reason: str | None = None) -> dict[str, Any]:
     topic_text = _topic_basis_text(item)
     row_type = str(item.get("row_type") or "fragment")
     root_topic_id = infer_root_topic_id(topic_text) if topic_text and row_type == "vote_or_result" else "root_agenda_queries"
@@ -944,6 +1046,8 @@ def _non_topic_assignment(item: dict[str, Any]) -> dict[str, Any]:
     selected_candidate = _best_high_confidence_candidate(item=item, root_topic_id=root_topic_id) if row_type == "vote_or_result" else None
     child_label = clean_topic_label((selected_candidate or {}).get("label_he")) if selected_candidate else None
     route = f"deterministic_v4_row_type:{row_type}"
+    if reason:
+        route = f"{route}:{reason}"
     if selected_candidate and child_label:
         route = f"{route}:inherited_candidate"
     return _assignment_payload(
@@ -959,11 +1063,49 @@ def _non_topic_assignment(item: dict[str, Any]) -> dict[str, Any]:
         quote=str(item.get("raw_text") or "")[:500],
         route=route,
         rationale_he="row type is not a standalone topic-bearing agenda subject",
+        parsed_contract={"is_topic_bearing": False, "topic_subject_he": None, "clean_subject_he": None},
     )
 
 
 def _assignment_requires_subject_review(*, item: dict[str, Any], root_topic_id: str, child_label: str | None) -> bool:
     return _is_protocol_item(item) and bool(item.get("is_topic_bearing")) and root_topic_id == "root_agenda_queries" and not child_label
+
+
+def _verified_body_root_override(*, item: dict[str, Any], root_topic_id: str, root_adjudication: dict[str, Any], child_label: str | None) -> str | None:
+    if not _is_protocol_item(item) or child_label:
+        return None
+    if str(item.get("structural_role") or "") not in {"body", "continuation", "task_row"}:
+        return None
+    if root_adjudication.get("policy_id"):
+        return None
+    evidence_root = _strong_body_evidence_root(item)
+    if not evidence_root or evidence_root == root_topic_id:
+        return None
+    return evidence_root
+
+
+def _strong_body_evidence_root(item: dict[str, Any]) -> str | None:
+    text = _join_unique([item.get("topic_subject_he"), item.get("topic_headline_he"), item.get("raw_text")])
+    if not text:
+        return None
+    for match in topic_policy_matches(text, limit=3):
+        root_topic_id = str(match.get("root_topic_id") or "")
+        if root_topic_id in ROOT_BY_ID and root_topic_id not in {"root_agenda_queries", "root_order_proposals"}:
+            return root_topic_id
+    scored = [row for row in _allowed_root_alignment_scores(text) if str(row.get("root_topic_id") or "") not in {"root_agenda_queries", "root_order_proposals"}]
+    if not scored:
+        return None
+    best = scored[0]
+    second = scored[1] if len(scored) > 1 else {"score": 0.0}
+    best_score = float(best.get("score") or 0.0)
+    margin = best_score - float(second.get("score") or 0.0)
+    matched_terms = [str(term) for term in best.get("matched_terms") or [] if str(term).strip()]
+    if best_score >= 0.82 and margin >= 0.12 and len(matched_terms) >= 2:
+        return str(best.get("root_topic_id") or "")
+    second_terms = [str(term) for term in second.get("matched_terms") or [] if str(term).strip()]
+    if best_score >= 0.82 and margin >= 0.0 and len(matched_terms) >= 2 and len(second_terms) <= 1:
+        return str(best.get("root_topic_id") or "")
+    return None
 
 
 def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label: str, child_label: str | None, raw_child_label: str | None, status: str, reject_reason: str | None, aliases: list[str], confidence: float, quote: str, route: str, rationale_he: str, parsed_contract: dict[str, Any] | None = None, root_adjudication: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1060,6 +1202,61 @@ def _mark_inherited_duplicate_topic_rows(assignments: list[dict[str, Any]]) -> l
     return out
 
 
+def _normalize_protocol_non_topic_assignments(assignments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    procedural_non_topic_subjects: set[str] = set()
+    for row in assignments:
+        current = dict(row)
+        if str(current.get("packet_role") or "") != "protocol":
+            out.append(current)
+            continue
+        reason = _post_assignment_non_topic_reason(current)
+        if reason:
+            current = _convert_assignment_to_non_topic_fragment(current, reason=reason)
+            key = _duplicate_subject_norm(current.get("topic_headline_he") or current.get("topic_identification_context") or "")
+            if key:
+                procedural_non_topic_subjects.add(key)
+        out.append(current)
+    final: list[dict[str, Any]] = []
+    for row in out:
+        current = dict(row)
+        key = _duplicate_subject_norm(current.get("topic_headline_he") or current.get("topic_identification_context") or current.get("topic_subject_he") or "")
+        if key and key in procedural_non_topic_subjects and str(current.get("topic_node_status") or "") == "candidate":
+            current = _convert_assignment_to_non_topic_fragment(current, reason="duplicate_procedural_non_topic")
+        final.append(current)
+    return final
+
+
+def _post_assignment_non_topic_reason(row: dict[str, Any]) -> str | None:
+    text = _join_unique([row.get("topic_subject_he"), row.get("topic_headline_he"), row.get("topic_identification_context")])
+    role = str(row.get("structural_role") or "")
+    reason = _non_topic_protocol_reason(headline=text, raw_text=text, structural_role=role, packet_role=str(row.get("packet_role") or ""))
+    if reason:
+        return reason
+    if str(row.get("topic_node_status") or "") == "candidate" and str(row.get("root_topic_id") or "") == "root_agenda_queries" and role in {"body", "continuation", "task_row"}:
+        if not _has_explicit_local_topic_marker(text):
+            return "evidence_only_body_fragment"
+    return None
+
+
+def _convert_assignment_to_non_topic_fragment(row: dict[str, Any], *, reason: str) -> dict[str, Any]:
+    current = dict(row)
+    current["row_type"] = "fragment" if str(current.get("row_type") or "") != "container" else "container"
+    current["is_topic_bearing"] = False
+    current["skip_model_assignment"] = True
+    current["topic_subject_he"] = None
+    current["child_label_he"] = None
+    current["raw_child_label_he"] = None
+    current["child_topic_id"] = None
+    current["topic_node_status"] = "active"
+    current["topic_reject_reason"] = None
+    current["topic_review_status"] = None
+    route = str(current.get("topic_assignment_route") or "deterministic_v4_row_type")
+    current["topic_assignment_route"] = f"{route}:post_non_topic:{reason}"
+    current["rationale_he"] = "row normalized as non-topic/evidence-only protocol fragment"
+    return current
+
+
 def _section_root_key(row: dict[str, Any]) -> tuple[str, str] | None:
     scope = str(row.get("section_id") or row.get("parent_agenda_unit_id") or "")
     root_topic_id = str(row.get("root_topic_id") or "")
@@ -1102,7 +1299,9 @@ def _duplicate_subject_norm(value: Any) -> str:
 
 def _contract_value(parsed_contract: dict[str, Any], item: dict[str, Any], key: str) -> Any:
     if key == "is_topic_bearing":
-        return bool(item.get(key)) or bool(parsed_contract.get(key))
+        if key in parsed_contract:
+            return bool(parsed_contract.get(key))
+        return bool(item.get(key))
     value = parsed_contract.get(key)
     if value is None or value == "":
         return item.get(key)
@@ -1267,11 +1466,29 @@ def _row_type_for_unit(*, unit: dict[str, Any], topic_contract: dict[str, Any], 
         return "vote_or_result"
     if _looks_like_container_heading(headline):
         return "container"
+    if _non_topic_protocol_reason(headline=headline, raw_text=raw_text, structural_role=role, packet_role=packet_role):
+        return "fragment"
     if _looks_like_attribution_fragment(raw_text):
         return "attribution_fragment"
     if bool(topic_contract.get("is_topic_bearing")):
         return "topic_item"
     return "fragment"
+
+
+def _non_topic_protocol_reason(*, headline: str, raw_text: str, structural_role: str, packet_role: str) -> str | None:
+    if packet_role != "protocol":
+        return None
+    text = _compact(headline or raw_text)
+    raw = _compact(raw_text)
+    if not text and not raw:
+        return "empty_fragment"
+    if _looks_like_container_heading(text):
+        return "container_heading"
+    if _looks_like_no_topic_continuation(raw or text):
+        return "no_topic_continuation"
+    if _looks_like_procedural_dialogue_fragment(raw or text):
+        return "procedural_dialogue_fragment"
+    return None
 
 
 def _looks_like_protocol_metadata(text: str) -> bool:
@@ -1310,13 +1527,81 @@ def _looks_like_container_heading(text: str) -> bool:
     # These are agenda carriers/section labels, not municipal subjects by themselves.
     container_patterns = [
         r"^(?:סדר\s+)?ישיבת\s+המועצה$",
+        r"^(?:ה)?נושאים\s+לדיון(?:\s*[:.\-–]?\s*(?:שאילתות|הצעות\s+לסדר|אישורים|פרוטוקולים))?$",
         r"^סדר\s+יום(?:\s+ושאילתות)?$",
         r"^שאילתות(?:\s+\d+(?:\.\d+)?)?$",
         r"^הצעות\s+לסדר(?:\s+\d+(?:\.\d+)?)?$",
+        r"^אישורים$",
         r"^פרוטוקולים?$",
         r"^משימות$",
     ]
     return any(re.search(pattern, normalized) for pattern in container_patterns)
+
+
+def _looks_like_no_topic_continuation(text: str) -> bool:
+    compact = _compact(text).strip(" .:-–")
+    cleaned = clean_protocol_subject_text(compact)
+    if not compact and not cleaned:
+        return True
+    normalized = _norm(cleaned or compact)
+    if re.fullmatch(r"(?:תועבר|תועברו|יועבר|יועברו)\s+אלי(?:ך|כם)?\s+בהמשך", normalized):
+        return True
+    if re.search(r"מלל\s+בתמליל\s+המלא", normalized):
+        return True
+    if re.search(r"הדיון\s+הקודם|למען\s+הסדר\s+הטוב|הוועדה\s+עומדת\s+מאחורי\s+החלטתה", normalized) and not any(term in normalized for term in ["בנושא", "הנדון"]):
+        return True
+    tokens = [token for token in _hebrew_tokens(normalized) if len(token) >= 3]
+    if len(tokens) <= 2 and _has_short_topic_signal(normalized):
+        return False
+    return len(tokens) <= 2 and not any(term in normalized for term in ["בנושא", "הנדון", "הסכם", "מינוי", "תקציב", "ארנונה", "תמיכות", "הקצאה"])
+
+
+def _has_short_topic_signal(text: str) -> bool:
+    """Do not erase compact but meaningful agenda subjects.
+
+    Short headings often contain only one domain keyword, e.g. employee, tax,
+    road, or contract terms. Those are still valid topic subjects when the
+    allowed root tree has a clear non-procedural match.
+    """
+    for match in topic_policy_matches(text, limit=3):
+        root_topic_id = str(match.get("root_topic_id") or "")
+        if root_topic_id in ROOT_BY_ID and root_topic_id not in {"root_agenda_queries", "root_order_proposals"}:
+            return True
+    for row in _allowed_root_alignment_scores(text):
+        root_topic_id = str(row.get("root_topic_id") or "")
+        if root_topic_id in {"root_agenda_queries", "root_order_proposals"}:
+            continue
+        if root_topic_id in ROOT_BY_ID and float(row.get("score") or 0.0) >= 0.82 and row.get("matched_terms"):
+            return True
+    return False
+
+
+def _looks_like_procedural_dialogue_fragment(text: str) -> bool:
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    procedural_hits = sum(1 for term in ["מיקרופון", "לדבר", "רשות דיבור", "זמן דיבור", "סדר היום", "סדר יום", "הצבעה מיוחדת", "אני אתן לך", "אני לא נותן", "עוברים לאמצע"] if term in normalized)
+    if procedural_hits < 2:
+        return False
+    substantive_markers = ["בנושא", "הנדון", "הסכם", "ארנונה", "מפעל", "תאונות", "כביש", "תחבורה", "תמיכות", "הקצאה", "מינוי", "חינוך", "דירות", "שכירות"]
+    return not any(term in normalized for term in substantive_markers)
+
+
+def _has_explicit_local_topic_marker(text: str) -> bool:
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    markers = [
+        r"\bבנושא\b",
+        r"\bהנדון\b",
+        r"\bנושא\s+נוסף\b",
+        r"\bהנושא\s+הבא\b",
+        r"\bלעניין\b",
+        r"\bבעניין\b",
+        r"\bאישור\s+[^.]{3,120}",
+        r"\bהסכם\s+[^.]{3,120}",
+    ]
+    return any(re.search(pattern, normalized) for pattern in markers)
 
 
 def _looks_like_attribution_fragment(text: str) -> bool:
@@ -1345,9 +1630,12 @@ def _looks_like_vote_fragment(text: str) -> bool:
 def _split_headline_contract(headline: str) -> tuple[str | None, str, str | None]:
     attribution = _extract_attribution(headline)
     text = _clean_heading(headline)
+    text = re.sub(r"\bבנו\s+[\"'׳״]?שא[\"'׳״]?\b", "בנושא", text)
     if attribution:
         text = _strip_attribution_tail(text)
     patterns = [
+        (r"^(שאילת[אה]|שאילתה)\s+של\b.{0,120}?\s*בנושא\s+(.+)$", "שאילתה"),
+        (r"^(שאילת[אה]|שאילתה)\s+של\b.{0,120}?[\"'׳״]\s*(.{4,220})$", "שאילתה"),
         (r"^(שאילת[אה]|שאילתה)\s+בנושא\s+(.+)$", "שאילתה"),
         (r"^(הצעה\s+לסדר)(?:\s+\d+(?:\.\d+)?)?\s*[-–:]?\s+(.+)$", "הצעה לסדר"),
         (r"^(נושא\s+לדיון)\s+(.+)$", "נושא לדיון"),
@@ -1397,6 +1685,7 @@ def _strip_attribution_tail(value: Any) -> str:
         r"\s*\)?\s*בקשת(?:ו|ה|ם|ן)?\s+של\b.*$",
         r"\s*\)?\s*בקשה\s+של\b.*$",
         r",?\s+לבקשת(?:ו|ה|ם|ן)?\s+של\b.*$",
+        r",?\s+בבקשה\b.*$",
         r",?\s+מאת\b.*$",
         r",?\s+על\s+ידי\b.*$",
         r"\([^)]{0,80}\)\s*$",
@@ -1876,10 +2165,12 @@ def _compact_profile(profile: Any) -> dict[str, Any]:
 
 def _raw_candidate_labels(*, text: str, explicit_actions: list[str], document_context: dict[str, Any]) -> list[tuple[str, str, str]]:
     out: list[tuple[str, str, str]] = []
-    compact = _compact(text)
+    compact = re.sub(r"\bבנו\s+[\"'׳״]?שא[\"'׳״]?\b", "בנושא", _compact(text))
     patterns = [
         (r"(?:^|\s)(?:הנדון|נדון)\s*[:\-–]?\s+([^.;\n]{4,150})", "heading"),
         (r"(?:^|\s)(?:בנושא|נושא)\s*[:\-–]?\s+([^.;\n]{4,150})", "heading"),
+        (r"(?:שאילת[אה]|שאילתה)\s+של\b.{0,120}?\s*בנושא\s+([^.;\n]{4,150})", "question_subject"),
+        (r"(?:שאילת[אה]|שאילתה)\s+של\b.{0,120}?[\"'׳״]\s*([^.;\n]{4,150})", "question_subject"),
     ]
     for pattern, source in patterns:
         for match in re.finditer(pattern, compact):
@@ -2062,7 +2353,7 @@ def _chunked(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]
 
 
 def _compact(value: Any) -> str:
-    return " ".join(str(value or "").split())
+    return " ".join(re.sub(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", str(value or "")).split())
 
 
 def _confidence(value: Any) -> float:

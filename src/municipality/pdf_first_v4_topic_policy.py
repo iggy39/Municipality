@@ -70,6 +70,21 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         negative_terms=("ביטול מכרז", "מכרז פומבי", "התקשרות", "פטור ממכרז"),
     ),
     TopicPolicy(
+        policy_id="municipal_tax_or_fee_finance",
+        root_topic_id="root_budget_finance",
+        description_he="ארנונה, אגרות, תעריפים, סיווגי מס והכנסות עירוניות מסווגים לתקציב וכספים.",
+        priority=96,
+        required_any=(("ארנונה", "צו ארנונה", "אגרה", "אגרות", "תעריף", "סיווג", "מסים", "מיסוי"),),
+        negative_terms=("היטל שמירה", "שירותי שמירה"),
+    ),
+    TopicPolicy(
+        policy_id="road_safety_traffic_calming",
+        root_topic_id="root_transport_safety",
+        description_he="תאונות דרכים, פסי האטה, באמפרים, מהירות ובטיחות בדרכים מסווגים לתחבורה ובטיחות.",
+        priority=96,
+        required_any=(("תאונות דרכים", "אפס תאונות", "תאונות", "בטיחות בדרכים"), ("באמפר", "באמפרים", "פס האטה", "פסי האטה", "מהירות", "תחבורתית", "כביש")),
+    ),
+    TopicPolicy(
         policy_id="domestic_violence_default_welfare",
         root_topic_id="root_welfare_social",
         description_he="אלימות במשפחה מסווגת כברירת מחדל לרווחה ושירותים חברתיים; רק ראיות אכיפה מפורשות מעבירות לביטחון ואכיפה.",
@@ -97,6 +112,27 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         description_he="עובדים, כוח אדם, עבודה נוספת, שכר ומועד תחילת עבודה מסווגים לכוח אדם ועובדים.",
         priority=93,
         required_any=(("עובדים מושאלים", "עובדים זמניים", "כוח אדם", "כח אדם", "עבודה נוספת לעובדי", "שכרו", "תחילת עבודתו", "מועד תחילת עבודתו"),),
+    ),
+    TopicPolicy(
+        policy_id="council_governance_attendance",
+        root_topic_id="root_administration",
+        description_he="נוכחות, איחורים והיעדרויות של חברי מועצה בישיבות מליאה/ועדות הם נושא מנהל עירוני.",
+        priority=93,
+        required_any=(("חברי מועצה", "חברת מועצה", "מועצת העיר"), ("איחורים", "היעדרויות", "נוכחות", "ישיבות מליאה", "ועדות")),
+    ),
+    TopicPolicy(
+        policy_id="local_economy_industry_employment",
+        root_topic_id="root_local_economy",
+        description_he="מפעלים, תעשייה, עסקים, מקומות עבודה ותעסוקה מקומית מסווגים לכלכלה ותעסוקה מקומית.",
+        priority=92,
+        required_any=(("מפעל", "מפעלים", "תעשייה", "תעשיה", "עסקים", "מקומות עבודה", "תעסוקה"), ("אשדוד", "בעיר", "תושבי העיר", "מקומי", "מקומית", "אזור תעשייה", "אזור תעשיה")),
+    ),
+    TopicPolicy(
+        policy_id="sports_and_recreation_subject",
+        root_topic_id="root_culture_sport",
+        description_he="קבוצות ספורט, ליגות, אליפויות, גביעים וענפי ספורט מסווגים לתרבות וספורט.",
+        priority=92,
+        required_any=(("ספורט", "כדורגל", "כדוריד", "כדורסל", "ליגה", "אליפות", "גביע", "קבוצת ספורט", "ספורטאי"),),
     ),
     TopicPolicy(
         policy_id="child_status_committee_or_welfare_committee",
@@ -219,11 +255,15 @@ def clean_protocol_subject_text(value: Any) -> str:
     if not text:
         return ""
     text = text.strip(" *•")
+    text = re.sub(r"\bבנו\s+[\"'׳״]?שא[\"'׳״]?\b", "בנושא", text)
     text = re.sub(r"בבת\(\s*,?\s*\)י\s+הספר", "בבתי הספר", text)
     text = re.sub(r"בתי\s+ספרים\b", "בתי ספר", text)
     text = re.sub(r"^(?:סעיף\s*)?\d+(?:\.\d+)?\s*[.)]?\s*:?\s*", "", text)
     text = re.sub(r"^(?:\)?\([^)]{0,30}\)\s*)?(?:מתאריך\s+)?\d+(?:\.\d+)?\s*['׳״.\-–,\s]*", "", text)
     text = re.sub(r"^מתאריך\s+\d+(?:\.\d+)?\s*['׳״.\-–,\s]*", "", text)
+    text = re.sub(r"^(?:שאילת[אה]|שאילתה)\s+של\b.{0,120}?\s*בנושא\s+", "", text)
+    text = re.sub(r"^(?:שאילת[אה]|שאילתה)\s+בנושא\s+", "", text)
+    text = re.sub(r"^(?:הצעה\s+לסדר(?:\s+יום)?|נושא\s+לדיון)\s*[-–:]?\s+", "", text)
     text = re.sub(r"^(?:מצ\"?ל\s*[-–]?\s*)+", "", text)
     text = re.sub(r"\s*[-–]?\s*מצ\"?ל.*$", "", text)
     text = re.sub(r"\s+מצורפ(?:ת|ות|ים)?\b.*$", "", text)
@@ -232,6 +272,7 @@ def clean_protocol_subject_text(value: Any) -> str:
     text = re.sub(r"\s*\)?\s*בקשת(?:ו|ה|ם|ן)?\s+של\b.*$", "", text)
     text = re.sub(r"\s*\)?\s*בקשה\s+של\b.*$", "", text)
     text = re.sub(r",?\s+לבקשת(?:ו|ה|ם|ן)?\s+של\b.*$", "", text)
+    text = re.sub(r",?\s+בבקשה\b.*$", "", text)
     text = re.sub(r",?\s+מאת\b.*$", "", text)
     text = re.sub(r",?\s+על\s+ידי\b.*$", "", text)
     text = re.sub(r"\s+הוקראה\b.*$", "", text)
@@ -246,6 +287,7 @@ def clean_protocol_subject_text(value: Any) -> str:
     text = re.sub(r"\s+משימות\b.*$", "", text)
     text = re.sub(r"^(?:דו\"?ח\s+)?ביקורת\s+(?=התמודדות|טיפול|מניעת|בדיקת|קידום)", "", text)
     text = re.sub(r"\s*[-–.]?\s*הצעה\s+לסדר.*$", "", text)
+    text = re.sub(r"\s*[-–]\s*דיון\s+עפ\"?י\b.*$", "", text)
     text = re.sub(r"\s+מס\s*\d+(?:\.\d+)?(?:\s+מתאריך.*)?$", "", text)
     text = re.sub(r"\s*\d+(?:\.\d+)?\s*$", "", text)
     text = re.sub(r"\s+מס\s*$", "", text)
@@ -284,7 +326,7 @@ def _term_in_text(term: str, normalized_text: str) -> bool:
 
 
 def _compact(value: Any) -> str:
-    return " ".join(str(value or "").split())
+    return " ".join(re.sub(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", str(value or "")).split())
 
 
 def _hebrew_tokens(value: str) -> list[str]:
