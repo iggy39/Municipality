@@ -46,7 +46,7 @@ from municipality.pdf_first_v4_topic_classifier import build_topic_profile_index
 DEFAULT_MODEL = "dicta-il/DictaLM-3.0-24B-Thinking:bf16"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 EXCLUDED_STRUCTURAL_ROLES = {"noise", "table_header_only"}
-CACHE_VERSION = "step4_v4_global_topic_assign_v24_body_fragment_verification"
+CACHE_VERSION = "step4_v4_global_topic_assign_v28_preserve_explicit_headline_provenance"
 
 
 def main() -> int:
@@ -188,10 +188,14 @@ def _build_item(*, unit: dict[str, Any], facts: list[dict[str, Any]], max_raw_ch
     packet_role = str(document_context.get("packet_role") or "")
     source_actions = [str(value) for value in unit.get("explicit_actions") or [] if str(value).strip()]
     topic_text = _compact(topic_context.get("topic_identification_text"))
-    repaired_topic_text = _repair_embedded_carrier_subject(topic_text) or _repair_embedded_carrier_subject(raw_text)
+    headline_source = _headline_source_from_unit(unit)
+    repaired_topic_text = _repair_embedded_carrier_subject(topic_text) or ("" if topic_text else _repair_embedded_carrier_subject(raw_text))
     if repaired_topic_text:
         topic_text = repaired_topic_text
     topic_contract = _topic_contract_from_headline(topic_text, structural_role=str(unit.get("structural_role") or ""), packet_role=packet_role)
+    provenance_reason = _protocol_topic_provenance_reject_reason(unit=unit, headline=topic_text, raw_text=raw_text, topic_context_source=str(topic_context.get("context_source") or ""), headline_source=headline_source, packet_role=packet_role)
+    if provenance_reason:
+        topic_contract = {**topic_contract, "is_topic_bearing": False, "topic_subject_he": None, "non_topic_reason": provenance_reason}
     non_topic_reason = _non_topic_protocol_reason(headline=topic_text or raw_text, raw_text=raw_text, structural_role=str(unit.get("structural_role") or ""), packet_role=packet_role)
     if non_topic_reason:
         topic_contract = {**topic_contract, "is_topic_bearing": False, "topic_subject_he": None, "non_topic_reason": non_topic_reason}
@@ -249,6 +253,8 @@ def _build_item(*, unit: dict[str, Any], facts: list[dict[str, Any]], max_raw_ch
         "agenda_item_title_he": topic_context.get("agenda_item_title_he"),
         "parent_agenda_unit_id": topic_context.get("parent_agenda_unit_id"),
         "topic_context_source": topic_context.get("context_source"),
+        "topic_headline_source": headline_source,
+        "topic_provenance_reject_reason": provenance_reason,
         "raw_text": evidence_text[: max(250, int(max_raw_chars))],
         "explicit_actions": explicit_actions[:8],
         "accepted_entity_spans": [str(fact.get("canonical_raw_span") or "") for fact in facts[:16] if str(fact.get("canonical_raw_span") or "").strip()],
@@ -1134,6 +1140,8 @@ def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label:
         "agenda_item_title_he": item.get("agenda_item_title_he"),
         "parent_agenda_unit_id": item.get("parent_agenda_unit_id"),
         "topic_context_source": item.get("topic_context_source"),
+        "topic_headline_source": item.get("topic_headline_source"),
+        "topic_provenance_reject_reason": item.get("topic_provenance_reject_reason"),
         "topic_tree_version": TOPIC_TREE_VERSION,
         "topic_assignment_backend": TOPIC_ASSIGNMENT_BACKEND,
         "root_topic_id": root_topic_id,
@@ -1228,6 +1236,8 @@ def _normalize_protocol_non_topic_assignments(assignments: list[dict[str, Any]])
 
 
 def _post_assignment_non_topic_reason(row: dict[str, Any]) -> str | None:
+    if row.get("topic_provenance_reject_reason"):
+        return str(row.get("topic_provenance_reject_reason"))
     text = _join_unique([row.get("topic_subject_he"), row.get("topic_headline_he"), row.get("topic_identification_context")])
     role = str(row.get("structural_role") or "")
     reason = _non_topic_protocol_reason(headline=text, raw_text=text, structural_role=role, packet_role=str(row.get("packet_role") or ""))
@@ -1484,11 +1494,57 @@ def _non_topic_protocol_reason(*, headline: str, raw_text: str, structural_role:
         return "empty_fragment"
     if _looks_like_container_heading(text):
         return "container_heading"
+    if _looks_like_procedural_carrier_heading(text):
+        return "procedural_carrier_heading"
     if _looks_like_no_topic_continuation(raw or text):
         return "no_topic_continuation"
     if _looks_like_procedural_dialogue_fragment(raw or text):
         return "procedural_dialogue_fragment"
     return None
+
+
+def _protocol_topic_provenance_reject_reason(*, unit: dict[str, Any], headline: str, raw_text: str, topic_context_source: str, headline_source: str, packet_role: str) -> str | None:
+    if packet_role != "protocol":
+        return None
+    role = str(unit.get("structural_role") or "")
+    if role in {"metadata", "noise", "table_header_only", "vote_or_result"}:
+        return None
+    compact_headline = _compact(headline)
+    compact_raw = _compact(raw_text)
+    if not compact_headline and not compact_raw:
+        return "missing_topic_headline_provenance"
+    if _has_explicit_local_topic_marker(compact_headline):
+        if headline_source in {"explicit_header", "explicit_title", "explicit_section_title"} or len(compact_raw) <= 360:
+            return None
+    if _has_bounded_raw_topic_marker(compact_raw):
+        return None
+    if topic_context_source in {"parent_agenda", "section_agenda", "previous_agenda"} and role in {"body", "continuation", "task_row"}:
+        return "inherited_context_not_standalone_topic"
+    if headline_source in {"explicit_header", "explicit_title", "explicit_section_title"}:
+        return None
+    if role == "body":
+        return "body_without_headline_topic_provenance"
+    if headline_source in {"raw_titleish", "raw_extracted"}:
+        token_count = len(_hebrew_tokens(compact_raw))
+        # Raw text can stand in for a heading only when the unit itself is short.
+        # Long transcript windows often contain incidental heading-like phrases.
+        if role in {"outline_item", "section_heading", "task_row", "continuation"} and token_count <= 28 and len(compact_raw) <= 360:
+            return None
+        return "transcript_window_without_bounded_headline"
+    if headline_source == "none":
+        return "missing_topic_headline_provenance"
+    if role in {"outline_item", "section_heading", "task_row", "continuation"} and compact_headline:
+        return None
+    return "missing_topic_headline_provenance"
+
+
+def _has_bounded_raw_topic_marker(raw_text: str) -> bool:
+    compact = _compact(raw_text)
+    if not _has_explicit_local_topic_marker(compact):
+        return False
+    if len(compact) <= 360:
+        return True
+    return False
 
 
 def _looks_like_protocol_metadata(text: str) -> bool:
@@ -1536,6 +1592,14 @@ def _looks_like_container_heading(text: str) -> bool:
         r"^משימות$",
     ]
     return any(re.search(pattern, normalized) for pattern in container_patterns)
+
+
+def _looks_like_procedural_carrier_heading(text: str) -> bool:
+    compact = _clean_heading(text)
+    if not compact:
+        return False
+    normalized = _norm(compact).strip(" :.-–")
+    return bool(re.match(r"^פרוטוקול(?:י)?\s+ועדת\b", normalized))
 
 
 def _looks_like_no_topic_continuation(text: str) -> bool:
@@ -1804,18 +1868,28 @@ def _topic_context_payload(*, title: str, source: str, parent_unit_id: str) -> d
 
 
 def _headline_from_unit(unit: dict[str, Any]) -> str:
-    for key in ("header_text", "title_he", "section_title_he"):
+    headline, _source = _headline_with_source_from_unit(unit)
+    return headline
+
+
+def _headline_source_from_unit(unit: dict[str, Any]) -> str:
+    _headline, source = _headline_with_source_from_unit(unit)
+    return source
+
+
+def _headline_with_source_from_unit(unit: dict[str, Any]) -> tuple[str, str]:
+    for key, source in (("header_text", "explicit_header"), ("title_he", "explicit_title"), ("section_title_he", "explicit_section_title")):
         value = _clean_heading(_compact(unit.get(key)))
         if value:
-            return value
+            return value, source
     raw_text = _compact(unit.get("raw_text"))
     extracted = _extract_heading_from_text(raw_text)
     if extracted:
-        return extracted
+        return extracted, "raw_extracted"
     role = str(unit.get("structural_role") or "")
     if role in {"outline_item", "section_heading"} and len(raw_text) <= 260 and _looks_titleish(raw_text):
-        return _clean_heading(raw_text)
-    return ""
+        return _clean_heading(raw_text), "raw_titleish"
+    return "", "none"
 
 
 def _extract_heading_from_text(text: str) -> str:

@@ -67,6 +67,122 @@ def test_short_domain_subject_is_not_no_topic_continuation() -> None:
     assert step4._non_topic_protocol_reason(headline="הקלטת עובדים", raw_text='שאילתה בנושא "הקלטת עובדים"', structural_role="continuation", packet_role="protocol") is None
 
 
+def test_body_transcript_without_explicit_marker_has_no_topic_provenance() -> None:
+    unit = {
+        "structural_role": "body",
+        "raw_text": "מר כהן אני מבקש לומר שהמשטרה הגיעה בבוקר והיה דיון ארוך על הבניין הישן ועל שריפה אפשרית",
+    }
+
+    assert step4._protocol_topic_provenance_reject_reason(
+        unit=unit,
+        headline="המשטרה הגיעה בבוקר והיה דיון ארוך",
+        raw_text=unit["raw_text"],
+        topic_context_source="unit_heading",
+        headline_source="raw_extracted",
+        packet_role="protocol",
+    ) == "body_without_headline_topic_provenance"
+
+
+def test_long_outline_transcript_window_is_not_standalone_topic() -> None:
+    raw_text = " ".join(["פרוטוקול ישיבה מן המניין", "מר לוי אמר שהצעה לסדר נמשכה זמן רב", "ומכאן המשיך דיון ארוך מאוד על נושאים שונים"] * 8)
+    unit = {"structural_role": "outline_item", "raw_text": raw_text}
+
+    assert step4._protocol_topic_provenance_reject_reason(
+        unit=unit,
+        headline="פרוטוקול ישיבה מן המניין מר לוי אמר שהצעה לסדר נמשכה זמן רב",
+        raw_text=raw_text,
+        topic_context_source="unit_heading",
+        headline_source="raw_extracted",
+        packet_role="protocol",
+    ) == "transcript_window_without_bounded_headline"
+
+
+def test_explicit_local_topic_marker_allows_body_topic_extraction() -> None:
+    raw_text = 'שאילתה בנושא "הקלטת עובדים" נשאלה על ידי חבר מועצה'
+    unit = {"structural_role": "continuation", "raw_text": raw_text}
+
+    assert step4._protocol_topic_provenance_reject_reason(
+        unit=unit,
+        headline="הקלטת עובדים",
+        raw_text=raw_text,
+        topic_context_source="unit_heading",
+        headline_source="raw_extracted",
+        packet_role="protocol",
+    ) is None
+
+
+def test_incidental_body_marker_in_long_transcript_does_not_create_topic() -> None:
+    raw_text = " ".join(["פרוטוקול ישיבה מן המניין", "רשות המים התריעה בנושא הזיהום אבל הדובר המשיך בדיון ארוך"] * 12)
+    unit = {"structural_role": "outline_item", "raw_text": raw_text}
+
+    assert step4._has_bounded_raw_topic_marker(raw_text) is False
+    assert step4._protocol_topic_provenance_reject_reason(
+        unit=unit,
+        headline="פרוטוקול ישיבה מן המניין",
+        raw_text=raw_text,
+        topic_context_source="unit_heading",
+        headline_source="raw_extracted",
+        packet_role="protocol",
+    ) == "transcript_window_without_bounded_headline"
+
+
+def test_incidental_strong_marker_in_long_transcript_does_not_create_topic() -> None:
+    raw_text = " ".join(["פרוטוקול ישיבה מן המניין", "מר לוי אמר שהשאילתה בנושא העצים כבר נדונה", "ומכאן המשיך דיון ארוך"] * 10)
+    unit = {"structural_role": "outline_item", "raw_text": raw_text}
+
+    assert step4._has_bounded_raw_topic_marker(raw_text) is False
+    assert step4._protocol_topic_provenance_reject_reason(
+        unit=unit,
+        headline="שאילתה בנושא העצים כבר נדונה",
+        raw_text=raw_text,
+        topic_context_source="unit_heading",
+        headline_source="raw_extracted",
+        packet_role="protocol",
+    ) == "transcript_window_without_bounded_headline"
+
+
+def test_cleaned_continuation_without_source_is_not_topic() -> None:
+    unit = {"structural_role": "task_row", "raw_text": "מר כהן ממשיך לדבר על בית הספר והעירייה"}
+
+    assert step4._protocol_topic_provenance_reject_reason(
+        unit=unit,
+        headline="בית הספר הוא מיקרוקוסמוס של החברה בישראל",
+        raw_text=unit["raw_text"],
+        topic_context_source="unit_heading",
+        headline_source="none",
+        packet_role="protocol",
+    ) == "missing_topic_headline_provenance"
+
+
+def test_committee_protocol_carrier_is_not_standalone_topic() -> None:
+    assert step4._looks_like_procedural_carrier_heading("פרוטוקול ועדת תמיכות") is True
+    assert step4._non_topic_protocol_reason(headline="פרוטוקול ועדת תמיכות", raw_text="פרוטוקול ועדת תמיכות", structural_role="outline_item", packet_role="protocol") == "procedural_carrier_heading"
+
+
+def test_explicit_visual_header_is_not_overwritten_by_raw_region_repair() -> None:
+    item = step4._build_item(
+        unit={
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "page": 1,
+            "header_text": "בניינים מסוכנים בעיר",
+            "raw_text": "חבר מועצה פלוני – בניינים מסוכנים בעיר .1 :מר היו\"ר .הצעה לסדר יום",
+            "structural_role": "outline_item",
+        },
+        facts=[],
+        max_raw_chars=700,
+        attachment_contexts=[],
+        document_context={"packet_role": "protocol"},
+        topic_context={"topic_identification_text": "בניינים מסוכנים בעיר", "context_source": "unit_heading"},
+        document_child_candidates=[],
+        topic_tree=step4.global_topic_tree_payload(),
+        topic_index={},
+    )
+
+    assert item["topic_headline_he"] == "בניינים מסוכנים בעיר"
+    assert item["topic_identification_context"] == "בניינים מסוכנים בעיר"
+
+
 def test_weak_body_agenda_candidate_becomes_evidence_only_fragment() -> None:
     row = {
         "packet_role": "protocol",
