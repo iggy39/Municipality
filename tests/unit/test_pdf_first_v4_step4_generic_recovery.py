@@ -219,6 +219,15 @@ def test_committee_protocol_carrier_is_not_standalone_topic() -> None:
     assert step4._non_topic_protocol_reason(headline="פרוטוקול ועדת תמיכות", raw_text="פרוטוקול ועדת תמיכות", structural_role="outline_item", packet_role="protocol") == "procedural_carrier_heading"
 
 
+def test_query_attribution_without_subject_is_not_topic() -> None:
+    assert step4._non_topic_protocol_reason(
+        headline="שאילתה: יובל צלנר, חבר מועצה",
+        raw_text="שאילתה: יובל צלנר, חבר מועצה",
+        structural_role="outline_item",
+        packet_role="protocol",
+    ) == "query_attribution_only"
+
+
 def test_explicit_visual_header_is_not_overwritten_by_raw_region_repair() -> None:
     item = step4._build_item(
         unit={

@@ -1501,6 +1501,8 @@ def _non_topic_protocol_reason(*, headline: str, raw_text: str, structural_role:
         return "container_heading"
     if _looks_like_procedural_carrier_heading(text):
         return "procedural_carrier_heading"
+    if _looks_like_query_attribution_only(text):
+        return "query_attribution_only"
     if _looks_like_legal_boilerplate_fragment(text):
         return "legal_boilerplate_fragment"
     if _looks_like_signature_or_end_page_fragment(text):
@@ -1611,6 +1613,18 @@ def _looks_like_procedural_carrier_heading(text: str) -> bool:
         return False
     normalized = _norm(compact).strip(" :.-–")
     return bool(re.match(r"^פרוטוקול(?:י)?\s+ועדת\b", normalized))
+
+
+def _looks_like_query_attribution_only(text: str) -> bool:
+    compact = _clean_heading(text)
+    normalized = _norm(compact)
+    if not normalized.startswith("שאילת"):
+        return False
+    if _has_explicit_local_topic_marker(normalized) or "–" in compact or " - " in compact:
+        return False
+    role_cues = ["חבר מועצה", "חברת מועצה", "מועצה", "ראש העיר", "סגן", "סגנית", "עוד", "דר", "מר", "גברת"]
+    tokens = _hebrew_tokens(normalized)
+    return len(tokens) <= 8 and any(cue in normalized for cue in role_cues)
 
 
 def _looks_like_legal_boilerplate_fragment(text: str) -> bool:
