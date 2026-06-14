@@ -30,6 +30,7 @@ def build_dashboard_payload_from_ask_result(
     ask_payload: dict[str, Any],
     municipality_id: str | None = None,
     filters: dict[str, Any] | None = None,
+    geo_intent_resolution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = get_mock_rag_dashboard_payload()
     status = str(ask_payload.get("status") or "unknown")
@@ -45,17 +46,25 @@ def build_dashboard_payload_from_ask_result(
         limitations = ["יש לפתוח את המקורות לפני הסקת מסקנות." if status == "answer" else "לא נמצאה תשתית ראייתית מספקת להצגת תשובה."]
     active_filters = _normalize_filters(filters)
     selected_category_id = _category_id_from_filter(active_filters.get("category")) or payload["state"].get("selected_category_id")
+    map_context = _map_context_from_geo(geo_intent_resolution)
+    map_context_entity = _map_context_entity(map_context)
+    map_context_entity_id = map_context_entity["id"] if map_context_entity else None
     if active_filters.get("area") and active_filters["area"] != "כל העיר":
         limitations.append("סינון אזורי נשען על אזכורי מקום מהמקורות ולא על גיאומטריית GIS מאומתת.")
+    limitations.extend(_map_context_limitations(map_context))
+    limitations.extend(_municipality_scope_limitations(geo_intent_resolution))
 
     payload["state"] = {
         **payload["state"],
         "current_question": question,
         "municipality_id": municipality_id or ask_payload.get("municipality_id") or payload["state"].get("municipality_id"),
+        "search_intent": _dashboard_search_intent(geo_intent_resolution, payload["state"].get("search_intent")),
+        "intent_resolution": _dashboard_intent_resolution(geo_intent_resolution, payload["state"].get("intent_resolution")),
         "current_answer_id": str(ask_payload.get("ask_request_id") or "dashboard_query_answer"),
         "active_detail_drawer_mode": "answer" if status == "answer" else "emptyState",
         "generation_status": "answer_ready" if status == "answer" else "empty_answer",
         "selected_category_id": selected_category_id,
+        "selected_map_entity_id": map_context_entity_id or payload["state"].get("selected_map_entity_id"),
         "selected_time_range": _selected_time_range_from_filters(active_filters) or payload["state"].get("selected_time_range"),
         "source_type_filter": _source_filter_from_filters(active_filters),
         "confidence_filter": _confidence_filter_from_filters(active_filters),
@@ -64,6 +73,14 @@ def build_dashboard_payload_from_ask_result(
         "error": None,
     }
     payload["main_civic_workspace"]["map"] = _schematic_map(payload["main_civic_workspace"]["map"])
+    if map_context_entity:
+        payload["main_civic_workspace"]["map"]["entities"] = [
+            {**entity, "selected": False}
+            for entity in payload["main_civic_workspace"]["map"].get("entities", [])
+        ]
+        payload["main_civic_workspace"]["map"]["entities"].insert(0, map_context_entity)
+    if map_context is not None:
+        payload["main_civic_workspace"]["map_context"] = map_context
     _apply_selected_category(payload, selected_category_id)
     payload["end_detail_drawer"] = {
         **payload["end_detail_drawer"],
@@ -80,6 +97,96 @@ def build_dashboard_payload_from_ask_result(
     payload["contracts"]["evidence"] = evidence
     payload["contracts"]["map_entities"] = payload["main_civic_workspace"]["map"]["entities"]
     return validate_dashboard_payload(payload)
+
+
+def _dashboard_search_intent(geo_intent_resolution: dict[str, Any] | None, fallback: Any) -> str | None:
+    intent = str((geo_intent_resolution or {}).get("intent") or "").strip()
+    if intent and intent != "unknown":
+        return intent
+    return str(fallback) if fallback is not None else None
+
+
+def _dashboard_intent_resolution(geo_intent_resolution: dict[str, Any] | None, fallback: Any) -> dict[str, Any]:
+    if isinstance(geo_intent_resolution, dict) and geo_intent_resolution:
+        return {"geo": geo_intent_resolution}
+    return fallback if isinstance(fallback, dict) else {}
+
+
+def _map_context_from_geo(geo_intent_resolution: dict[str, Any] | None) -> dict[str, Any] | None:
+    map_context = (geo_intent_resolution or {}).get("map_context")
+    return map_context if isinstance(map_context, dict) else None
+
+
+def _map_context_entity(map_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(map_context, dict):
+        return None
+    focus = map_context.get("focus") if isinstance(map_context.get("focus"), dict) else {}
+    focus_type = str(focus.get("focus_type") or "gis_focus")
+    label = _map_context_focus_label(map_context)
+    if not label:
+        return None
+    return {
+        "id": f"entity_gis_focus_{focus_type}",
+        "label": label,
+        "entity_type": {
+            "code": _map_context_entity_type_code(focus_type),
+            "label_he": "מוקד GIS",
+            "vocabulary": "municipal-entity-type:v1",
+        },
+        "spatial_representation": "schematic",
+        "schematic_shape": {"kind": "point", "coordinates": []},
+        "real_geometry": None,
+        "geometry_provenance": None,
+        "confidence_label": str(focus.get("confidence_label") or "בינונית"),
+        "uncertainty_reasons": ["מיקום אמיתי נשמר ב-map_context; המפה הסכמטית מסמנת רק את מוקד השאלה."],
+        "activity_score": 100,
+        "is_recent_high_activity": False,
+        "topic_ids": [],
+        "decision_ids": [],
+        "evidence_refs": [],
+        "selected": True,
+    }
+
+
+def _map_context_focus_label(map_context: dict[str, Any]) -> str | None:
+    focus = map_context.get("focus") if isinstance(map_context.get("focus"), dict) else {}
+    focus_type = str(focus.get("focus_type") or "")
+    if focus_type == "parcel":
+        return f"גוש {focus.get('gush')} חלקה {focus.get('helka')}"
+    if focus_type == "plan":
+        return f"תכנית {focus.get('plan_number')}"
+    if focus_type in {"place", "unresolved_place"}:
+        return str(focus.get("place_query") or "מוקד מקום").strip()
+    if focus_type == "point":
+        return "נקודה במפה"
+    return None
+
+
+def _map_context_entity_type_code(focus_type: str) -> str:
+    return {
+        "parcel": "PARCEL",
+        "plan": "PLANNING_PROJECT",
+        "place": "PLACE",
+        "unresolved_place": "PLACE",
+        "point": "POINT",
+    }.get(focus_type, "GIS_FOCUS")
+
+
+def _map_context_limitations(map_context: dict[str, Any] | None) -> list[str]:
+    if not isinstance(map_context, dict):
+        return []
+    caveats = [str(item).strip() for item in map_context.get("caveats") or [] if str(item).strip()]
+    if not caveats and map_context.get("status") in {"focus_not_found", "focus_unresolved", "focus_needs_lookup"}:
+        caveats.append("מוקד GIS לא נפתר במלואו ולכן שכבות המפה מוגבלות.")
+    return caveats
+
+
+def _municipality_scope_limitations(geo_intent_resolution: dict[str, Any] | None) -> list[str]:
+    scope = (geo_intent_resolution or {}).get("municipality_scope")
+    if not isinstance(scope, dict):
+        return []
+    caveat = str(scope.get("caveat_he") or "").strip()
+    return [caveat] if caveat else []
 
 
 def build_dashboard_error_payload(*, question: str, error_code: str, message_he: str, municipality_id: str | None = None) -> dict[str, Any]:

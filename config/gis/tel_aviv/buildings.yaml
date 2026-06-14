@@ -1,0 +1,6 @@
+layer_key: buildings
+municipality_code: "5000"
+municipality_name_he: תל אביב-יפו
+source_url: https://gisn.tel-aviv.gov.il/arcgis/rest/services/IView2MapHeb/MapServer/24
+field_mappings:
+  source_object_id: [oid_mivne, id_binyan, UniqueId]

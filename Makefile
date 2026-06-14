@@ -3,10 +3,13 @@ COMPOSE ?= docker compose
 DATABASE_URL ?= postgresql+psycopg://municipality:municipality@localhost:5432/municipality
 SOURCE_REGISTRY_SEED ?= config/gis/source_registry.seed.yaml
 
-.PHONY: up migrate seed-sources download-gis-poc-sources import-osm-context import-municipal-source create-gis-map-examples verify-gis-demo verify-gis-poc test
+.PHONY: up ui-server migrate seed-sources download-gis-poc-sources import-osm-context import-municipal-source create-gis-map-examples verify-gis-demo verify-gis-poc test
 
 up:
 	$(COMPOSE) up --build -d
+
+ui-server:
+	scripts/start_ui_server.sh
 
 migrate:
 	$(COMPOSE) exec -T backend alembic upgrade head

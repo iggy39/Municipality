@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--plan-number-field", default="plan_number")
     parser.add_argument("--plan-name-field", default="plan_name")
     parser.add_argument("--where", default="1=1")
+    parser.add_argument("--municipality-code", help="Limit import to plans intersecting an ingested official municipal boundary.")
     parser.add_argument("--raw-root", default="storage/raw/gis")
     args = parser.parse_args()
 
@@ -53,6 +54,7 @@ def main() -> None:
             plan_number_field=args.plan_number_field,
             plan_name_field=args.plan_name_field,
             where=args.where,
+            municipality_code=args.municipality_code,
         )
     print(f"inserted_or_updated={summary.inserted_or_updated} rejected={summary.rejected}")
 

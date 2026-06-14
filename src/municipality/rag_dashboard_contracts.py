@@ -210,6 +210,7 @@ class DashboardTimeline(StrictModel):
 class MainCivicWorkspace(StrictModel):
     map: DashboardMap
     timeline: DashboardTimeline
+    map_context: dict[str, Any] | None = None
 
 
 class DashboardState(StrictModel):

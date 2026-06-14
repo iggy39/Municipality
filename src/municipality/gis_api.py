@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from municipality.db import build_engine, build_session_factory
 from municipality.gis_importers import municipality_for_point
+from municipality.gis_evidence_links import plan_related_decisions
 from municipality.gis_normalization import extract_cadastral_id, normalize_hebrew_text
 from municipality.gis_provenance import source_fragment_from_row
 
@@ -143,7 +144,7 @@ def get_plan(
         text(
             f"""
             SELECT p.id, p.plan_number, p.plan_name, p.source_id, p.provenance_id,
-                   p.validation_status, p.validation_warnings,
+                   p.validation_status, p.validation_warnings, p.metadata,
                    {_geometry_sql('p.geom', detail)} AS geometry,
                    {SOURCE_COLUMNS}
             FROM plans p
@@ -154,7 +155,7 @@ def get_plan(
         ),
         {"plan_number": plan_number},
     ).mappings().all()
-    items = [_plan_payload(row, include_geometry=detail != "none") for row in rows]
+    items = [_plan_payload(row, include_geometry=detail != "none", db=db, include_related_decisions=True) for row in rows]
     return {"plan_number": plan_number, "status": "found" if items else "not_found", "items": items, "count": len(items)}
 
 
@@ -330,7 +331,7 @@ def _plan_search_rows(db: Session, *, plan_number: str, detail: str, limit: int)
             text(
                 f"""
                 SELECT p.id, p.plan_number, p.plan_name, p.source_id, p.provenance_id,
-                       p.validation_status, p.validation_warnings,
+                       p.validation_status, p.validation_warnings, p.metadata,
                        {_geometry_sql('p.geom', detail)} AS geometry,
                        {SOURCE_COLUMNS}
                 FROM plans p
@@ -377,7 +378,7 @@ def _broad_search_items(db: Session, *, query: str, limit: int) -> list[dict[str
         text(
             f"""
             SELECT p.id, p.plan_number, p.plan_name, p.source_id, p.provenance_id,
-                   p.validation_status, p.validation_warnings,
+                   p.validation_status, p.validation_warnings, p.metadata,
                    {_geometry_sql('p.geom', 'centroid')} AS geometry,
                    {SOURCE_COLUMNS}
             FROM plans p
@@ -429,7 +430,7 @@ def _features_covering_point(db: Session, table_name: str, *, lon: float, lat: f
     elif table_name == "plans":
         select_columns = f"""
         p.id, p.plan_number, p.plan_name, p.source_id, p.provenance_id,
-        p.validation_status, p.validation_warnings,
+        p.validation_status, p.validation_warnings, p.metadata,
         {_geometry_sql('p.geom', detail)} AS geometry, {SOURCE_COLUMNS}
         """
     elif table_name == "neighborhoods":
@@ -714,7 +715,8 @@ def _coverage_rows(db: Session) -> list[Any]:
     )
 
 
-def _plan_payload(row: Any, *, include_geometry: bool) -> dict[str, Any]:
+def _plan_payload(row: Any, *, include_geometry: bool, db: Session | None = None, include_related_decisions: bool = False) -> dict[str, Any]:
+    metadata = _normalize_metadata(row.get("metadata"))
     payload = {
         "id": str(row["id"]),
         "plan_number": row["plan_number"],
@@ -724,9 +726,12 @@ def _plan_payload(row: Any, *, include_geometry: bool) -> dict[str, Any]:
         "source": source_fragment_from_row(row),
         "validation_status": str(row["validation_status"]),
         "validation_warnings": _normalize_json_list(row.get("validation_warnings")),
+        "plan_metadata": metadata.get("plan") if isinstance(metadata.get("plan"), dict) else {},
+        "metadata": metadata,
     }
-    if include_geometry and row.get("geometry") is not None:
-        payload["geometry"] = json.loads(row["geometry"])
+    if include_related_decisions and db is not None:
+        payload["related_decisions"] = plan_related_decisions(db, plan_number=str(row["plan_number"]))
+    _add_geometry(payload, row, include_geometry=include_geometry)
     return payload
 
 

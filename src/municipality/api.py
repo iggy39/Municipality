@@ -20,6 +20,9 @@ from municipality.db import build_engine, build_session_factory
 from municipality.embeddings import ChunkEmbeddingService, EmbeddingReranker
 from municipality.fetcher import AssetFetcher
 from municipality.gis_api import router as gis_router
+from municipality.gis_map_context import build_map_context
+from municipality.gis_evidence_links import decision_gis_feature_links, link_decisions_to_gis_plans
+from municipality.gis_question_resolver import resolve_geo_intent
 from municipality.migrations import apply_all
 from municipality.models import (
     ArtifactSemanticLink,
@@ -64,7 +67,7 @@ from municipality.rag_dashboard_adapter import (
     validate_dashboard_payload,
 )
 from municipality.rag_dashboard_contracts import RagDashboardInteractionRequest, RagDashboardQueryRequest
-from municipality.rag_dashboard_gis import build_dashboard_gis_map_payload
+from municipality.rag_dashboard_gis import build_dashboard_gis_buildings_payload, build_dashboard_gis_context_pois_payload, build_dashboard_gis_map_payload, build_dashboard_gis_parcels_payload
 from municipality.rag_dashboard_mock import (
     apply_mock_rag_dashboard_interaction,
     get_mock_rag_dashboard_evidence,
@@ -91,6 +94,14 @@ PDF_FIRST_ASK_SOURCE_TYPES = ["pdf_first_protocol", "pdf_first_attachment", "pdf
 PDF_FIRST_PROTOCOL_SOURCE_TYPES = {"pdf_first_protocol", "pdf_first_v4_protocol"}
 PDF_FIRST_ATTACHMENT_SOURCE_TYPES = {"pdf_first_attachment", "pdf_first_v4_attachment"}
 PDF_FIRST_RETRIEVAL_ARTIFACT_KINDS = {"pdf_first_retrieval_chunk", "pdf_first_v4_retrieval_chunk"}
+MUNICIPALITY_CODE_TO_SLUG = {
+    "0070": "ashdod",
+    "3000": "jerusalem",
+    "4000": "haifa",
+    "5000": "tel_aviv",
+    "9000": "beer_sheva",
+    "0831": "yeruham",
+}
 
 
 def get_db() -> Generator:
@@ -3543,6 +3554,7 @@ def _decision_payload(decision_id: int, db) -> dict | None:
             "source_type": "protocol",
             "metadata": _fallback_metadata_from_json(decision.metadata_json),
             "request_context": _decision_request_context_payload(db=db, decision_id=decision.id),
+            "linked_gis_features": decision_gis_feature_links(db, decision_id=decision.id),
         },
         "votes": [
             {
@@ -3619,16 +3631,73 @@ def rag_dashboard_gis_map(gush: str = "7103", helka: str = "43", radius_m: float
     return build_dashboard_gis_map_payload(db, gush=gush, helka=helka, radius_m=radius_m, example=example, profile=profile)
 
 
+@app.get("/api/ui/rag-dashboard/gis-buildings")
+def rag_dashboard_gis_buildings(
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    municipality_code: str = "5000",
+    db=Depends(get_db),
+) -> dict[str, Any]:
+    return build_dashboard_gis_buildings_payload(db, municipality_code=municipality_code, min_lon=min_lon, min_lat=min_lat, max_lon=max_lon, max_lat=max_lat)
+
+
+@app.get("/api/ui/rag-dashboard/gis-parcels")
+def rag_dashboard_gis_parcels(
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    municipality_code: str = "5000",
+    db=Depends(get_db),
+) -> dict[str, Any]:
+    return build_dashboard_gis_parcels_payload(db, municipality_code=municipality_code, min_lon=min_lon, min_lat=min_lat, max_lon=max_lon, max_lat=max_lat)
+
+
+@app.get("/api/ui/rag-dashboard/gis-context-pois")
+def rag_dashboard_gis_context_pois(
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    municipality_code: str = "5000",
+    db=Depends(get_db),
+) -> dict[str, Any]:
+    return build_dashboard_gis_context_pois_payload(db, municipality_code=municipality_code, min_lon=min_lon, min_lat=min_lat, max_lon=max_lon, max_lat=max_lat)
+
+
+@app.post("/api/admin/gis/decision-links/rebuild")
+def rebuild_decision_gis_links(limit: int | None = None, db=Depends(get_db)) -> dict[str, Any]:
+    summary = link_decisions_to_gis_plans(db, limit=limit)
+    db.commit()
+    return {
+        "status": "ok",
+        "scanned_decisions": summary.scanned_decisions,
+        "matched_decisions": summary.matched_decisions,
+        "inserted_or_updated": summary.inserted_or_updated,
+    }
+
+
 @app.post("/api/ui/rag-dashboard/query")
 def rag_dashboard_query(request: RagDashboardQueryRequest, db=Depends(get_db)) -> dict[str, Any]:
     dashboard_filters = request.filters if isinstance(request.filters, dict) else {}
     filter_year = _dashboard_filter_year(dashboard_filters)
     filter_semantic_label = request.semantic_label or _dashboard_filter_semantic_label(dashboard_filters)
+    geo_intent = resolve_geo_intent(request.question)
+    geo_intent_payload = geo_intent.to_payload()
+    map_context = _dashboard_map_context(db=db, geo_intent_payload=geo_intent_payload) if geo_intent.needs_gis else None
+    if map_context is not None:
+        geo_intent_payload["map_context"] = map_context
+    municipality_scope = _dashboard_municipality_scope(requested_muni=request.muni, map_context=map_context)
+    if municipality_scope:
+        geo_intent_payload["municipality_scope"] = municipality_scope
+    effective_muni = str(municipality_scope.get("effective_muni") or request.muni or "").strip() or None
     try:
         ask_payload = _run_ask(
             request=AskRequest(
                 question=request.question,
-                muni=request.muni,
+                muni=effective_muni,
                 top_k=request.top_k,
                 year=filter_year,
                 semantic_node_id=request.semantic_node_id,
@@ -3641,28 +3710,62 @@ def rag_dashboard_query(request: RagDashboardQueryRequest, db=Depends(get_db)) -
     except HTTPException as exc:
         return build_dashboard_error_payload(
             question=request.question,
-            municipality_id=request.muni,
+            municipality_id=effective_muni or request.muni,
             error_code=str(exc.detail or "dashboard_query_failed"),
             message_he="שירות התשובות לא הצליח להפיק תשובה כרגע.",
         )
     except Exception as exc:  # noqa: BLE001 - dashboard query should render a safe error state.
         return build_dashboard_error_payload(
             question=request.question,
-            municipality_id=request.muni,
+            municipality_id=effective_muni or request.muni,
             error_code=exc.__class__.__name__,
             message_he="שירות התשובות לא זמין כרגע.",
         )
     return build_dashboard_payload_from_ask_result(
         question=request.question,
-        municipality_id=request.muni,
+        municipality_id=effective_muni or request.muni,
         ask_payload=ask_payload,
         filters=dashboard_filters,
+        geo_intent_resolution=geo_intent_payload,
     )
 
 
 def _dashboard_filter_year(filters: dict[str, Any]) -> int | None:
     raw = str(filters.get("time_range") or "").strip()
     return int(raw) if raw.isdigit() and len(raw) == 4 else None
+
+
+def _dashboard_map_context(*, db, geo_intent_payload: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        return build_map_context(db, geo_intent_payload)
+    except Exception as exc:  # noqa: BLE001 - dashboard search must continue if GIS context fails.
+        if hasattr(db, "rollback"):
+            db.rollback()
+        return {
+            "status": "unavailable",
+            "focus": geo_intent_payload.get("focus"),
+            "layers": [],
+            "caveats": [f"GIS context unavailable: {exc.__class__.__name__}"],
+        }
+
+
+def _dashboard_municipality_scope(*, requested_muni: str | None, map_context: dict[str, Any] | None) -> dict[str, Any]:
+    requested = str(requested_muni or "").strip() or None
+    gis_code = str((map_context or {}).get("municipality_code") or "").strip() or None
+    gis_slug = MUNICIPALITY_CODE_TO_SLUG.get(gis_code or "")
+    effective = gis_slug or requested
+    scope = {
+        "requested_muni": requested,
+        "gis_municipality_code": gis_code,
+        "gis_municipality_slug": gis_slug,
+        "effective_muni": effective,
+        "mismatch": bool(requested and gis_slug and requested != gis_slug),
+    }
+    if scope["mismatch"]:
+        scope["caveat_he"] = "השאלה מוקדה לפי מיקום ה-GIS, ולכן חיפוש המסמכים הותאם לרשות שעלתה מהמפה במקום לרשות שנשלחה מהדמו."
+    elif gis_slug and not requested:
+        scope["caveat_he"] = "חיפוש המסמכים הותאם לרשות המקומית שזוהתה מתוך שכבת גבולות רשמית."
+    return scope if any(value is not None and value is not False for value in scope.values()) else {}
 
 
 def _dashboard_filter_semantic_label(filters: dict[str, Any]) -> str | None:
@@ -4103,7 +4206,7 @@ def ask_playground_page(db=Depends(get_db)) -> HTMLResponse:
     initial_gis_map_payload = None
     if hasattr(db, "execute"):
         try:
-            initial_gis_map_payload = build_dashboard_gis_map_payload(db, profile="initial")
+            initial_gis_map_payload = build_dashboard_gis_map_payload(db, profile="overview")
         except Exception:  # noqa: BLE001 - dashboard must remain available if GIS is unavailable.
             initial_gis_map_payload = None
     return HTMLResponse(

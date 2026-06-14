@@ -177,7 +177,7 @@ sources:
     name_he: באר שבע - מקורות GIS שנמצאו
     name_en: Beer Sheva Municipal GIS Discovered Sources
     municipality_code: "9000"
-    layer_keys: [address_points, neighborhoods, poi_points]
+    layer_keys: [address_points, neighborhoods, poi_points, buildings]
     provenance_level: official_municipal
     reuse_status: municipal_license_under_review
     geometry_status: unknown
@@ -324,7 +324,12 @@ coverage:
   - municipality_code: "5000"
     municipality_name_he: תל אביב-יפו
     layer_key: neighborhoods
-    status: not_enabled
+    status: municipal_license_under_review
+    source_id: tel_aviv_open_data_discovered
+  - municipality_code: "5000"
+    municipality_name_he: תל אביב-יפו
+    layer_key: buildings
+    status: municipal_license_under_review
     source_id: tel_aviv_open_data_discovered
   - municipality_code: "0831"
     municipality_name_he: ירוחם

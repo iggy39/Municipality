@@ -19,6 +19,9 @@ from municipality.gis_importers import (
     _osm_poi_category,
     _osm_source_object_id,
     _school_lon_lat,
+    _xplan_municipality_query_params,
+    _xplan_plan_metadata,
+    _xplan_property_value,
     discover_ckan_csv_resource,
     fetch_arcgis_feature_pages,
     fetch_govmap_public_parcel,
@@ -83,6 +86,45 @@ def test_arcgis_pagination_accepts_source_where_clause() -> None:
     fetch_arcgis_feature_pages(service_url="https://example.test/arcgis", fetch_json=fetch_json, where="pl_number='101-0057273'")
 
     assert calls[0]["where"] == "pl_number='101-0057273'"
+
+
+def test_xplan_helpers_preserve_compact_metadata_and_field_aliases() -> None:
+    properties = {
+        "PL_NUMBER": "101-0057273",
+        "pl_name": "תכנית בדיקה",
+        "station_desc": "בהפקדה",
+        "internet_short_status": "ניתן להגיש התנגדויות",
+        "pl_url": "https://example.test/plan",
+        "deposit_date": "2026-01-01",
+        "housing_units_delta": 120,
+    }
+
+    metadata = _xplan_plan_metadata(properties, municipality_code="5000", municipality_name_he="תל אביב-יפו")
+
+    assert _xplan_property_value(properties, "plan_number", ["pl_number"]) == "101-0057273"
+    assert metadata["properties"] == properties
+    assert metadata["municipality_code"] == "5000"
+    assert metadata["plan"]["station_desc"] == "בהפקדה"
+    assert metadata["plan"]["pl_url"] == "https://example.test/plan"
+    assert metadata["plan"]["dates"]["deposit_date"] == "2026-01-01"
+    assert metadata["plan"]["quantity_deltas"]["housing_units_delta"] == "120"
+
+
+def test_xplan_municipality_query_params_uses_boundary_envelope() -> None:
+    params = _xplan_municipality_query_params(
+        {
+            "municipality_code": "5000",
+            "envelope": {
+                "type": "Polygon",
+                "coordinates": [[[[34.7, 32.0], [34.9, 32.0], [34.9, 32.2], [34.7, 32.2], [34.7, 32.0]]]],
+            },
+        }
+    )
+
+    assert params is not None
+    assert params["geometryType"] == "esriGeometryEnvelope"
+    assert params["spatialRel"] == "esriSpatialRelIntersects"
+    assert '"xmin": 34.7' in str(params["geometry"])
 
 
 def test_resolve_parcel_fields_handles_known_variants() -> None:

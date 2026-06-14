@@ -850,6 +850,11 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
     .realGisStaticFeature { cursor: pointer; }
 
+    #real-gis-static-map [data-map-layer]:not([data-unfilterable-raster]),
+    #real-gis-static-map [data-map-icon],
+    .schematicMapSvg [data-map-tooltip-title],
+    .schematicMapSvg [role="button"][aria-label] { cursor: pointer; }
+
     .realGisStaticFeature:hover { filter: drop-shadow(0 0 5px rgba(11, 104, 209, 0.38)); }
 
     .mapFrame.isPanning .realGisStaticFeature {
@@ -859,11 +864,9 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
     .realGisStaticLabel {
       pointer-events: none;
-      paint-order: stroke;
-      stroke: rgba(255, 255, 255, 0.94);
-      stroke-width: 4px;
-      stroke-linejoin: round;
-      font-weight: 900;
+      paint-order: normal;
+      stroke: none;
+      font-weight: 800;
       fill: #172033;
       text-anchor: middle;
       direction: rtl;
@@ -1968,7 +1971,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           <h2 id="map-layers-title" class="sectionTitle">שכבות במפה</h2>
           <ul id="map-layer-summary" class="mapLayerSummary" aria-label="שכבות במפה">
             <li class="mapLayerSummaryRow" data-layer="selected_parcel"><span class="mapLayerSummarySwatch"></span><span>אזור נבחר</span><strong class="mapLayerSummaryCount">1</strong></li>
-            <li class="mapLayerSummaryRow" data-layer="nearby_parcels"><span class="mapLayerSummarySwatch"></span><span>חלקות סמוכות</span><strong class="mapLayerSummaryCount">103</strong></li>
+            <li class="mapLayerSummaryRow" data-layer="nearby_parcels"><span class="mapLayerSummarySwatch"></span><span>חלקות בעיר</span><strong class="mapLayerSummaryCount">103</strong></li>
             <li class="mapLayerSummaryRow" data-layer="transport"><span class="mapLayerSummarySwatch"></span><span>תחבורה</span><strong class="mapLayerSummaryCount">8</strong></li>
             <li class="mapLayerSummaryRow" data-layer="schools"><span class="mapLayerSummarySwatch"></span><span>חינוך</span><strong class="mapLayerSummaryCount">6</strong></li>
             <li class="mapLayerSummaryRow" data-layer="osm"><span class="mapLayerSummarySwatch"></span><span>OSM הקשר</span><strong class="mapLayerSummaryCount">15</strong></li>
@@ -2084,37 +2087,37 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             <div class="mapLayerTools" aria-label="כלי תצוגת מפה">
               <label class="mapIconSizeControl" for="map-icon-size">
                 גודל אייקונים: <strong id="map-icon-size-label">קטן</strong>
-                <input id="map-icon-size" type="range" min="0.12" max="0.6" step="0.02" value="0.18" />
+                <input id="map-icon-size" type="range" min="0.05" max="0.6" step="0.01" value="0.05" />
               </label>
               <label class="mapIconSizeControl" for="map-label-size">
                 גודל שמות: <strong id="map-label-size-label">קטן</strong>
-                <input id="map-label-size" type="range" min="0.18" max="0.9" step="0.03" value="0.28" />
+                <input id="map-label-size" type="range" min="0.08" max="0.9" step="0.02" value="0.08" />
               </label>
               <button id="map-toggle-all-filters" class="mapLayerToolButton" type="button">כיבוי כל המסננים</button>
             </div>
-            <p class="mapLayerPopoverSectionTitle">מקורות</p>
+            <p class="mapLayerPopoverSectionTitle">בסיס המפה</p>
             <ul class="mapLayerLegendList">
-              <li><label><input type="checkbox" data-map-layer-toggle="basemap" checked /><span class="mapLayerLegendSwatch road"></span><span>רקע עירוני מפורט (Raster לא מסונן)</span></label></li>
+              <li><label><input type="checkbox" data-map-layer-toggle="basemap" autocomplete="off" /><span class="mapLayerLegendSwatch road"></span><span>רקע עירוני מפורט (Raster לא מסונן)</span></label></li>
               <li><label><input type="checkbox" data-map-layer-toggle="parcel" checked /><span class="mapLayerLegendSwatch parcel"></span><span>אזור נבחר</span></label></li>
-              <li><label><input type="checkbox" data-map-layer-toggle="nearby_parcels" checked /><span class="mapLayerLegendSwatch nearby"></span><span>חלקות סמוכות</span></label></li>
-              <li><label><input type="checkbox" data-map-layer-toggle="pois" checked /><span class="mapLayerLegendSwatch transport"></span><span>תחבורה וחינוך</span></label></li>
-              <li><label><input type="checkbox" data-map-layer-toggle="municipal" checked /><span class="mapLayerLegendSwatch municipal"></span><span>עירוני - בבדיקת רישיון</span></label></li>
-              <li><label><input type="checkbox" data-map-layer-toggle="osm" checked /><span class="mapLayerLegendSwatch osm"></span><span>OSM הקשר וקטורי</span></label></li>
+              <li><label><input type="checkbox" data-map-layer-toggle="nearby_parcels" autocomplete="off" /><span class="mapLayerLegendSwatch nearby"></span><span>חלקות בעיר</span></label></li>
             </ul>
             <p class="mapLayerPopoverSectionTitle">סינון אובייקטים</p>
             <ul class="mapLayerLegendList compact">
-              <li><label><input type="checkbox" data-map-object-toggle="parcels" checked /><span class="mapLayerLegendSwatch parcel"></span><span>חלקות</span></label></li>
-              <li><label><input type="checkbox" data-map-object-toggle="roads" checked /><span class="mapLayerLegendSwatch road"></span><span>דרכים</span></label></li>
+              <li><label><input type="checkbox" data-map-object-toggle="parcels" autocomplete="off" /><span class="mapLayerLegendSwatch parcel"></span><span>חלקות בעיר</span></label></li>
+              <li><label><input type="checkbox" data-map-object-toggle="buildings" autocomplete="off" /><span class="mapLayerLegendSwatch osm"></span><span>מבנים עירוניים</span></label></li>
+              <li><label><input type="checkbox" data-map-object-toggle="osm_roads" checked /><span class="mapLayerLegendSwatch road"></span><span>OSM דרכים</span></label></li>
+              <li><label><input type="checkbox" data-map-object-toggle="osm_railways" /><span class="mapLayerLegendSwatch transport"></span><span>OSM רכבת/מסילות</span></label></li>
               <li><label><input type="checkbox" data-map-object-toggle="transport" checked /><span class="mapLayerLegendSwatch transport"></span><span>תחבורה</span></label></li>
               <li><label><input type="checkbox" data-map-object-toggle="education" checked /><span class="mapLayerLegendSwatch school"></span><span>חינוך</span></label></li>
               <li><label><input type="checkbox" data-map-object-toggle="neighborhoods" checked /><span class="mapLayerLegendSwatch municipal"></span><span>שכונות</span></label></li>
               <li><label><input type="checkbox" data-map-object-toggle="addresses" checked /><span class="mapLayerLegendSwatch address"></span><span>כתובות</span></label></li>
               <li><label><input type="checkbox" data-map-object-toggle="municipal_pois" checked /><span class="mapLayerLegendSwatch municipal"></span><span>מבני ציבור</span></label></li>
-              <li><label><input type="checkbox" data-map-object-toggle="interest" checked /><span class="mapLayerLegendSwatch osm"></span><span>מוקדי עניין</span></label></li>
-              <li><label><input type="checkbox" data-map-object-toggle="parks" checked /><span class="mapLayerLegendSwatch park"></span><span>גנים</span></label></li>
-              <li><label><input type="checkbox" data-map-object-toggle="beaches" checked /><span class="mapLayerLegendSwatch beach"></span><span>חופים/ים</span></label></li>
-              <li><label><input type="checkbox" data-map-object-toggle="bike_paths" checked /><span class="mapLayerLegendSwatch bike"></span><span>אופניים</span></label></li>
-              <li><label><input type="checkbox" data-map-object-toggle="buildings" checked /><span class="mapLayerLegendSwatch osm"></span><span>מבנים</span></label></li>
+              <li><label><input type="checkbox" data-map-object-toggle="municipal_parks" checked /><span class="mapLayerLegendSwatch park"></span><span>גנים עירוניים</span></label></li>
+              <li><label><input type="checkbox" data-map-object-toggle="osm_parks" autocomplete="off" /><span class="mapLayerLegendSwatch park"></span><span>OSM שטחים ירוקים</span></label></li>
+              <li><label><input type="checkbox" data-map-object-toggle="municipal_beaches" checked /><span class="mapLayerLegendSwatch beach"></span><span>חופים עירוניים</span></label></li>
+              <li><label><input type="checkbox" data-map-object-toggle="osm_water" /><span class="mapLayerLegendSwatch beach"></span><span>OSM מים/נחלים</span></label></li>
+              <li><label><input type="checkbox" data-map-object-toggle="municipal_bike_paths" checked /><span class="mapLayerLegendSwatch bike"></span><span>שבילי אופניים</span></label></li>
+              <li><label><input type="checkbox" data-map-object-toggle="osm_interest" checked /><span class="mapLayerLegendSwatch osm"></span><span>OSM מוקדי עניין</span></label></li>
             </ul>
           </aside>
           <div id="map-renderer-status" class="mapRendererStatus">SVG GIS פעיל</div>
@@ -2179,81 +2182,90 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
                 <rect x="346" y="263" width="39" height="44" rx="5" transform="rotate(18 365 285)" />
               </g>
 
-              <path d="M525 -10 C508 54 514 123 548 184 C574 231 608 263 600 328 C592 388 559 447 562 518 C563 556 581 592 606 632" fill="none" stroke="#1676d2" stroke-width="2" stroke-dasharray="8 8" opacity="0.95" />
+              <path data-map-entity-id="entity_rova_tet_vav_transit_route" data-map-tooltip-title="תוואי תחבורה ציבורית" tabindex="0" role="button" aria-label="תוואי תחבורה ציבורית" d="M525 -10 C508 54 514 123 548 184 C574 231 608 263 600 328 C592 388 559 447 562 518 C563 556 581 592 606 632" fill="none" stroke="#1676d2" stroke-width="2" stroke-dasharray="8 8" opacity="0.95" />
+              <text class="realGisStaticLabel" data-map-label="true" data-base-font-size="17" data-map-object="transport" x="629" y="318" fill="#172033" font-size="17">תחבורה ציבורית</text>
 
-              <path data-map-entity-id="entity_rova_tet_vav_selected_area" tabindex="0" role="button" aria-label="רובע טו" d="M336 330 377 238 455 250 518 287 491 344 426 341 404 392 362 367 366 346Z" fill="rgba(111,70,217,0.20)" stroke="#6f46d9" stroke-width="2.2" />
-              <rect data-map-entity-id="entity_rova_tet_vav_selected_area" x="414" y="292" width="78" height="34" rx="9" fill="#6f46d9" filter="url(#mapShadow)" />
-              <text data-map-entity-id="entity_rova_tet_vav_selected_area" id="map-selected-label" x="453" y="314" fill="#fff" font-size="17" font-weight="800" text-anchor="middle" direction="rtl">רובע טו</text>
+              <path data-map-entity-id="entity_rova_tet_vav_selected_area" data-map-tooltip-title="רובע טו" tabindex="0" role="button" aria-label="רובע טו" d="M336 330 377 238 455 250 518 287 491 344 426 341 404 392 362 367 366 346Z" fill="rgba(111,70,217,0.20)" stroke="#6f46d9" stroke-width="2.2" />
+              <rect data-map-entity-id="entity_rova_tet_vav_selected_area" data-map-tooltip-title="רובע טו" x="414" y="292" width="78" height="34" rx="9" fill="#6f46d9" filter="url(#mapShadow)" />
+              <text data-map-entity-id="entity_rova_tet_vav_selected_area" data-map-tooltip-title="רובע טו" id="map-selected-label" x="453" y="314" fill="#fff" font-size="17" font-weight="800" text-anchor="middle" direction="rtl">רובע טו</text>
 
               <g fill="#1f2937" font-size="17" font-weight="850" text-anchor="middle" direction="rtl">
-                <text id="map-area-north" x="590" y="44">צפון העיר</text>
-                <text id="map-area-center" x="489" y="261">מרכז העיר</text>
-                <text id="map-area-west" x="238" y="307">מערב העיר</text>
-                <text id="map-area-east" x="806" y="292">מזרח העיר</text>
-                <text id="map-area-south" x="450" y="555">דרום העיר</text>
+                <text id="map-area-north" data-map-label="true" data-base-font-size="17" x="590" y="44">צפון העיר</text>
+                <text id="map-area-center" data-map-label="true" data-base-font-size="17" x="489" y="261">מרכז העיר</text>
+                <text id="map-area-west" data-map-label="true" data-base-font-size="17" x="238" y="307">מערב העיר</text>
+                <text id="map-area-east" data-map-label="true" data-base-font-size="17" x="806" y="292">מזרח העיר</text>
+                <text id="map-area-south" data-map-label="true" data-base-font-size="17" x="450" y="555">דרום העיר</text>
               </g>
               <text id="map-sea-label" x="136" y="166" fill="#0b68d1" font-size="16" font-weight="850" text-anchor="middle" direction="rtl">חוף הים</text>
 
               <g class="mapMarkers" filter="url(#mapShadow)">
-                <g tabindex="0" role="button" aria-label="תחנת תחבורה ציבורית" transform="translate(520 90)">
+                <g tabindex="0" role="button" aria-label="תחנת תחבורה ציבורית" data-map-tooltip-title="תחנת תחבורה ציבורית" transform="translate(520 90)">
                   <circle r="15" fill="#0b68d1" />
                   <path d="M-6-5h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-12a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z" fill="#fff" />
                   <path d="M-4 8h2M2 8h2M-5-1h10" stroke="#0b68d1" stroke-width="1.3" stroke-linecap="round" />
                 </g>
-                <g tabindex="0" role="button" aria-label="תחנת תחבורה ציבורית" transform="translate(587 248)">
+                <g tabindex="0" role="button" aria-label="תחנת תחבורה ציבורית" data-map-tooltip-title="תחנת תחבורה ציבורית" transform="translate(587 248)">
                   <circle r="15" fill="#0b68d1" />
                   <path d="M-6-5h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-12a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z" fill="#fff" />
                   <path d="M-4 8h2M2 8h2M-5-1h10" stroke="#0b68d1" stroke-width="1.3" stroke-linecap="round" />
                 </g>
-                <g tabindex="0" role="button" aria-label="תחנת תחבורה ציבורית" transform="translate(552 373)">
+                <g tabindex="0" role="button" aria-label="תחנת תחבורה ציבורית" data-map-tooltip-title="תחנת תחבורה ציבורית" transform="translate(552 373)">
                   <circle r="15" fill="#0b68d1" />
                   <path d="M-6-5h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-12a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z" fill="#fff" />
                   <path d="M-4 8h2M2 8h2M-5-1h10" stroke="#0b68d1" stroke-width="1.3" stroke-linecap="round" />
                 </g>
-                <g tabindex="0" role="button" aria-label="תחנת תחבורה ציבורית" transform="translate(528 500)">
+                <g tabindex="0" role="button" aria-label="תחנת תחבורה ציבורית" data-map-tooltip-title="תחנת תחבורה ציבורית" transform="translate(528 500)">
                   <circle r="15" fill="#0b68d1" />
                   <path d="M-6-5h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-12a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2Z" fill="#fff" />
                   <path d="M-4 8h2M2 8h2M-5-1h10" stroke="#0b68d1" stroke-width="1.3" stroke-linecap="round" />
                 </g>
 
-                <g tabindex="0" role="button" aria-label="פארק" transform="translate(330 86)">
+                <g tabindex="0" role="button" aria-label="פארק עירוני" data-map-tooltip-title="פארק עירוני" transform="translate(330 86)">
                   <circle r="17" fill="#fff" />
                   <path d="M0-10c6 0 9 6 5 11h3c2 6-4 9-8 5-4 4-10 1-8-5h3c-4-5-1-11 5-11Z" fill="#18a865" />
                   <path d="M0 5v8" stroke="#0f8b54" stroke-width="2" stroke-linecap="round" />
                 </g>
-                <g tabindex="0" role="button" aria-label="פארק" transform="translate(590 324)">
+                <g tabindex="0" role="button" aria-label="פארק עירוני" data-map-tooltip-title="פארק עירוני" transform="translate(590 324)">
                   <circle r="17" fill="#fff" />
                   <path d="M0-10c6 0 9 6 5 11h3c2 6-4 9-8 5-4 4-10 1-8-5h3c-4-5-1-11 5-11Z" fill="#18a865" />
                   <path d="M0 5v8" stroke="#0f8b54" stroke-width="2" stroke-linecap="round" />
                 </g>
-                <g tabindex="0" role="button" aria-label="פארק" transform="translate(301 410)">
+                <g tabindex="0" role="button" aria-label="פארק עירוני" data-map-tooltip-title="פארק עירוני" transform="translate(301 410)">
                   <circle r="17" fill="#fff" />
                   <path d="M0-10c6 0 9 6 5 11h3c2 6-4 9-8 5-4 4-10 1-8-5h3c-4-5-1-11 5-11Z" fill="#18a865" />
                   <path d="M0 5v8" stroke="#0f8b54" stroke-width="2" stroke-linecap="round" />
                 </g>
-                <g tabindex="0" role="button" aria-label="פארק" transform="translate(684 213)">
+                <g tabindex="0" role="button" aria-label="פארק עירוני" data-map-tooltip-title="פארק עירוני" transform="translate(684 213)">
                   <circle r="17" fill="#fff" />
                   <path d="M0-10c6 0 9 6 5 11h3c2 6-4 9-8 5-4 4-10 1-8-5h3c-4-5-1-11 5-11Z" fill="#18a865" />
                   <path d="M0 5v8" stroke="#0f8b54" stroke-width="2" stroke-linecap="round" />
                 </g>
-                <g tabindex="0" role="button" aria-label="פארק" transform="translate(764 545)">
+                <g tabindex="0" role="button" aria-label="פארק עירוני" data-map-tooltip-title="פארק עירוני" transform="translate(764 545)">
                   <circle r="17" fill="#fff" />
                   <path d="M0-10c6 0 9 6 5 11h3c2 6-4 9-8 5-4 4-10 1-8-5h3c-4-5-1-11 5-11Z" fill="#18a865" />
                   <path d="M0 5v8" stroke="#0f8b54" stroke-width="2" stroke-linecap="round" />
                 </g>
 
-                <g tabindex="0" role="button" aria-label="מבנה ציבור" transform="translate(375 220)">
+                <g tabindex="0" role="button" aria-label="מבנה ציבור" data-map-tooltip-title="מבנה ציבור" transform="translate(375 220)">
                   <circle r="18" fill="#f07a28" />
                   <path d="M-8 8V-4l8-5 8 5V8M-11 8h22M-4 8V0h8v8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                 </g>
-                <g tabindex="0" role="button" aria-label="מבנה ציבור" transform="translate(585 216)">
+                <g tabindex="0" role="button" aria-label="מבנה ציבור" data-map-tooltip-title="מבנה ציבור" transform="translate(585 216)">
                   <circle r="18" fill="#f07a28" />
                   <path d="M-8 8V-4l8-5 8 5V8M-11 8h22M-4 8V0h8v8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                 </g>
-                <g tabindex="0" role="button" aria-label="מבנה ציבור" transform="translate(720 382)">
+                <g tabindex="0" role="button" aria-label="מבנה ציבור" data-map-tooltip-title="מבנה ציבור" transform="translate(720 382)">
                   <circle r="18" fill="#f07a28" />
                   <path d="M-8 8V-4l8-5 8 5V8M-11 8h22M-4 8V0h8v8" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                 </g>
+              </g>
+              <g class="schematicMapLabels">
+                <text class="realGisStaticLabel" data-map-label="true" data-base-font-size="17" data-map-object="osm_parks" x="330" y="61" fill="#172033" font-size="17">פארק עירוני</text>
+                <text class="realGisStaticLabel" data-map-label="true" data-base-font-size="17" data-map-object="osm_parks" x="590" y="299" fill="#172033" font-size="17">פארק עירוני</text>
+                <text class="realGisStaticLabel" data-map-label="true" data-base-font-size="17" data-map-object="osm_parks" x="301" y="385" fill="#172033" font-size="17">פארק עירוני</text>
+                <text class="realGisStaticLabel" data-map-label="true" data-base-font-size="17" data-map-object="municipal_pois" x="375" y="195" fill="#172033" font-size="17">מבנה ציבור</text>
+                <text class="realGisStaticLabel" data-map-label="true" data-base-font-size="17" data-map-object="municipal_pois" x="585" y="191" fill="#172033" font-size="17">מבנה ציבור</text>
+                <text class="realGisStaticLabel" data-map-label="true" data-base-font-size="17" data-map-object="municipal_pois" x="720" y="357" fill="#172033" font-size="17">מבנה ציבור</text>
               </g>
             </svg>
 
@@ -2543,14 +2555,14 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       let staticGisViewBox = { x: 0, y: 0, width: 900, height: 620 };
       let realGisDecorations = [];
       let currentMapExample = mapExampleSelect?.value || "tel_aviv_parcel";
-      let currentMapIconScale = 0.18;
-      let currentMapLabelScale = 0.28;
+      let currentMapIconScale = 0.12;
+      let currentMapLabelScale = 0.18;
       let gisMapProfileRequest = null;
       window.__municipalMapIconScale = currentMapIconScale;
       window.__municipalMapLabelScale = currentMapLabelScale;
-      const MAP_POI_ICON_LIMIT = 10;
-      const MAP_MUNICIPAL_ICON_LIMIT = 6;
-      const MAP_PARK_ICON_LIMIT = 3;
+      const MAP_POI_ICON_LIMIT = 160;
+      const MAP_MUNICIPAL_ICON_LIMIT = 120;
+      const MAP_PARK_ICON_LIMIT = 120;
 
       const normalizeText = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
       const isAlmostEqualText = (left, right) => normalizeText(left) === normalizeText(right);
@@ -2905,15 +2917,34 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         if (category === "transport_stop") return "transport";
         if (["school", "municipal_school", "kindergarten"].includes(category)) return "education";
         if (category === "address_point") return "addresses";
-        if (category === "park") return "parks";
-        if (category === "interest") return "interest";
+        if (category === "park") return "osm_parks";
+        if (category === "interest") return "osm_interest";
         if (["community_center", "culture", "parking", "municipal_poi"].includes(category)) return "municipal_pois";
-        return "interest";
+        return "osm_interest";
       };
 
       const mapExampleCopy = (example) => ({
-        tel_aviv_parcel: "דמו תל אביב בלבד: חלקת MAPI רשמית מודגשת, חלקות MAPI סמוכות כרשת קדסטרלית רשמית, גבול רשות רשמי, תחבורה/חינוך רשמיים, ו-OSM כהקשר בלבד."
+        tel_aviv_parcel: "דמו תל אביב בלבד: חלקת MAPI רשמית מודגשת, חלקות MAPI כרשת קדסטרלית עירונית, גבול רשות רשמי, תחבורה/חינוך רשמיים, ו-OSM כהקשר בלבד."
       }[example] || "דמו תל אביב בלבד עם שכבות GIS אמיתיות ו-provenance לכל פריט.");
+
+      const municipalitySlugByCode = {
+        "0070": "ashdod",
+        "3000": "jerusalem",
+        "4000": "haifa",
+        "5000": "tel_aviv",
+        "9000": "beer_sheva",
+        "0831": "yeruham"
+      };
+
+      const selectedMunicipalityForQuery = () => {
+        const contextCode = String(currentDashboardData?.main_civic_workspace?.map_context?.municipality_code || dashboardRoot?.dataset.gisQuestionMunicipalityCode || "").trim();
+        const mapCode = String(window.__municipalDashboardGisMap?.query?.municipality_code || "").trim();
+        const code = contextCode || mapCode;
+        if (code && municipalitySlugByCode[code]) {
+          return municipalitySlugByCode[code];
+        }
+        return String(dashboardState?.municipality_id || currentDashboardData?.state?.municipality_id || "").trim() || undefined;
+      };
 
       const mapExampleLayers = (example) => {
         const base = { parcel: true, nearbyParcels: false, pois: false, plans: false, boundaries: false, neighborhoods: false, addressPoints: false, municipalPois: false, contextPois: false, buildings: false, basemap: false };
@@ -3012,10 +3043,6 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       const primaryMapGeometry = (payload) => payload?.parcel?.geometry || payload?.primary_feature?.geometry || payload?.layers?.plans?.items?.[0]?.geometry || null;
 
       const selectedAreaFeature = (payload) => {
-        const neighborhood = payload?.layers?.neighborhoods?.items?.find((item) => item?.geometry?.type === "Polygon" || item?.geometry?.type === "MultiPolygon");
-        if (neighborhood) {
-          return { ...neighborhood, label: "אזור נבחר", feature_type: "selected_area" };
-        }
         return payload?.parcel?.geometry ? { ...payload.parcel, label: "אזור נבחר", feature_type: "selected_area" } : null;
       };
 
@@ -3081,7 +3108,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const osmDisplayed = osmContextCount(payload, "displayed_count");
         const rows = [
           { key: "selected_parcel", label: "אזור נבחר", count: selectedAreaFeature(payload) ? 1 : 0 },
-          { key: "nearby_parcels", label: "חלקות סמוכות", count: Number(payload.layers?.nearby_parcels?.displayed_count || payload.layers?.nearby_parcels?.count || 0) },
+          { key: "nearby_parcels", label: "חלקות בעיר", count: Number(payload.layers?.nearby_parcels?.displayed_count || payload.layers?.nearby_parcels?.count || 0) },
           { key: "transport", label: "תחבורה", count: Number(transport.displayed_count || 0) },
           { key: "schools", label: "חינוך", count: Number(schools.displayed_count || 0) },
           { key: "osm", label: "OSM הקשר", count: osmDisplayed },
@@ -3100,6 +3127,71 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           item.append(swatch, label, count);
           return item;
         }));
+      };
+
+      const mapContextLayerLabel = (layerKey) => ({
+        selected_parcel: "חלקה נבחרת",
+        selected_plan: "תכנית נבחרת",
+        municipality: "רשות מקומית",
+        plans: "תכניות",
+        neighborhoods: "שכונה / רובע",
+        transport_stops: "תחבורה",
+        schools: "חינוך",
+        context_roads: "דרכים OSM",
+        context_landuse: "שטחים פתוחים OSM",
+        buildings: "מבנים OSM"
+      }[layerKey] || layerKey || "שכבה");
+
+      const renderDashboardMapContext = (mapContext) => {
+        if (!mapContext || typeof mapContext !== "object") {
+          return;
+        }
+        const layers = Array.isArray(mapContext.layers) ? mapContext.layers : [];
+        const summary = document.getElementById("map-layer-summary");
+        if (summary) {
+          const rows = layers
+            .filter((layer) => Number(layer?.count || 0) > 0 || ["not_found", "not_ingested", "not_enabled", "municipal_license_under_review", "context_only"].includes(layer?.status))
+            .map((layer) => ({ key: layer.layer_key || "layer", label: mapContextLayerLabel(layer.layer_key), count: Number(layer.count || 0), status: layer.status || "unknown" }));
+          summary.replaceChildren(...rows.map((row) => {
+            const item = document.createElement("li");
+            item.className = "mapLayerSummaryRow";
+            item.dataset.layer = row.key;
+            item.title = row.status;
+            const swatch = document.createElement("span");
+            swatch.className = "mapLayerSummarySwatch";
+            const label = document.createElement("span");
+            label.textContent = row.label;
+            const count = document.createElement("strong");
+            count.className = "mapLayerSummaryCount";
+            count.textContent = String(row.count);
+            item.append(swatch, label, count);
+            return item;
+          }));
+        }
+        const layerCounts = document.getElementById("map-layer-counts");
+        if (layerCounts) {
+          const rows = layers.filter((layer) => Number(layer?.count || 0) > 0).slice(0, 6);
+          layerCounts.replaceChildren(...rows.map((layer) => {
+            const item = document.createElement("li");
+            const label = document.createElement("span");
+            const count = document.createElement("strong");
+            label.textContent = mapContextLayerLabel(layer.layer_key);
+            count.textContent = String(layer.count || 0);
+            item.append(label, count);
+            return item;
+          }));
+        }
+        const caveats = Array.isArray(mapContext.caveats) ? mapContext.caveats.filter(Boolean) : [];
+        if (caveats.length) {
+          setText(".mapProvenanceBadgeTitle", "הקשר GIS לשאלה");
+          setText(".mapProvenanceBadgeText", caveats[0]);
+          setAttr(".mapProvenanceBadge", "data-spatial-representation", "gis_context");
+        }
+        if (dashboardRoot) {
+          dashboardRoot.dataset.gisQuestionContextStatus = mapContext.status || "";
+          dashboardRoot.dataset.gisQuestionMunicipalityCode = mapContext.municipality_code || "";
+          dashboardRoot.dataset.gisQuestionLayerCount = String(layers.length);
+        }
       };
 
       const setPanelHidden = (id, hidden) => {
@@ -3264,8 +3356,8 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         if (!raw) {
           return world;
         }
-        const padX = Math.max(raw.width * 0.72, 95);
-        const padY = Math.max(raw.height * 0.72, 68);
+        const padX = Math.max(raw.width * 0.72, 38);
+        const padY = Math.max(raw.height * 0.72, 26);
         const padded = { x: raw.x - padX, y: raw.y - padY, width: raw.width + padX * 2, height: raw.height + padY * 2 };
         return clampBoxToWorld(fitBoxToAspect(padded, 900 / 620), world);
       };
@@ -3274,6 +3366,9 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const areaFeature = selectedAreaFeature(payload);
         const worldPoints = [];
         for (const item of payload.layers?.municipal_boundaries?.items || []) {
+          collectGeoPoints(item.geometry?.coordinates || [], worldPoints);
+        }
+        for (const item of payload.layers?.neighboring_municipal_boundaries?.items || []) {
           collectGeoPoints(item.geometry?.coordinates || [], worldPoints);
         }
         if (worldPoints.length === 0) {
@@ -3379,8 +3474,24 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         tooltip.style.top = `${Math.min(Math.max(8, event.clientY - rect.top + 12), rect.height - 95)}px`;
       };
 
+      window.__showMunicipalMapTooltip = showStaticFeatureTooltip;
+
+      window.__hideMunicipalMapTooltip = () => {
+        document.querySelector(".realGisHoverCard")?.remove();
+      };
+
       const hideStaticFeatureTooltip = () => {
         document.querySelector(".realGisHoverCard")?.remove();
+      };
+
+      const showSchematicFeatureTooltip = (event, node) => {
+        const title = node?.dataset?.mapTooltipTitle || node?.getAttribute?.("aria-label") || "פריט מפה";
+        showStaticFeatureTooltip(event, {
+          label: title,
+          source_id: "schematic_map",
+          provenance_id: "fallback_schematic",
+          source: { name_he: "מפה סכמטית", display_status: "context_only" }
+        });
       };
 
       const decorateStaticFeature = (node, feature, title) => {
@@ -3391,6 +3502,8 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const label = document.createElementNS("http://www.w3.org/2000/svg", "title");
         label.textContent = title || `${featureTitle(feature)} · ${feature?.source_id || "מקור לא ידוע"}`;
         node.appendChild(label);
+        node.addEventListener("mouseenter", (event) => showStaticFeatureTooltip(event, feature));
+        node.addEventListener("mousemove", (event) => showStaticFeatureTooltip(event, feature));
         node.addEventListener("mouseleave", hideStaticFeatureTooltip);
         node.addEventListener("click", (event) => {
           if (window.__municipalSvgSuppressFeatureClick) {
@@ -3427,7 +3540,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       };
 
       const appendStaticTextLabel = (svg, feature, project, label, attrs = {}) => {
-        const point = geometryLabelPoint(feature.geometry, project);
+        const point = geometryLabelPoint(feature.label_point || feature.geometry, project);
         if (!point || !label) {
           return null;
         }
@@ -3438,7 +3551,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const baseFontSize = Number(attrs["font-size"] || 13);
         text.setAttribute("data-map-label", "true");
         text.setAttribute("data-base-font-size", String(baseFontSize));
-        const scaledFontSize = baseFontSize * (window.__municipalMapLabelScale || 0.28);
+        const scaledFontSize = baseFontSize * (window.__municipalMapLabelScale || 0.18);
         text.setAttribute("font-size", String(scaledFontSize));
         text.style.fontSize = `${scaledFontSize}px`;
         for (const [key, value] of Object.entries(attrs)) {
@@ -3450,6 +3563,21 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         text.textContent = label;
         svg.appendChild(text);
         return text;
+      };
+
+      const appendStaticLayerTextLabels = (svg, items, project, objectType, fallbackLabel = "") => {
+        for (const item of items || []) {
+          const label = cleanMapLabel(item?.name_he || item?.name_en || fallbackLabel);
+          if (!label) {
+            continue;
+          }
+          appendStaticTextLabel(svg, item, project, label, {
+            "data-map-layer": "municipal",
+            "data-map-object": objectType,
+            fill: "#222831",
+            "font-size": "11"
+          });
+        }
       };
 
       const appendStaticPillLabel = (svg, feature, project, label, attrs = {}) => {
@@ -3501,7 +3629,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const color = poiColor(category);
         const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
         const baseTransform = `translate(${x.toFixed(1)} ${y.toFixed(1)})`;
-        group.setAttribute("transform", `${baseTransform} scale(${window.__municipalMapIconScale || 0.18})`);
+        group.setAttribute("transform", `${baseTransform} scale(${window.__municipalMapIconScale || 0.12})`);
         group.setAttribute("data-map-icon", "true");
         group.setAttribute("data-base-transform", baseTransform);
         group.setAttribute("data-map-layer", layer);
@@ -3544,21 +3672,21 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         if (!project?.bounds) {
           return;
         }
-        const { minLon, minLat, maxLon, maxLat } = expandBounds(project.bounds, 1.75);
+        const { minLon, minLat, maxLon, maxLat } = project.bounds;
         const params = new URLSearchParams({
           f: "image",
           bbox: `${minLon},${minLat},${maxLon},${maxLat}`,
           bboxSR: "4326",
           imageSR: "4326",
-          size: "1575,1085",
+          size: "900,620",
           format: "png32",
           transparent: "false"
         });
         const image = document.createElementNS("http://www.w3.org/2000/svg", "image");
-        image.setAttribute("x", "-337.5");
-        image.setAttribute("y", "-232.5");
-        image.setAttribute("width", "1575");
-        image.setAttribute("height", "1085");
+        image.setAttribute("x", "0");
+        image.setAttribute("y", "0");
+        image.setAttribute("width", "900");
+        image.setAttribute("height", "620");
         image.setAttribute("preserveAspectRatio", "none");
         image.setAttribute("href", `https://gisn.tel-aviv.gov.il/arcgis/rest/services/IView2MapHeb/MapServer/export?${params.toString()}`);
         image.setAttribute("data-map-layer", "basemap");
@@ -3571,6 +3699,41 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const layerInput = document.querySelector(`[data-map-layer-toggle="${layer}"]`);
         const objectInput = objectType ? document.querySelector(`[data-map-object-toggle="${objectType}"]`) : null;
         return (!layerInput || layerInput.checked) && (!objectInput || objectInput.checked);
+      };
+
+      const appendStaticLandMask = (svg, payload, project) => {
+        for (const item of payload.layers?.neighboring_municipal_boundaries?.items || []) {
+          if (!item?.geometry) {
+            continue;
+          }
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          path.setAttribute("d", polygonPaths(item.geometry, project));
+          path.setAttribute("data-map-layer", "land");
+          path.setAttribute("data-map-object", "neighboring_municipality");
+          path.setAttribute("fill", "#edf2ee");
+          path.setAttribute("fill-opacity", "0.88");
+          path.setAttribute("stroke", "rgba(100, 116, 139, 0.34)");
+          path.setAttribute("stroke-width", "0.85");
+          path.setAttribute("stroke-linejoin", "round");
+          path.style.pointerEvents = "none";
+          svg.appendChild(path);
+        }
+        for (const item of payload.layers?.municipal_boundaries?.items || []) {
+          if (!item?.geometry) {
+            continue;
+          }
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          path.setAttribute("d", polygonPaths(item.geometry, project));
+          path.setAttribute("data-map-layer", "land");
+          path.setAttribute("data-map-object", "land");
+          path.setAttribute("fill", "#edf2ee");
+          path.setAttribute("fill-opacity", "0.96");
+          path.setAttribute("stroke", "rgba(15, 118, 110, 0.74)");
+          path.setAttribute("stroke-width", "1.7");
+          path.setAttribute("stroke-linejoin", "round");
+          path.style.pointerEvents = "none";
+          svg.appendChild(path);
+        }
       };
 
       const renderStaticGisMap = (payload, options = {}) => {
@@ -3592,83 +3755,78 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         background.setAttribute("y", "0");
         background.setAttribute("width", "900");
         background.setAttribute("height", "620");
-        background.setAttribute("fill", "#edf2ee");
+        background.setAttribute("fill", "#bde7f7");
         svg.appendChild(background);
         if (shouldRenderMapItem("basemap")) {
           appendStaticBasemapImage(svg, project);
         }
-        if (shouldRenderMapItem("osm", "beaches")) {
+        if (shouldRenderMapItem("osm", "osm_water")) {
           for (const item of payload.layers?.context_water?.items || []) {
-            appendStaticPolygonFeature(svg, item, project, { "data-map-layer": "osm", "data-map-object": "beaches", fill: "rgba(164, 216, 235, 0.44)", stroke: "rgba(87, 167, 199, 0.22)", "stroke-width": "0.45", "stroke-linejoin": "round" }, `${featureTitle(item)} · מים OSM`);
+            appendStaticPolygonFeature(svg, item, project, { "data-map-layer": "osm", "data-map-object": "osm_water", fill: "rgba(164, 216, 235, 0.44)", stroke: "rgba(87, 167, 199, 0.22)", "stroke-width": "0.45", "stroke-linejoin": "round" }, `${featureTitle(item)} · מים OSM`);
           }
           for (const item of payload.layers?.context_waterways?.items || []) {
-            appendStaticLineFeature(svg, item, project, { "data-map-layer": "osm", "data-map-object": "beaches", stroke: "rgba(87, 167, 199, 0.45)", "stroke-width": "1.1", "stroke-linecap": "round", "stroke-linejoin": "round" }, `${featureTitle(item)} · ערוץ מים OSM`);
+            appendStaticLineFeature(svg, item, project, { "data-map-layer": "osm", "data-map-object": "osm_water", stroke: "rgba(87, 167, 199, 0.45)", "stroke-width": "1.1", "stroke-linecap": "round", "stroke-linejoin": "round" }, `${featureTitle(item)} · ערוץ מים OSM`);
           }
         }
-        if (shouldRenderMapItem("municipal", "beaches")) {
+        appendStaticLandMask(svg, payload, project);
+        if (shouldRenderMapItem("municipal", "municipal_beaches")) {
           for (const item of payload.layers?.municipal_beaches?.items || []) {
-            appendStaticPolygonFeature(svg, item, project, { "data-map-layer": "municipal", "data-map-object": "beaches", fill: "rgba(164, 216, 235, 0.34)", stroke: "rgba(87, 167, 199, 0.30)", "stroke-width": "0.55", "stroke-linejoin": "round" }, `${featureTitle(item)} · חוף עירוני בבדיקת רישיון`);
+            appendStaticPolygonFeature(svg, item, project, { "data-map-layer": "municipal", "data-map-object": "municipal_beaches", fill: "rgba(164, 216, 235, 0.34)", stroke: "rgba(87, 167, 199, 0.30)", "stroke-width": "0.55", "stroke-linejoin": "round" }, `${featureTitle(item)} · חוף עירוני בבדיקת רישיון`);
           }
         }
-        if (shouldRenderMapItem("osm", "parks")) {
+        if (shouldRenderMapItem("osm", "osm_parks")) {
           for (const item of payload.layers?.context_landuse?.items || []) {
-            appendStaticPolygonFeature(svg, item, project, { "data-map-layer": "osm", "data-map-object": "parks", fill: "rgba(190, 233, 203, 0.54)", stroke: "rgba(93, 173, 120, 0.16)", "stroke-width": "0.45", "stroke-linejoin": "round" }, `${featureTitle(item)} · שימוש קרקע OSM`);
+            appendStaticPolygonFeature(svg, item, project, { "data-map-layer": "osm", "data-map-object": "osm_parks", fill: "rgba(190, 233, 203, 0.54)", stroke: "rgba(93, 173, 120, 0.16)", "stroke-width": "0.45", "stroke-linejoin": "round" }, `${featureTitle(item)} · שימוש קרקע OSM`);
           }
         }
-        if (shouldRenderMapItem("municipal", "parks")) {
+        if (shouldRenderMapItem("municipal", "municipal_parks")) {
           for (const item of payload.layers?.municipal_parks?.items || []) {
-            appendStaticPolygonFeature(svg, item, project, { "data-map-layer": "municipal", "data-map-object": "parks", fill: "rgba(190, 233, 203, 0.42)", stroke: "rgba(74, 160, 104, 0.18)", "stroke-width": "0.45", "stroke-linejoin": "round" }, `${featureTitle(item)} · גן/פארק עירוני בבדיקת רישיון`);
+            appendStaticPolygonFeature(svg, item, project, { "data-map-layer": "municipal", "data-map-object": "municipal_parks", fill: "rgba(190, 233, 203, 0.42)", stroke: "rgba(74, 160, 104, 0.18)", "stroke-width": "0.45", "stroke-linejoin": "round" }, `${featureTitle(item)} · גן/פארק עירוני בבדיקת רישיון`);
           }
         }
-        if (shouldRenderMapItem("osm", "roads")) {
+        if (shouldRenderMapItem("osm", "osm_roads")) {
           for (const item of payload.layers?.context_roads?.items || []) {
-            appendStaticLineFeature(svg, item, project, { "data-map-layer": "osm", "data-map-object": "roads", stroke: "rgba(199, 210, 220, 0.48)", "stroke-width": "4.2", "stroke-linecap": "round", "stroke-linejoin": "round" }, `${featureTitle(item)} · דרך OSM`);
-            appendStaticLineFeature(svg, item, project, { "data-map-layer": "osm", "data-map-object": "roads", stroke: "rgba(255, 255, 255, 0.88)", "stroke-width": "2.2", "stroke-linecap": "round", "stroke-linejoin": "round" }, `${featureTitle(item)} · דרך OSM`);
+            appendStaticLineFeature(svg, item, project, { "data-map-layer": "osm", "data-map-object": "osm_roads", stroke: "rgba(148, 163, 184, 0.42)", "stroke-width": "2.6", "stroke-linecap": "round", "stroke-linejoin": "round" }, `${featureTitle(item)} · דרך OSM`);
+            appendStaticLineFeature(svg, item, project, { "data-map-layer": "osm", "data-map-object": "osm_roads", stroke: "rgba(255, 255, 255, 0.72)", "stroke-width": "1.25", "stroke-linecap": "round", "stroke-linejoin": "round" }, `${featureTitle(item)} · דרך OSM`);
           }
         }
-        if (shouldRenderMapItem("osm", "transport")) {
+        if (shouldRenderMapItem("osm", "osm_railways")) {
           for (const item of payload.layers?.context_railways?.items || []) {
-            appendStaticLineFeature(svg, item, project, { "data-map-layer": "osm", "data-map-object": "transport", stroke: "rgba(11, 104, 209, 0.58)", "stroke-width": "1.6", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-dasharray": "7 7" }, `${featureTitle(item)} · תוואי תחבורה OSM - הקשר בלבד`);
+            appendStaticLineFeature(svg, item, project, { "data-map-layer": "osm", "data-map-object": "osm_railways", stroke: "rgba(11, 104, 209, 0.58)", "stroke-width": "1.6", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-dasharray": "7 7" }, `${featureTitle(item)} · תוואי תחבורה OSM - הקשר בלבד`);
           }
         }
-        if (shouldRenderMapItem("municipal", "bike_paths")) {
+        if (shouldRenderMapItem("municipal", "municipal_bike_paths")) {
           for (const item of payload.layers?.municipal_bike_paths?.items || []) {
-            appendStaticLineFeature(svg, item, project, { "data-map-layer": "municipal", "data-map-object": "bike_paths", stroke: "rgba(6, 182, 212, 0.46)", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-dasharray": "5 5" }, `${featureTitle(item)} · שביל אופניים עירוני בבדיקת רישיון`);
+            appendStaticLineFeature(svg, item, project, { "data-map-layer": "municipal", "data-map-object": "municipal_bike_paths", stroke: "rgba(6, 182, 212, 0.46)", "stroke-width": "1", "stroke-linecap": "round", "stroke-linejoin": "round", "stroke-dasharray": "5 5" }, `${featureTitle(item)} · שביל אופניים עירוני בבדיקת רישיון`);
           }
         }
         if (shouldRenderMapItem("nearby_parcels", "parcels")) {
           for (const item of payload.layers?.nearby_parcels?.items || []) {
-            appendStaticPolygonFeature(svg, item, project, { "data-map-layer": "nearby_parcels", "data-map-object": "parcels", fill: "rgba(255, 255, 255, 0.06)", stroke: "rgba(124, 111, 85, 0.30)", "stroke-width": "0.55", "stroke-linejoin": "round" }, `${featureTitle(item)} · חלקת MAPI סמוכה`);
+            appendStaticPolygonFeature(svg, item, project, { "data-map-layer": "nearby_parcels", "data-map-object": "parcels", fill: "none", stroke: "rgba(101, 84, 52, 0.55)", "stroke-width": "0.55", "stroke-linejoin": "round" }, `${featureTitle(item)} · חלקת MAPI בעיר`);
           }
         }
-        if (shouldRenderMapItem("osm", "buildings")) {
+        if (shouldRenderMapItem("municipal", "buildings")) {
           for (const item of payload.layers?.buildings?.items || []) {
-            appendStaticPolygonFeature(svg, item, project, { "data-map-layer": "osm", "data-map-object": "buildings", fill: "rgba(148, 163, 184, 0.12)", stroke: "rgba(100, 116, 139, 0.22)", "stroke-width": "0.45", "stroke-linejoin": "round" }, `${featureTitle(item)} · מבנה OSM`);
-          }
-        }
-        if (shouldRenderMapItem("municipal", "neighborhoods")) {
-          for (const item of payload.layers?.neighborhoods?.items || []) {
-            appendStaticTextLabel(svg, item, project, cleanMapLabel(item.name_he || item.name_en), { "data-map-layer": "municipal", "data-map-object": "neighborhoods", fill: "#222831", "font-size": "15" });
+            appendStaticPolygonFeature(svg, item, project, { "data-map-layer": "municipal", "data-map-object": "buildings", fill: "rgba(68, 76, 86, 0.26)", stroke: "rgba(30, 41, 59, 0.48)", "stroke-width": "0.42", "stroke-linejoin": "round" }, `${featureTitle(item)} · מבנה עירוני בבדיקת רישיון`);
           }
         }
         if (shouldRenderMapItem("parcel", "parcels")) {
           const selectedArea = selectedAreaFeature(payload);
           if (selectedArea?.geometry) {
-            appendStaticPolygonFeature(svg, selectedArea, project, { "data-map-layer": "parcel", "data-map-object": "parcels", fill: "rgba(124, 77, 206, 0.20)", stroke: "rgba(255,255,255,0.96)", "stroke-width": "7", "stroke-linejoin": "round" }, "אזור נבחר · פוליגון עירוני אמיתי");
-            appendStaticPolygonFeature(svg, selectedArea, project, { "data-map-layer": "parcel", "data-map-object": "parcels", fill: "rgba(124, 77, 206, 0.22)", stroke: "#7c4dce", "stroke-width": "2.6", "stroke-linejoin": "round" }, "אזור נבחר · פוליגון עירוני אמיתי");
-            appendStaticPillLabel(svg, selectedArea, project, "אזור נבחר", { "data-map-layer": "parcel", "data-map-object": "parcels" });
+            appendStaticPolygonFeature(svg, selectedArea, project, { "data-map-layer": "parcel", "data-map-object": "selected_area", fill: "rgba(124, 77, 206, 0.20)", stroke: "rgba(255,255,255,0.96)", "stroke-width": "7", "stroke-linejoin": "round" }, "אזור נבחר · פוליגון עירוני אמיתי");
+            appendStaticPolygonFeature(svg, selectedArea, project, { "data-map-layer": "parcel", "data-map-object": "selected_area", fill: "rgba(124, 77, 206, 0.22)", stroke: "#7c4dce", "stroke-width": "2.6", "stroke-linejoin": "round" }, "אזור נבחר · פוליגון עירוני אמיתי");
           }
           const selectedParcel = { ...payload.parcel, geometry: primaryGeometry };
-          appendStaticPolygonFeature(svg, selectedParcel, project, { "data-map-layer": "parcel", "data-map-object": "parcels", fill: "rgba(255,255,255,0.52)", stroke: "#5b21b6", "stroke-width": "2.1", "stroke-linejoin": "round" }, `${payload.parcel?.label || "חלקת MAPI"} · חלקת MAPI 7103/43`);
+          appendStaticPolygonFeature(svg, selectedParcel, project, { "data-map-layer": "parcel", "data-map-object": "selected_area", fill: "rgba(255,255,255,0.52)", stroke: "#5b21b6", "stroke-width": "2.1", "stroke-linejoin": "round" }, `${payload.parcel?.label || "חלקת MAPI"} · חלקת MAPI 7103/43`);
         }
-        if (shouldRenderMapItem("osm", "parks")) {
+        if (shouldRenderMapItem("osm", "osm_parks")) {
           for (const item of (payload.layers?.context_landuse?.items || []).slice(0, MAP_PARK_ICON_LIMIT)) {
-            appendStaticGeometryIconFeature(svg, item, project, "park", "osm", "parks", `${featureTitle(item)} · פארק/שימוש קרקע OSM`);
+            appendStaticGeometryIconFeature(svg, item, project, "park", "osm", "osm_parks", `${featureTitle(item)} · פארק/שימוש קרקע OSM`);
           }
         }
-        if (shouldRenderMapItem("municipal", "parks")) {
+        if (shouldRenderMapItem("municipal", "municipal_parks")) {
           for (const item of (payload.layers?.municipal_parks?.items || []).slice(0, MAP_PARK_ICON_LIMIT)) {
-            appendStaticGeometryIconFeature(svg, item, project, "park", "municipal", "parks", `${featureTitle(item)} · גן/פארק עירוני בבדיקת רישיון`);
+            appendStaticGeometryIconFeature(svg, item, project, "park", "municipal", "municipal_parks", `${featureTitle(item)} · גן/פארק עירוני בבדיקת רישיון`);
           }
         }
         for (const poi of (payload.nearby_pois?.items || []).slice(0, MAP_POI_ICON_LIMIT)) {
@@ -3687,16 +3845,22 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             appendStaticIconFeature(svg, { ...poi, poi_category: poi.poi_category || "municipal_poi" }, project, "municipal", `${cleanMapLabel(poi.name_he || poi.name_en) || poi.poi_category || "מבנה ציבור"} · ${poi.provenance_id}`);
           }
         }
-        if (shouldRenderMapItem("osm", "interest")) {
+        if (shouldRenderMapItem("osm", "osm_interest")) {
           for (const poi of (payload.layers?.context_pois?.items || []).slice(0, MAP_MUNICIPAL_ICON_LIMIT)) {
-            appendStaticIconFeature(svg, { ...poi, poi_category: "interest" }, project, "osm", `${cleanMapLabel(poi.name_he || poi.name_en) || poi.poi_category || "מוקד עניין OSM"} · ${poi.provenance_id}`, "interest");
+            appendStaticIconFeature(svg, { ...poi, poi_category: "interest" }, project, "osm", `${cleanMapLabel(poi.name_he || poi.name_en) || poi.poi_category || "מוקד עניין OSM"} · ${poi.provenance_id}`, "osm_interest");
           }
+        }
+        if (shouldRenderMapItem("municipal", "neighborhoods")) {
+          appendStaticLayerTextLabels(svg, payload.layers?.neighborhoods?.items, project, "neighborhoods");
         }
         targetSvg.replaceChildren(...Array.from(svg.childNodes));
         targetSvg.hidden = false;
         staticGisViewBox = { x: 0, y: 0, width: 900, height: 620 };
         targetSvg.dataset.worldViewBox = viewBoxString(project.worldViewBox || staticGisViewBox);
         targetSvg.dataset.focusViewBox = viewBoxString(project.focusViewBox || staticGisViewBox);
+        if (project.bounds) {
+          targetSvg.dataset.geoBounds = [project.bounds.minLon, project.bounds.minLat, project.bounds.maxLon, project.bounds.maxLat].map((value) => Number(value).toFixed(8)).join(",");
+        }
         if (options.preserveViewBox && previousViewBox) {
           targetSvg.setAttribute("viewBox", previousViewBox);
         } else {
@@ -3716,6 +3880,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         renderMapLayerSummary(payload);
         window.__municipalDashboardGisMap = payload;
         window.__applyMunicipalSvgFilters?.();
+        window.__scheduleMunicipalVisibleBuildingLoad?.();
         if (dashboardRoot) {
           dashboardRoot.dataset.realGisAvailable = "true";
           dashboardRoot.dataset.gisMapStatus = "static-rendered";
@@ -3780,6 +3945,43 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           map.addLayer({ id: layerId, type: "circle", source: sourceId, paint: { "circle-radius": ["case", ["==", ["get", "category"], "school"], 5, 4], "circle-color": ["get", "color"], "circle-stroke-color": "#ffffff", "circle-stroke-width": 1.4, "circle-opacity": 0.62 } });
         }
         map.setPaintProperty(layerId, "circle-color", ["get", "color"]);
+      };
+
+      const mapLibreLabelSize = () => 15 * (window.__municipalMapLabelScale || 0.18);
+
+      const ensureSymbolLabelLayer = (map, sourceId, layerId) => {
+        if (!map.getLayer(layerId)) {
+          map.addLayer({
+            id: layerId,
+            type: "symbol",
+            source: sourceId,
+            layout: {
+              "text-field": ["get", "title"],
+              "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+              "text-size": mapLibreLabelSize(),
+              "text-anchor": "center",
+              "text-allow-overlap": false,
+              "text-ignore-placement": false
+            },
+            paint: {
+              "text-color": "#172033",
+              "text-halo-color": "rgba(255,255,255,0.94)",
+              "text-halo-width": 2
+            }
+          });
+        }
+        map.setLayoutProperty(layerId, "text-size", mapLibreLabelSize());
+      };
+
+      const applyMapLibreLabelScale = () => {
+        if (!realGisMap) {
+          return;
+        }
+        for (const layerId of ["dashboard-neighborhoods-label", "dashboard-address-points-label", "dashboard-municipal-pois-label"]) {
+          if (realGisMap.getLayer(layerId)) {
+            realGisMap.setLayoutProperty(layerId, "text-size", mapLibreLabelSize());
+          }
+        }
       };
 
       const ensurePocBasemap = (map, center) => {
@@ -3971,10 +4173,13 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           ensureFillLayer(realGisMap, "dashboard-boundaries", "dashboard-boundaries-fill", "dashboard-boundaries-outline", "#0f766e", 0.015, 0.9);
           updateGeoJsonSource(realGisMap, "dashboard-neighborhoods", neighborhoodCollection);
           ensureFillLayer(realGisMap, "dashboard-neighborhoods", "dashboard-neighborhoods-fill", "dashboard-neighborhoods-outline", "#2563eb", 0.10, 1.3);
+          ensureSymbolLabelLayer(realGisMap, "dashboard-neighborhoods", "dashboard-neighborhoods-label");
           updateGeoJsonSource(realGisMap, "dashboard-address-points", addressCollection);
           ensureCircleLayer(realGisMap, "dashboard-address-points", "dashboard-address-points-circle");
+          ensureSymbolLabelLayer(realGisMap, "dashboard-address-points", "dashboard-address-points-label");
           updateGeoJsonSource(realGisMap, "dashboard-municipal-pois", municipalPoiCollection);
           ensureCircleLayer(realGisMap, "dashboard-municipal-pois", "dashboard-municipal-pois-circle");
+          ensureSymbolLabelLayer(realGisMap, "dashboard-municipal-pois", "dashboard-municipal-pois-label");
           updateGeoJsonSource(realGisMap, "dashboard-plans", planCollection);
           ensureFillLayer(realGisMap, "dashboard-plans", "dashboard-plans-fill", "dashboard-plans-outline", "#7c3aed", 0.13, 1.4);
           updateGeoJsonSource(realGisMap, "dashboard-buildings", buildingCollection);
@@ -4056,7 +4261,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         return true;
       };
 
-      const loadDashboardGisMap = async (profile = "initial", options = {}) => {
+      const loadDashboardGisMap = async (profile = "overview", options = {}) => {
         if (gisMapProfileRequest && profile === "overview") {
           return gisMapProfileRequest;
         }
@@ -4117,6 +4322,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const discovery = data.start_discovery_panel || {};
         const workspace = data.main_civic_workspace || {};
         const map = workspace.map || {};
+        const mapContext = workspace.map_context || data.state?.intent_resolution?.geo?.map_context || null;
         const mapProvenance = map.provenance || {};
 
         document.title = copy.document_title || document.title;
@@ -4177,6 +4383,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             }
           }
         }
+        renderDashboardMapContext(mapContext);
 
         setText("#timeline-title", timelineCopy.title);
         setAttr(".timelineArrow.prev", "aria-label", timelineCopy.previous_label);
@@ -4246,6 +4453,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           dashboardRoot.dataset.detailDrawerMode = dashboardState.active_detail_drawer_mode || "";
           dashboardRoot.dataset.mapSpatialRepresentation = currentDashboardData?.main_civic_workspace?.map?.spatial_representation || "";
           dashboardRoot.dataset.realGisAvailable = String(Boolean(currentDashboardData?.main_civic_workspace?.map?.real_gis_available || window.__municipalDashboardGisMap?.real_gis_available));
+          dashboardRoot.dataset.mapContextAvailable = String(Boolean(mapContext));
         }
         if (window.__municipalDashboardGisMap?.status === "found" && !window.__municipalDashboardGisMapFromServer) {
           renderRealGisMap(window.__municipalDashboardGisMap);
@@ -4438,6 +4646,20 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       const zoomInButton = document.getElementById("map-control-zoom-in");
       const zoomOutButton = document.getElementById("map-control-zoom-out");
       const recenterButton = document.getElementById("map-control-center");
+      const staticSvgMapObjectSelector = '#real-gis-static-map [data-map-icon], #real-gis-static-map path[data-map-layer]:not([data-map-layer="basemap"]), #real-gis-static-map g[data-map-layer]:not([data-map-layer="basemap"]), .schematicMapSvg [data-map-tooltip-title], .schematicMapSvg [role="button"][aria-label]';
+
+      const directSvgTitle = (node) => Array.from(node?.children || []).find((child) => child.tagName?.toLowerCase() === "title")?.textContent || "";
+
+      const showStaticSvgNodeTooltip = (event, node) => {
+        const rawTitle = directSvgTitle(node) || node?.dataset?.mapTooltipTitle || node?.getAttribute?.("aria-label") || "פריט מפה";
+        const [label, detail] = String(rawTitle).split(" · ");
+        showStaticFeatureTooltip(event, {
+          label,
+          source_id: node?.getAttribute?.("data-map-layer") || "map",
+          provenance_id: detail || node?.getAttribute?.("data-map-object") || "",
+          source: { name_he: node?.getAttribute?.("data-map-layer") || "מפה", display_status: "context_only" }
+        });
+      };
 
       let activeMapPan = null;
       let suppressNextMapClick = false;
@@ -4466,11 +4688,27 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         if (!svg) {
           return { x: 0, y: 0, width: 900, height: 620 };
         }
+        if (svg.id === "real-gis-static-map" && svg.dataset.worldViewBox) {
+          const worldValues = svg.dataset.worldViewBox.split(/\s+/).map(Number);
+          if (worldValues.length === 4 && worldValues.every(Number.isFinite)) {
+            return { x: worldValues[0], y: worldValues[1], width: worldValues[2], height: worldValues[3] };
+          }
+        }
         if (!svg.dataset.baseViewBox) {
           svg.dataset.baseViewBox = serializeSvgViewBox(parseSvgViewBox(svg));
         }
         const values = svg.dataset.baseViewBox.split(/\\s+/).map(Number);
         return { x: values[0], y: values[1], width: values[2], height: values[3] };
+      };
+
+      const focusViewBoxForSvg = (svg) => {
+        if (svg?.id === "real-gis-static-map" && svg.dataset.focusViewBox) {
+          const values = svg.dataset.focusViewBox.split(/\s+/).map(Number);
+          if (values.length === 4 && values.every(Number.isFinite)) {
+            return { x: values[0], y: values[1], width: values[2], height: values[3] };
+          }
+        }
+        return baseViewBoxForSvg(svg);
       };
 
       const clampViewBox = (box, base) => {
@@ -4500,6 +4738,368 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         mapViewZoomLabel.textContent = `${zoom}%`;
       };
 
+      let visibleBuildingLoadTimer = null;
+      let visibleBuildingAbort = null;
+      let visibleBuildingCacheKey = "";
+      let visibleParcelAbort = null;
+      let visibleParcelCacheKey = "";
+      let visibleContextPoiAbort = null;
+      let visibleContextPoiCacheKey = "";
+
+      const visibleBuildingsEnabled = () => {
+        const buildingInput = document.querySelector('[data-map-object-toggle="buildings"]');
+        return Boolean(buildingInput?.checked);
+      };
+
+      const resetDynamicMapToggleDefaults = () => {
+        const basemapInput = document.querySelector('[data-map-layer-toggle="basemap"]');
+        const parcelLayerInput = document.querySelector('[data-map-layer-toggle="nearby_parcels"]');
+        const parcelObjectInput = document.querySelector('[data-map-object-toggle="parcels"]');
+        const buildingInput = document.querySelector('[data-map-object-toggle="buildings"]');
+        const waterInput = document.querySelector('[data-map-object-toggle="osm_water"]');
+        const osmParksInput = document.querySelector('[data-map-object-toggle="osm_parks"]');
+        if (basemapInput) {
+          basemapInput.checked = false;
+        }
+        if (parcelLayerInput) {
+          parcelLayerInput.checked = false;
+        }
+        if (parcelObjectInput) {
+          parcelObjectInput.checked = false;
+        }
+        if (buildingInput) {
+          buildingInput.checked = false;
+        }
+        if (waterInput) {
+          waterInput.checked = false;
+        }
+        if (osmParksInput) {
+          osmParksInput.checked = false;
+        }
+      };
+
+      const dynamicMapItemVisible = (layer, objectType) => {
+        const layerInput = document.querySelector(`[data-map-layer-toggle="${layer}"]`);
+        const objectInput = document.querySelector(`[data-map-object-toggle="${objectType}"]`);
+        return (!layerInput || layerInput.checked) && (!objectInput || objectInput.checked);
+      };
+
+      const removeDynamicBuildingLayer = () => {
+        document.getElementById("real-gis-dynamic-buildings-layer")?.remove();
+      };
+
+      const removeDynamicParcelLayer = () => {
+        document.getElementById("real-gis-dynamic-parcels-layer")?.remove();
+      };
+
+      const removeDynamicContextPoiLayer = () => {
+        document.getElementById("real-gis-dynamic-context-pois-layer")?.remove();
+      };
+
+      const geoBoundsForSvg = (svg) => {
+        const values = String(svg?.dataset?.geoBounds || "").split(",").map(Number);
+        if (values.length !== 4 || values.some((value) => !Number.isFinite(value))) {
+          return null;
+        }
+        return { minLon: values[0], minLat: values[1], maxLon: values[2], maxLat: values[3] };
+      };
+
+      const visibleGeoBboxForSvg = (svg) => {
+        const geo = geoBoundsForSvg(svg);
+        if (!geo) {
+          return null;
+        }
+        const base = baseViewBoxForSvg(svg);
+        const current = parseSvgViewBox(svg);
+        const left = Math.max(base.x, current.x);
+        const top = Math.max(base.y, current.y);
+        const right = Math.min(base.x + base.width, current.x + current.width);
+        const bottom = Math.min(base.y + base.height, current.y + current.height);
+        if (right <= left || bottom <= top) {
+          return null;
+        }
+        const lonAt = (x) => geo.minLon + ((x - base.x) / base.width) * (geo.maxLon - geo.minLon);
+        const latAt = (y) => geo.maxLat - ((y - base.y) / base.height) * (geo.maxLat - geo.minLat);
+        return {
+          minLon: lonAt(left),
+          maxLon: lonAt(right),
+          minLat: latAt(bottom),
+          maxLat: latAt(top),
+        };
+      };
+
+      const expandedVisibleGeoBboxForSvg = (svg) => {
+        const bbox = visibleGeoBboxForSvg(svg);
+        const geo = geoBoundsForSvg(svg);
+        if (!bbox || !geo) {
+          return null;
+        }
+        const lonPad = (bbox.maxLon - bbox.minLon) * 0.2;
+        const latPad = (bbox.maxLat - bbox.minLat) * 0.2;
+        return {
+          minLon: Math.max(geo.minLon, bbox.minLon - lonPad),
+          minLat: Math.max(geo.minLat, bbox.minLat - latPad),
+          maxLon: Math.min(geo.maxLon, bbox.maxLon + lonPad),
+          maxLat: Math.min(geo.maxLat, bbox.maxLat + latPad),
+        };
+      };
+
+      const projectFromGeoBounds = (svg) => {
+        const geo = geoBoundsForSvg(svg);
+        if (!geo) {
+          return null;
+        }
+        return ([lon, lat]) => [
+          ((lon - geo.minLon) / (geo.maxLon - geo.minLon || 1)) * 900,
+          620 - ((lat - geo.minLat) / (geo.maxLat - geo.minLat || 1)) * 620,
+        ];
+      };
+
+      const ensureDynamicBuildingLayer = (svg) => {
+        let group = document.getElementById("real-gis-dynamic-buildings-layer");
+        if (!group) {
+          group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          group.id = "real-gis-dynamic-buildings-layer";
+          group.setAttribute("data-map-layer", "municipal");
+          group.setAttribute("data-map-object", "buildings");
+          const before = svg.querySelector('[data-map-layer="nearby_parcels"], [data-map-layer="parcel"], [data-map-object="neighborhoods"], [data-map-icon]');
+          svg.insertBefore(group, before || null);
+        }
+        group.style.display = dynamicMapItemVisible("municipal", "buildings") ? "" : "none";
+        return group;
+      };
+
+      const ensureDynamicParcelLayer = (svg) => {
+        let group = document.getElementById("real-gis-dynamic-parcels-layer");
+        if (!group) {
+          group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          group.id = "real-gis-dynamic-parcels-layer";
+          group.setAttribute("data-map-layer", "nearby_parcels");
+          group.setAttribute("data-map-object", "parcels");
+          const before = svg.querySelector('[data-map-layer="parcel"], [data-map-object="neighborhoods"], [data-map-icon]');
+          svg.insertBefore(group, before || null);
+        }
+        group.style.display = dynamicMapItemVisible("nearby_parcels", "parcels") ? "" : "none";
+        return group;
+      };
+
+      const ensureDynamicContextPoiLayer = (svg) => {
+        let group = document.getElementById("real-gis-dynamic-context-pois-layer");
+        if (!group) {
+          group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          group.id = "real-gis-dynamic-context-pois-layer";
+          group.setAttribute("data-map-layer", "osm");
+          group.setAttribute("data-map-object", "osm_interest");
+          const before = svg.querySelector('[data-map-object="neighborhoods"]');
+          svg.insertBefore(group, before || null);
+        }
+        group.style.display = dynamicMapItemVisible("osm", "osm_interest") ? "" : "none";
+        return group;
+      };
+
+      const renderDynamicBuildings = (svg, payload) => {
+        const project = projectFromGeoBounds(svg);
+        if (!project) {
+          return;
+        }
+        const pathData = (payload?.items || []).map((item) => polygonPaths(item.geometry, project)).filter(Boolean).join(" ");
+        const group = ensureDynamicBuildingLayer(svg);
+        group.replaceChildren();
+        if (!pathData) {
+          return;
+        }
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("data-map-layer", "municipal");
+        path.setAttribute("data-map-object", "buildings");
+        path.setAttribute("d", pathData);
+        path.setAttribute("fill", "rgba(68, 76, 86, 0.25)");
+        path.setAttribute("stroke", "rgba(30, 41, 59, 0.42)");
+        path.setAttribute("stroke-width", "0.36");
+        path.setAttribute("stroke-linejoin", "round");
+        path.style.pointerEvents = "visiblePainted";
+        const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+        title.textContent = `מבנים בתחום הנראה · ${payload.displayed_count || 0}/${payload.total_count || 0}`;
+        path.appendChild(title);
+        group.appendChild(path);
+        window.__applyMunicipalSvgFilters?.();
+      };
+
+      const renderDynamicParcels = (svg, payload) => {
+        const project = projectFromGeoBounds(svg);
+        if (!project) {
+          return;
+        }
+        const pathData = (payload?.items || []).map((item) => polygonPaths(item.geometry, project)).filter(Boolean).join(" ");
+        const group = ensureDynamicParcelLayer(svg);
+        group.replaceChildren();
+        if (!pathData) {
+          return;
+        }
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("data-map-layer", "nearby_parcels");
+        path.setAttribute("data-map-object", "parcels");
+        path.setAttribute("d", pathData);
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", "rgba(101, 84, 52, 0.55)");
+        path.setAttribute("stroke-width", "0.55");
+        path.setAttribute("stroke-linejoin", "round");
+        path.style.pointerEvents = "visiblePainted";
+        const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+        title.textContent = `חלקות בתחום הנראה · ${payload.displayed_count || 0}/${payload.total_count || 0}`;
+        path.appendChild(title);
+        group.appendChild(path);
+        window.__applyMunicipalSvgFilters?.();
+      };
+
+      const renderDynamicContextPois = (svg, payload) => {
+        const project = projectFromGeoBounds(svg);
+        if (!project) {
+          return;
+        }
+        const group = ensureDynamicContextPoiLayer(svg);
+        group.replaceChildren();
+        for (const poi of payload?.items || []) {
+          const coordinates = poi?.geometry?.coordinates;
+          if (!Array.isArray(coordinates) || coordinates.length < 2) {
+            continue;
+          }
+          const [x, y] = project([Number(coordinates[0]), Number(coordinates[1])]);
+          appendStaticIconNode(group, { ...poi, poi_category: poi.poi_category || "interest" }, x, y, poi.poi_category || "interest", "osm", `${cleanMapLabel(poi.name_he || poi.name_en) || poi.poi_category || "מוקד עניין OSM"} · ${poi.provenance_id}`, "osm_interest");
+        }
+        window.__applyMunicipalSvgFilters?.();
+      };
+
+      const loadVisibleBuildings = async () => {
+        const svg = document.getElementById("real-gis-static-map");
+        if (!svg || svg.hidden) {
+          removeDynamicBuildingLayer();
+          return;
+        }
+        const bbox = expandedVisibleGeoBboxForSvg(svg);
+        if (!bbox) {
+          removeDynamicBuildingLayer();
+          return;
+        }
+        const cacheKey = [bbox.minLon, bbox.minLat, bbox.maxLon, bbox.maxLat].map((value) => Number(value).toFixed(5)).join(",");
+        if (cacheKey === visibleBuildingCacheKey && document.getElementById("real-gis-dynamic-buildings-layer")) {
+          return;
+        }
+        visibleBuildingCacheKey = cacheKey;
+        visibleBuildingAbort?.abort();
+        visibleBuildingAbort = new AbortController();
+        const params = new URLSearchParams({
+          municipality_code: window.__municipalDashboardGisMap?.query?.municipality_code || "5000",
+          min_lon: String(bbox.minLon),
+          min_lat: String(bbox.minLat),
+          max_lon: String(bbox.maxLon),
+          max_lat: String(bbox.maxLat),
+        });
+        try {
+          const response = await fetch(`/api/ui/rag-dashboard/gis-buildings?${params.toString()}`, { signal: visibleBuildingAbort.signal });
+          if (!response.ok) {
+            throw new Error(`buildings HTTP ${response.status}`);
+          }
+          renderDynamicBuildings(svg, await response.json());
+        } catch (error) {
+          if (error?.name !== "AbortError") {
+            console.warn("municipal_visible_buildings_failed", error);
+          }
+        }
+      };
+
+      const loadVisibleParcels = async () => {
+        const svg = document.getElementById("real-gis-static-map");
+        if (!svg || svg.hidden) {
+          removeDynamicParcelLayer();
+          return;
+        }
+        const bbox = expandedVisibleGeoBboxForSvg(svg);
+        if (!bbox) {
+          removeDynamicParcelLayer();
+          return;
+        }
+        const cacheKey = [bbox.minLon, bbox.minLat, bbox.maxLon, bbox.maxLat].map((value) => Number(value).toFixed(5)).join(",");
+        if (cacheKey === visibleParcelCacheKey && document.getElementById("real-gis-dynamic-parcels-layer")) {
+          return;
+        }
+        visibleParcelCacheKey = cacheKey;
+        visibleParcelAbort?.abort();
+        visibleParcelAbort = new AbortController();
+        const params = new URLSearchParams({
+          municipality_code: window.__municipalDashboardGisMap?.query?.municipality_code || "5000",
+          min_lon: String(bbox.minLon),
+          min_lat: String(bbox.minLat),
+          max_lon: String(bbox.maxLon),
+          max_lat: String(bbox.maxLat),
+        });
+        try {
+          const response = await fetch(`/api/ui/rag-dashboard/gis-parcels?${params.toString()}`, { signal: visibleParcelAbort.signal });
+          if (!response.ok) {
+            throw new Error(`parcels HTTP ${response.status}`);
+          }
+          renderDynamicParcels(svg, await response.json());
+        } catch (error) {
+          if (error?.name !== "AbortError") {
+            console.warn("municipal_visible_parcels_failed", error);
+          }
+        }
+      };
+
+      const loadVisibleContextPois = async () => {
+        const svg = document.getElementById("real-gis-static-map");
+        if (!svg || svg.hidden) {
+          removeDynamicContextPoiLayer();
+          return;
+        }
+        if (!dynamicMapItemVisible("osm", "osm_interest")) {
+          removeDynamicContextPoiLayer();
+          return;
+        }
+        const bbox = expandedVisibleGeoBboxForSvg(svg);
+        if (!bbox) {
+          removeDynamicContextPoiLayer();
+          return;
+        }
+        const cacheKey = [bbox.minLon, bbox.minLat, bbox.maxLon, bbox.maxLat].map((value) => Number(value).toFixed(5)).join(",");
+        if (cacheKey === visibleContextPoiCacheKey && document.getElementById("real-gis-dynamic-context-pois-layer")) {
+          return;
+        }
+        visibleContextPoiCacheKey = cacheKey;
+        visibleContextPoiAbort?.abort();
+        visibleContextPoiAbort = new AbortController();
+        const params = new URLSearchParams({
+          municipality_code: window.__municipalDashboardGisMap?.query?.municipality_code || "5000",
+          min_lon: String(bbox.minLon),
+          min_lat: String(bbox.minLat),
+          max_lon: String(bbox.maxLon),
+          max_lat: String(bbox.maxLat),
+        });
+        try {
+          const response = await fetch(`/api/ui/rag-dashboard/gis-context-pois?${params.toString()}`, { signal: visibleContextPoiAbort.signal });
+          if (!response.ok) {
+            throw new Error(`context POIs HTTP ${response.status}`);
+          }
+          renderDynamicContextPois(svg, await response.json());
+        } catch (error) {
+          if (error?.name !== "AbortError") {
+            console.warn("municipal_visible_context_pois_failed", error);
+          }
+        }
+      };
+
+      const scheduleVisibleBuildingLoad = () => {
+        clearTimeout(visibleBuildingLoadTimer);
+        visibleBuildingLoadTimer = setTimeout(() => {
+          loadVisibleBuildings();
+          loadVisibleParcels();
+          loadVisibleContextPois();
+        }, 260);
+      };
+
+      window.__scheduleMunicipalVisibleBuildingLoad = scheduleVisibleBuildingLoad;
+      resetDynamicMapToggleDefaults();
+      scheduleVisibleBuildingLoad();
+
       const setViewportBox = (svg, box) => {
         if (!svg) {
           return;
@@ -4509,6 +5109,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         svg.style.transform = "";
         svg.setAttribute("viewBox", serializeSvgViewBox(next));
         updateViewportZoomLabel(svg, next);
+        scheduleVisibleBuildingLoad();
       };
 
       const zoomViewport = (factor, anchor = null) => {
@@ -4535,7 +5136,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         if (!svg) {
           return;
         }
-        setViewportBox(svg, baseViewBoxForSvg(svg));
+        setViewportBox(svg, focusViewBoxForSvg(svg));
       };
 
       const startViewportPan = (event) => {
@@ -4546,6 +5147,9 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           return;
         }
         if (event.target.closest(".mapZoomControls, .mapLayerPopover, .mapInfoPanel, .coveragePanel, .legendCard, .mapControls")) {
+          return;
+        }
+        if (event.target.closest(staticSvgMapObjectSelector)) {
           return;
         }
         const svg = activeViewportSvg();
@@ -4603,7 +5207,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         parcel: ["dashboard-parcel-fill", "dashboard-parcel-outline"],
         nearby_parcels: ["dashboard-nearby-parcels-fill", "dashboard-nearby-parcels-outline"],
         pois: ["dashboard-pois-circle"],
-        municipal: ["dashboard-neighborhoods-fill", "dashboard-neighborhoods-outline", "dashboard-address-points-circle", "dashboard-municipal-pois-circle"],
+        municipal: ["dashboard-neighborhoods-fill", "dashboard-neighborhoods-outline", "dashboard-neighborhoods-label", "dashboard-address-points-circle", "dashboard-address-points-label", "dashboard-municipal-pois-circle", "dashboard-municipal-pois-label"],
         osm: ["dashboard-buildings-fill", "dashboard-buildings-outline", "dashboard-context-pois-circle"]
       };
 
@@ -4649,6 +5253,21 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         input.addEventListener("change", () => setMapLibreLayerGroupVisible(input.dataset.mapLayerToggle, input.checked));
       }
       mapFrame?.addEventListener("pointerdown", startViewportPan);
+      mapFrame?.addEventListener("mousemove", (event) => {
+        const node = event.target.closest(staticSvgMapObjectSelector);
+        if (node) {
+          showStaticSvgNodeTooltip(event, node);
+        }
+      });
+      mapFrame?.addEventListener("mouseleave", hideStaticFeatureTooltip);
+      mapFrame?.addEventListener("click", (event) => {
+        const node = event.target.closest(staticSvgMapObjectSelector);
+        if (!node) {
+          return;
+        }
+        event.preventDefault();
+        showStaticSvgNodeTooltip(event, node);
+      }, true);
       document.addEventListener("pointermove", moveViewportPan);
       document.addEventListener("pointerup", endViewportPan);
       document.addEventListener("pointercancel", endViewportPan);
@@ -4692,7 +5311,14 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         }
         const entity = event.target.closest("[data-map-entity-id]");
         if (entity?.dataset.mapEntityId) {
+          showSchematicFeatureTooltip(event, entity);
           applyDashboardInteraction("select_map_entity", entity.dataset.mapEntityId);
+          return;
+        }
+        const schematicFeature = event.target.closest(".schematicMapSvg [data-map-tooltip-title], .schematicMapSvg [role='button'][aria-label]");
+        if (schematicFeature) {
+          event.preventDefault();
+          showSchematicFeatureTooltip(event, schematicFeature);
           return;
         }
       });
@@ -4703,7 +5329,14 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const entity = event.target.closest("[data-map-entity-id]");
         if (entity?.dataset.mapEntityId) {
           event.preventDefault();
+          showSchematicFeatureTooltip(event, entity);
           applyDashboardInteraction("select_map_entity", entity.dataset.mapEntityId);
+          return;
+        }
+        const schematicFeature = event.target.closest(".schematicMapSvg [data-map-tooltip-title], .schematicMapSvg [role='button'][aria-label]");
+        if (schematicFeature) {
+          event.preventDefault();
+          showSchematicFeatureTooltip(event, schematicFeature);
         }
       });
       relatedChips?.addEventListener("click", (event) => {
@@ -4789,10 +5422,11 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           }
           const topKRaw = parseInt(topKInput && topKInput.value || "8", 10);
           const topK = Number.isFinite(topKRaw) ? Math.max(1, Math.min(50, topKRaw)) : 8;
+          const selectedMuni = selectedMunicipalityForQuery();
           const payload = {
             question,
             top_k: topK,
-            muni: "ashdod",
+            muni: selectedMuni,
             filters: activeFilters,
             debug_mode: Boolean(debugModeInput && debugModeInput.checked)
           };
@@ -4818,10 +5452,12 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             }
             console.info("municipal_rag_dashboard_search", {
               question,
+              muni: selectedMuni,
               ok: response.ok,
               status: data.state?.generation_status || response.status,
               evidence_count: Array.isArray(data.evidence) ? data.evidence.length : 0,
-              spatial_representation: data.main_civic_workspace?.map?.spatial_representation
+              spatial_representation: data.main_civic_workspace?.map?.spatial_representation,
+              municipality_scope: data.state?.intent_resolution?.geo?.municipality_scope || null
             });
           } catch (error) {
             window.clearTimeout(timeoutId);
@@ -4929,6 +5565,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
       const hasStaticMapContent = () => Boolean(staticMap.querySelector("path, image, text, [data-map-icon]"));
       const isStaticMapActive = () => !staticMap.hidden && frame.classList.contains("hasRealGis");
+      const staticMapObjectSelector = '#real-gis-static-map [data-map-icon], #real-gis-static-map path[data-map-layer]:not([data-map-layer="basemap"]), #real-gis-static-map g[data-map-layer]:not([data-map-layer="basemap"])';
       if (hasStaticMapContent()) {
         realMap && (realMap.hidden = true);
         staticMap.hidden = false;
@@ -4972,6 +5609,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const y = Math.max(world.y, Math.min(world.y + world.height - height, box.y));
         staticMap.setAttribute("viewBox", `${x.toFixed(2)} ${y.toFixed(2)} ${width.toFixed(2)} ${height.toFixed(2)}`);
         ensureOverviewForZoomOut();
+        window.__scheduleMunicipalVisibleBuildingLoad?.();
       };
       const zoom = (factor, event = null) => {
         const current = parseBox();
@@ -5064,7 +5702,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         return "גדול";
       };
       const applyMapIconScale = (scale) => {
-        const normalized = Math.max(0.12, Math.min(0.6, Number(scale) || 0.18));
+        const normalized = Math.max(0.05, Math.min(0.6, Number(scale) || 0.05));
         window.__municipalMapIconScale = normalized;
         if (controls.iconSizeLabel) {
           controls.iconSizeLabel.textContent = iconSizeText(normalized);
@@ -5075,17 +5713,18 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         }
       };
       const applyMapLabelScale = (scale) => {
-        const normalized = Math.max(0.18, Math.min(0.9, Number(scale) || 0.28));
+        const normalized = Math.max(0.08, Math.min(0.9, Number(scale) || 0.08));
         window.__municipalMapLabelScale = normalized;
         if (controls.labelSizeLabel) {
           controls.labelSizeLabel.textContent = labelSizeText(normalized);
         }
-        for (const label of staticMap.querySelectorAll("[data-map-label]")) {
+        for (const label of document.querySelectorAll(".schematicMapSvg [data-map-label], #real-gis-static-map [data-map-label]")) {
           const baseFontSize = Number(label.getAttribute("data-base-font-size") || 13);
           const fontSize = baseFontSize * normalized;
           label.setAttribute("font-size", String(fontSize));
           label.style.fontSize = `${fontSize}px`;
         }
+        applyMapLibreLabelScale();
       };
       const applyStaticMapFilters = () => {
         for (const node of staticMap.querySelectorAll("[data-map-layer], [data-map-object]")) {
@@ -5097,17 +5736,37 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         }
         updateToggleAllFiltersLabel();
       };
+      const syncParcelFilterInputs = (changedInput = null) => {
+        const layerInput = document.querySelector('[data-map-layer-toggle="nearby_parcels"]');
+        const objectInput = document.querySelector('[data-map-object-toggle="parcels"]');
+        if (!layerInput || !objectInput) {
+          return;
+        }
+        if (changedInput === layerInput || changedInput === objectInput) {
+          layerInput.checked = changedInput.checked;
+          objectInput.checked = changedInput.checked;
+        }
+      };
       const rerenderStaticMapWithCurrentFilters = () => {
+        syncParcelFilterInputs();
+        if (window.__municipalDashboardGisMapServerSvgOnly) {
+          applyStaticMapFilters();
+          window.__scheduleMunicipalVisibleBuildingLoad?.();
+          return;
+        }
         if (window.__municipalDashboardGisMap && typeof window.__renderMunicipalSvgGisMap === "function") {
-          window.__renderMunicipalSvgGisMap(window.__municipalDashboardGisMap);
-          applyMapIconScale(controls.iconSize?.value || window.__municipalMapIconScale || 0.18);
-          applyMapLabelScale(controls.labelSize?.value || window.__municipalMapLabelScale || 0.28);
+          window.__renderMunicipalSvgGisMap(window.__municipalDashboardGisMap, { preserveViewBox: true });
+          applyMapIconScale(controls.iconSize?.value || window.__municipalMapIconScale || 0.05);
+          applyMapLabelScale(controls.labelSize?.value || window.__municipalMapLabelScale || 0.08);
           return;
         }
         applyStaticMapFilters();
       };
       for (const input of mapFilterInputs()) {
-        input.addEventListener("change", rerenderStaticMapWithCurrentFilters);
+        input.addEventListener("change", () => {
+          syncParcelFilterInputs(input);
+          rerenderStaticMapWithCurrentFilters();
+        });
       }
       controls.toggleAll?.addEventListener("click", (event) => {
         stop(event);
@@ -5131,8 +5790,8 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         applyMapLabelScale(event.target.value);
       });
       window.__applyMunicipalSvgFilters = applyStaticMapFilters;
-      applyMapIconScale(controls.iconSize?.value || window.__municipalMapIconScale || 0.18);
-      applyMapLabelScale(controls.labelSize?.value || window.__municipalMapLabelScale || 0.28);
+      applyMapIconScale(controls.iconSize?.value || window.__municipalMapIconScale || 0.05);
+      applyMapLabelScale(controls.labelSize?.value || window.__municipalMapLabelScale || 0.08);
       applyStaticMapFilters();
 
       let pan = null;
@@ -5150,6 +5809,9 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           return;
         }
         if (event.target.closest(".mapZoomControls, .mapLayerPopover, .mapInfoPanel, .coveragePanel")) {
+          return;
+        }
+        if (event.target.closest(staticMapObjectSelector)) {
           return;
         }
         stop(event);
@@ -5223,11 +5885,12 @@ def _inject_initial_gis_map(html: str, payload: dict[str, Any]) -> str:
     static_svg = _server_rendered_gis_svg(payload)
     if not static_svg:
         return html
-    payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    payload_json = json.dumps(_client_bootstrap_gis_payload(payload), ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     payload_script = (
         "<script>"
         f"window.__municipalDashboardGisMap={payload_json};"
         "window.__municipalDashboardGisMapFromServer=true;"
+        "window.__municipalDashboardGisMapServerSvgOnly=true;"
         "</script>"
     )
     html = html.replace("</head>", f"{payload_script}\n</head>", 1)
@@ -5247,6 +5910,31 @@ def _inject_initial_gis_map(html: str, payload: dict[str, Any]) -> str:
     return html
 
 
+def _client_bootstrap_gis_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    def trim_layer(layer: Any) -> Any:
+        if not isinstance(layer, dict):
+            return layer
+        return {key: value for key, value in layer.items() if key != "items"} | {"items": []}
+
+    parcel = payload.get("parcel") if isinstance(payload.get("parcel"), dict) else {}
+    # The server already sent the detailed SVG paths; the bootstrap object only
+    # keeps metadata needed for counts, selected municipality, and lazy loading.
+    return {
+        "status": payload.get("status"),
+        "real_gis_available": payload.get("real_gis_available"),
+        "selected_example": payload.get("selected_example"),
+        "title_he": payload.get("title_he"),
+        "center": payload.get("center"),
+        "zoom": payload.get("zoom"),
+        "query": payload.get("query"),
+        "basemap": payload.get("basemap"),
+        "visual_context": payload.get("visual_context"),
+        "parcel": parcel,
+        "layers": {key: trim_layer(layer) for key, layer in ((payload.get("layers") or {}) if isinstance(payload.get("layers"), dict) else {}).items()},
+        "nearby_pois": trim_layer(payload.get("nearby_pois")),
+    }
+
+
 def _server_rendered_gis_svg(payload: dict[str, Any]) -> str:
     parcel = payload.get("parcel") if isinstance(payload.get("parcel"), dict) else {}
     geometry = parcel.get("geometry") if isinstance(parcel.get("geometry"), dict) else None
@@ -5264,7 +5952,7 @@ def _server_rendered_gis_svg(payload: dict[str, Any]) -> str:
         label_text = "אזור נבחר"
         label_width = max(20, min(42, len(label_text) * 2.7 + 7))
         label_node = (
-            f'<g data-map-layer="parcel" data-map-object="parcels">'
+            f'<g data-map-layer="parcel" data-map-object="selected_area">'
             f'<rect x="{label_point[0] - label_width / 2:.1f}" y="{label_point[1] - 2.7:.1f}" width="{label_width:.1f}" height="5.4" rx="2.4" fill="#7c4dce" opacity="0.94" />'
             f'<text x="{label_point[0]:.1f}" y="{label_point[1] + 1.05:.1f}" text-anchor="middle" direction="rtl" font-size="2.8" font-weight="900" fill="#ffffff">{label_text}</text>'
             f'</g>'
@@ -5273,43 +5961,85 @@ def _server_rendered_gis_svg(payload: dict[str, Any]) -> str:
     parcel_label = _escape_text(str(parcel.get("label") or "חלקה"))
     world_view_box = _server_view_box_string(getattr(project, "world_view_box", {"x": 0, "y": 0, "width": 900, "height": 620}))
     focus_view_box = _server_view_box_string(getattr(project, "focus_view_box", {"x": 0, "y": 0, "width": 900, "height": 620}))
+    bounds = getattr(project, "bounds", {}) if isinstance(getattr(project, "bounds", {}), dict) else {}
+    geo_bounds = _escape_text(
+        ",".join(
+            f"{float(bounds.get(key, 0.0)):.8f}"
+            for key in ("min_lon", "min_lat", "max_lon", "max_lat")
+        )
+    )
     initial_layers = _server_initial_layer_nodes(payload, project)
+    neighborhood_labels = _layer_text_labels(payload, "neighborhoods", project, "neighborhoods")
+    overlay_icons = _server_overlay_icon_nodes(payload, project)
     return f'''
-            <svg id="real-gis-static-map" class="realGisStaticMap" viewBox="{focus_view_box}" data-world-view-box="{world_view_box}" data-focus-view-box="{focus_view_box}" role="img" aria-label="מפת GIS אמיתית ללא ספריית מפה חיצונית">
+            <svg id="real-gis-static-map" class="realGisStaticMap" viewBox="{focus_view_box}" data-world-view-box="{world_view_box}" data-focus-view-box="{focus_view_box}" data-geo-bounds="{geo_bounds}" role="img" aria-label="מפת GIS אמיתית ללא ספריית מפה חיצונית">
               <title>{title}</title>
-              <rect x="0" y="0" width="900" height="620" fill="#edf2ee" />
+              <rect x="0" y="0" width="900" height="620" fill="#bde7f7" />
               {initial_layers}
-              <path data-map-layer="parcel" data-map-object="parcels" d="{selected_area_path}" fill="rgba(124,77,206,0.20)" stroke="rgba(255,255,255,0.96)" stroke-width="7" stroke-linejoin="round"><title>אזור נבחר</title></path>
-              <path data-map-layer="parcel" data-map-object="parcels" d="{selected_area_path}" fill="rgba(124,77,206,0.22)" stroke="#7c4dce" stroke-width="2.6" stroke-linejoin="round"><title>אזור נבחר</title></path>
-              <path data-map-layer="parcel" data-map-object="parcels" d="{parcel_path}" fill="rgba(255,255,255,0.52)" stroke="#5b21b6" stroke-width="2.1" stroke-linejoin="round"><title>{parcel_label}</title></path>
-              {label_node}
+              <path data-map-layer="parcel" data-map-object="selected_area" d="{selected_area_path}" fill="rgba(124,77,206,0.20)" stroke="rgba(255,255,255,0.96)" stroke-width="7" stroke-linejoin="round"><title>אזור נבחר</title></path>
+              <path data-map-layer="parcel" data-map-object="selected_area" d="{selected_area_path}" fill="rgba(124,77,206,0.22)" stroke="#7c4dce" stroke-width="2.6" stroke-linejoin="round"><title>אזור נבחר</title></path>
+              <path data-map-layer="parcel" data-map-object="selected_area" d="{parcel_path}" fill="rgba(255,255,255,0.52)" stroke="#5b21b6" stroke-width="2.1" stroke-linejoin="round"><title>{parcel_label}</title></path>
+              {neighborhood_labels}
+              {overlay_icons}
             </svg>'''
 
 
 def _server_initial_layer_nodes(payload: dict[str, Any], project) -> str:
     nodes: list[str] = []
-    basemap = _server_basemap_node(project)
-    if basemap:
-        nodes.append(basemap)
-
-    nodes.append(_server_layer_path_node(payload, "context_water", project, kind="polygon", data_layer="osm", data_object="beaches", fill="rgba(164, 216, 235, 0.44)", stroke="rgba(87, 167, 199, 0.22)", stroke_width="0.45", title="מים OSM"))
-    nodes.append(_server_layer_path_node(payload, "context_waterways", project, kind="line", data_layer="osm", data_object="beaches", stroke="rgba(87, 167, 199, 0.45)", stroke_width="1.1", title="ערוצי מים OSM"))
-    nodes.append(_server_layer_path_node(payload, "municipal_beaches", project, kind="polygon", data_layer="municipal", data_object="beaches", fill="rgba(164, 216, 235, 0.34)", stroke="rgba(87, 167, 199, 0.30)", stroke_width="0.55", title="חופים עירוניים בבדיקת רישיון"))
-    nodes.append(_server_layer_path_node(payload, "context_landuse", project, kind="polygon", data_layer="osm", data_object="parks", fill="rgba(190, 233, 203, 0.54)", stroke="rgba(93, 173, 120, 0.16)", stroke_width="0.45", title="שימושי קרקע OSM"))
-    nodes.append(_server_layer_path_node(payload, "municipal_parks", project, kind="polygon", data_layer="municipal", data_object="parks", fill="rgba(190, 233, 203, 0.42)", stroke="rgba(74, 160, 104, 0.18)", stroke_width="0.45", title="גנים ופארקים עירוניים בבדיקת רישיון"))
-    nodes.append(_server_layer_path_node(payload, "context_roads", project, kind="line", data_layer="osm", data_object="roads", stroke="rgba(199, 210, 220, 0.48)", stroke_width="4.2", title="דרכים OSM"))
-    nodes.append(_server_layer_path_node(payload, "context_roads", project, kind="line", data_layer="osm", data_object="roads", stroke="rgba(255, 255, 255, 0.88)", stroke_width="2.2", title="דרכים OSM"))
-    nodes.append(_server_layer_path_node(payload, "context_railways", project, kind="line", data_layer="osm", data_object="transport", stroke="rgba(11, 104, 209, 0.58)", stroke_width="1.6", title="תוואי תחבורה OSM", extra=' stroke-dasharray="7 7"'))
-    nodes.append(_server_layer_path_node(payload, "municipal_bike_paths", project, kind="line", data_layer="municipal", data_object="bike_paths", stroke="rgba(6, 182, 212, 0.46)", stroke_width="1", title="שבילי אופניים עירוניים", extra=' stroke-dasharray="5 5"'))
-    nodes.append(_server_layer_path_node(payload, "nearby_parcels", project, kind="polygon", data_layer="nearby_parcels", data_object="parcels", fill="rgba(255, 255, 255, 0.06)", stroke="rgba(124, 111, 85, 0.30)", stroke_width="0.55", title="חלקות MAPI סמוכות"))
-    nodes.append(_server_layer_path_node(payload, "buildings", project, kind="polygon", data_layer="osm", data_object="buildings", fill="rgba(148, 163, 184, 0.12)", stroke="rgba(100, 116, 139, 0.22)", stroke_width="0.45", title="מבנים OSM"))
-    nodes.append(_layer_text_labels(payload, "neighborhoods", project, "neighborhoods"))
-    nodes.append(_server_geometry_icon_nodes(payload, "context_landuse", project, category="park", data_layer="osm", data_object="parks", limit=3))
-    nodes.append(_server_geometry_icon_nodes(payload, "municipal_parks", project, category="park", data_layer="municipal", data_object="parks", limit=3))
-    nodes.append(_server_point_icon_nodes((payload.get("nearby_pois") or {}).get("items", []), project, data_layer="pois", limit=10))
-    nodes.append(_server_point_icon_nodes(((payload.get("layers") or {}).get("municipal_pois") or {}).get("items", []), project, data_layer="municipal", limit=6))
-    nodes.append(_server_point_icon_nodes(((payload.get("layers") or {}).get("context_pois") or {}).get("items", []), project, data_layer="osm", limit=6, fallback_category="interest"))
+    nodes.append(_server_basemap_node(project))
+    nodes.append(_server_layer_path_node(payload, "context_water", project, kind="polygon", data_layer="osm", data_object="osm_water", fill="rgba(164, 216, 235, 0.44)", stroke="rgba(87, 167, 199, 0.22)", stroke_width="0.45", title="מים OSM", extra=' style="display:none"'))
+    nodes.append(_server_layer_path_node(payload, "context_waterways", project, kind="line", data_layer="osm", data_object="osm_water", stroke="rgba(87, 167, 199, 0.45)", stroke_width="1.1", title="ערוצי מים OSM", extra=' style="display:none"'))
+    nodes.append(_server_land_mask_node(payload, project))
+    nodes.append(_server_layer_path_node(payload, "municipal_beaches", project, kind="polygon", data_layer="municipal", data_object="municipal_beaches", fill="rgba(164, 216, 235, 0.34)", stroke="rgba(87, 167, 199, 0.30)", stroke_width="0.55", title="חופים עירוניים בבדיקת רישיון"))
+    nodes.append(_server_layer_path_node(payload, "context_landuse", project, kind="polygon", data_layer="osm", data_object="osm_parks", fill="rgba(190, 233, 203, 0.54)", stroke="rgba(93, 173, 120, 0.16)", stroke_width="0.45", title="שימושי קרקע OSM", extra=' style="display:none"'))
+    nodes.append(_server_layer_path_node(payload, "municipal_parks", project, kind="polygon", data_layer="municipal", data_object="municipal_parks", fill="rgba(190, 233, 203, 0.42)", stroke="rgba(74, 160, 104, 0.18)", stroke_width="0.45", title="גנים ופארקים עירוניים בבדיקת רישיון"))
+    nodes.append(_server_layer_path_node(payload, "context_roads", project, kind="line", data_layer="osm", data_object="osm_roads", stroke="rgba(148, 163, 184, 0.42)", stroke_width="2.6", title="דרכים OSM"))
+    nodes.append(_server_layer_path_node(payload, "context_roads", project, kind="line", data_layer="osm", data_object="osm_roads", stroke="rgba(255, 255, 255, 0.72)", stroke_width="1.25", title="דרכים OSM"))
+    nodes.append(_server_layer_path_node(payload, "context_railways", project, kind="line", data_layer="osm", data_object="osm_railways", stroke="rgba(11, 104, 209, 0.58)", stroke_width="1.6", title="תוואי תחבורה OSM", extra=' stroke-dasharray="7 7"'))
+    nodes.append(_server_layer_path_node(payload, "municipal_bike_paths", project, kind="line", data_layer="municipal", data_object="municipal_bike_paths", stroke="rgba(6, 182, 212, 0.46)", stroke_width="1", title="שבילי אופניים עירוניים", extra=' stroke-dasharray="5 5"'))
+    nodes.append(_server_layer_path_node(payload, "nearby_parcels", project, kind="polygon", data_layer="nearby_parcels", data_object="parcels", fill="none", stroke="rgba(101, 84, 52, 0.55)", stroke_width="0.55", title="חלקות MAPI בעיר"))
+    nodes.append(_server_layer_path_node(payload, "buildings", project, kind="polygon", data_layer="municipal", data_object="buildings", fill="rgba(68, 76, 86, 0.26)", stroke="rgba(30, 41, 59, 0.48)", stroke_width="0.42", title="מבנים עירוניים בבדיקת רישיון"))
     return "".join(node for node in nodes if node)
+
+
+def _server_land_mask_node(payload: dict[str, Any], project) -> str:
+    nodes: list[str] = []
+    neighbor_path_data = _layer_polygon_paths(payload, "neighboring_municipal_boundaries", project)
+    if neighbor_path_data:
+        nodes.append(
+            f'<path data-map-layer="land" data-map-object="neighboring_municipality" d="{_escape_text(neighbor_path_data)}" '
+            'fill="#edf2ee" fill-opacity="0.88" stroke="rgba(100, 116, 139, 0.34)" stroke-width="0.85" stroke-linejoin="round" style="pointer-events:none">'
+            '<title>רשויות סמוכות מעל רקע ים וקטורי</title></path>'
+        )
+    tel_aviv_path_data = _layer_polygon_paths(payload, "municipal_boundaries", project)
+    if tel_aviv_path_data:
+        nodes.append(
+            f'<path data-map-layer="land" data-map-object="land" d="{_escape_text(tel_aviv_path_data)}" '
+            'fill="#edf2ee" fill-opacity="0.96" stroke="rgba(15, 118, 110, 0.74)" stroke-width="1.7" stroke-linejoin="round" style="pointer-events:none">'
+            '<title>תחום תל אביב מעל רקע ים וקטורי</title></path>'
+        )
+    return "".join(nodes)
+
+
+def _server_overlay_icon_nodes(payload: dict[str, Any], project) -> str:
+    nodes: list[str] = []
+    nodes.append(_server_geometry_icon_nodes(payload, "context_landuse", project, category="park", data_layer="osm", data_object="osm_parks", limit=70))
+    nodes.append(_server_geometry_icon_nodes(payload, "municipal_parks", project, category="park", data_layer="municipal", data_object="municipal_parks", limit=120))
+    nodes.append(_server_point_icon_nodes((payload.get("nearby_pois") or {}).get("items", []), project, data_layer="pois", limit=160))
+    nodes.append(_server_point_icon_nodes(((payload.get("layers") or {}).get("address_points") or {}).get("items", []), project, data_layer="municipal", limit=60, data_object="addresses"))
+    nodes.append(_server_point_icon_nodes(((payload.get("layers") or {}).get("municipal_pois") or {}).get("items", []), project, data_layer="municipal", limit=120))
+    nodes.append(_server_point_icon_nodes(((payload.get("layers") or {}).get("context_pois") or {}).get("items", []), project, data_layer="osm", limit=80, fallback_category="interest", data_object="osm_interest"))
+    return "".join(node for node in nodes if node)
+
+
+def _server_overlay_label_nodes(payload: dict[str, Any], project) -> str:
+    return "".join(
+        node
+        for node in (
+            _layer_text_labels(payload, "neighborhoods", project, "neighborhoods"),
+        )
+        if node
+    )
 
 
 def _server_basemap_node(project) -> str:
@@ -5320,16 +6050,12 @@ def _server_basemap_node(project) -> str:
     min_lat = bounds.get("min_lat")
     max_lon = bounds.get("max_lon")
     max_lat = bounds.get("max_lat")
-    if not all(isinstance(value, int | float) for value in (min_lon, min_lat, max_lon, max_lat)):
+    if not all(isinstance(value, (int, float)) for value in (min_lon, min_lat, max_lon, max_lat)):
         return ""
-    lon_center = (min_lon + max_lon) / 2
-    lat_center = (min_lat + max_lat) / 2
-    lon_half = ((max_lon - min_lon) or 0.001) * 1.75 / 2
-    lat_half = ((max_lat - min_lat) or 0.001) * 1.75 / 2
-    bbox = f"{lon_center - lon_half:.8f},{lat_center - lat_half:.8f},{lon_center + lon_half:.8f},{lat_center + lat_half:.8f}"
-    params = urlencode({"bbox": bbox, "bboxSR": "4326", "imageSR": "4326", "size": "1575,1085", "format": "png32", "transparent": "false", "f": "image"})
+    bbox = f"{min_lon:.8f},{min_lat:.8f},{max_lon:.8f},{max_lat:.8f}"
+    params = urlencode({"bbox": bbox, "bboxSR": "4326", "imageSR": "4326", "size": "900,620", "format": "png32", "transparent": "false", "f": "image"})
     href = _escape_text(f"https://gisn.tel-aviv.gov.il/arcgis/rest/services/IView2MapHeb/MapServer/export?{params}")
-    return f'<image x="-337.5" y="-232.5" width="1575" height="1085" preserveAspectRatio="none" href="{href}" data-map-layer="basemap" data-unfilterable-raster="true" opacity="0.42" />'
+    return f'<image x="0" y="0" width="900" height="620" preserveAspectRatio="none" href="{href}" data-map-layer="basemap" data-unfilterable-raster="true" opacity="0.42" style="display:none" />'
 
 
 def _server_layer_path_node(
@@ -5359,20 +6085,25 @@ def _server_layer_path_node(
 
 def _server_geometry_icon_nodes(payload: dict[str, Any], layer_key: str, project, *, category: str, data_layer: str, data_object: str, limit: int) -> str:
     nodes: list[str] = []
-    for item in (((payload.get("layers") or {}).get(layer_key) or {}).get("items", []) or [])[:limit]:
+    candidates: list[tuple[float, float, str, str, str]] = []
+    for item in (((payload.get("layers") or {}).get(layer_key) or {}).get("items", []) or []):
         if not isinstance(item, dict) or not isinstance(item.get("geometry"), dict):
             continue
-        point = _geometry_label_point(item["geometry"], project)
+        label_geometry = item.get("label_point") if isinstance(item.get("label_point"), dict) else item["geometry"]
+        point = _geometry_label_point(label_geometry, project)
         if point is None:
             continue
         label = _clean_map_label(str(item.get("name_he") or item.get("name_en") or category)) or category
-        nodes.append(_server_icon_node(point[0], point[1], category, data_layer, _escape_text(label), _escape_text(str(item.get("provenance_id") or item.get("source_id") or layer_key)), data_object=data_object))
+        candidates.append((point[0], point[1], category, _escape_text(label), _escape_text(str(item.get("provenance_id") or item.get("source_id") or layer_key))))
+    for x, y, item_category, label, provenance_id in _spread_icon_candidates(candidates, limit=limit):
+        nodes.append(_server_icon_node(x, y, item_category, data_layer, label, provenance_id, data_object=data_object))
     return "".join(nodes)
 
 
-def _server_point_icon_nodes(items: list[dict[str, Any]], project, *, data_layer: str, limit: int, fallback_category: str | None = None) -> str:
+def _server_point_icon_nodes(items: list[dict[str, Any]], project, *, data_layer: str, limit: int, fallback_category: str | None = None, data_object: str | None = None) -> str:
     nodes: list[str] = []
-    for item in (items or [])[:limit]:
+    candidates: list[tuple[float, float, str, str, str]] = []
+    for item in items or []:
         if not isinstance(item, dict):
             continue
         geometry = item.get("geometry") if isinstance(item.get("geometry"), dict) else {}
@@ -5382,15 +6113,35 @@ def _server_point_icon_nodes(items: list[dict[str, Any]], project, *, data_layer
         x, y = project((float(coordinates[0]), float(coordinates[1])))
         category = str(item.get("poi_category") or item.get("feature_type") or fallback_category or "pin")
         label = _clean_map_label(str(item.get("name_he") or item.get("name_en") or category)) or category
-        nodes.append(_server_icon_node(x, y, category, data_layer, _escape_text(label), _escape_text(str(item.get("provenance_id") or item.get("source_id") or "gis"))))
+        candidates.append((x, y, category, _escape_text(label), _escape_text(str(item.get("provenance_id") or item.get("source_id") or "gis"))))
+    for x, y, category, label, provenance_id in _spread_icon_candidates(candidates, limit=limit):
+        nodes.append(_server_icon_node(x, y, category, data_layer, label, provenance_id, data_object=data_object))
     return "".join(nodes)
 
 
+def _spread_icon_candidates(candidates: list[tuple[float, float, str, str, str]], *, limit: int) -> list[tuple[float, float, str, str, str]]:
+    if limit <= 0:
+        return []
+    if len(candidates) <= limit:
+        return candidates
+    cell_size = 76.0
+    selected: list[tuple[float, float, str, str, str]] = []
+    remaining: list[tuple[float, float, str, str, str]] = []
+    seen_cells: set[tuple[int, int]] = set()
+    for candidate in candidates:
+        x, y = candidate[0], candidate[1]
+        cell = (int(x // cell_size), int(y // cell_size))
+        if cell not in seen_cells and len(selected) < limit:
+            selected.append(candidate)
+            seen_cells.add(cell)
+        else:
+            remaining.append(candidate)
+    if len(selected) < limit:
+        selected.extend(remaining[: limit - len(selected)])
+    return selected
+
+
 def _selected_area_feature(payload: dict[str, Any]) -> dict[str, Any] | None:
-    for item in ((payload.get("layers") or {}).get("neighborhoods") or {}).get("items", []):
-        geometry = item.get("geometry") if isinstance(item, dict) else None
-        if isinstance(geometry, dict) and geometry.get("type") in {"Polygon", "MultiPolygon"}:
-            return item
     parcel = payload.get("parcel") if isinstance(payload.get("parcel"), dict) else {}
     return parcel if isinstance(parcel.get("geometry"), dict) else None
 
@@ -5433,8 +6184,8 @@ def _server_focus_view_box(geometry: dict[str, Any], project, world: dict[str, f
     raw = _server_box_from_projected_points([project(point) for point in points])
     if raw is None:
         return world
-    pad_x = max(raw["width"] * 0.72, 95)
-    pad_y = max(raw["height"] * 0.72, 68)
+    pad_x = max(raw["width"] * 0.72, 38)
+    pad_y = max(raw["height"] * 0.72, 26)
     padded = {"x": raw["x"] - pad_x, "y": raw["y"] - pad_y, "width": raw["width"] + pad_x * 2, "height": raw["height"] + pad_y * 2}
     return _server_clamp_box_to_world(_server_fit_box_to_aspect(padded, 900 / 620), world)
 
@@ -5444,14 +6195,15 @@ def _server_projection(payload: dict[str, Any], *, local_only: bool = False):
     selected_area = _selected_area_feature(payload)
     parcel = payload.get("parcel") if isinstance(payload.get("parcel"), dict) else {}
     geometry = parcel.get("geometry") if isinstance(parcel.get("geometry"), dict) else {}
-    for item in ((payload.get("layers") or {}).get("municipal_boundaries") or {}).get("items", []):
-        if isinstance(item, dict) and isinstance(item.get("geometry"), dict):
-            _collect_points(item["geometry"].get("coordinates"), points)
+    for layer_key in ("municipal_boundaries", "neighboring_municipal_boundaries"):
+        for item in ((payload.get("layers") or {}).get(layer_key) or {}).get("items", []):
+            if isinstance(item, dict) and isinstance(item.get("geometry"), dict):
+                _collect_points(item["geometry"].get("coordinates"), points)
     if not points:
         if selected_area and isinstance(selected_area.get("geometry"), dict):
             _collect_points(selected_area["geometry"].get("coordinates"), points)
         _collect_points(geometry.get("coordinates"), points)
-        layer_keys = () if local_only else ("nearby_parcels", "buildings", "context_pois", "context_roads", "context_railways", "context_waterways", "context_water", "context_landuse", "municipal_parks", "municipal_beaches", "municipal_bike_paths", "neighborhoods", "address_points", "municipal_pois")
+        layer_keys = () if local_only else ("nearby_parcels", "buildings", "context_pois", "context_roads", "context_railways", "context_waterways", "context_water", "context_landuse", "municipal_parks", "municipal_beaches", "municipal_bike_paths", "neighborhoods", "address_points", "municipal_pois", "neighboring_municipal_boundaries")
         for layer_key in layer_keys:
             for item in ((payload.get("layers") or {}).get(layer_key) or {}).get("items", []):
                 if isinstance(item, dict) and isinstance(item.get("geometry"), dict):
@@ -5525,18 +6277,19 @@ def _layer_line_paths(payload: dict[str, Any], layer_key: str, project) -> str:
     )
 
 
-def _layer_text_labels(payload: dict[str, Any], layer_key: str, project, object_type: str) -> str:
+def _layer_text_labels(payload: dict[str, Any], layer_key: str, project, object_type: str, *, fallback_label: str = "") -> str:
     labels = []
     for item in ((payload.get("layers") or {}).get(layer_key) or {}).get("items", []):
         if not isinstance(item, dict) or not isinstance(item.get("geometry"), dict):
             continue
-        label = _clean_map_label(str(item.get("name_he") or item.get("name_en") or ""))
-        point = _geometry_label_point(item["geometry"], project)
+        label = _clean_map_label(str(item.get("name_he") or item.get("name_en") or fallback_label))
+        label_geometry = item.get("label_point") if isinstance(item.get("label_point"), dict) else item["geometry"]
+        point = _geometry_label_point(label_geometry, project)
         if not label or point is None:
             continue
         x, y = point
         labels.append(
-            f'<text class="realGisStaticLabel" data-map-layer="municipal" data-map-object="{object_type}" data-map-label="true" data-base-font-size="15" font-size="4.2" style="font-size:4.2px" x="{x:.1f}" y="{y:.1f}">{_escape_text(label)}</text>'
+            f'<text class="realGisStaticLabel" data-map-layer="municipal" data-map-object="{object_type}" data-map-label="true" data-base-font-size="11" font-size="0.88" style="font-size:0.88px" x="{x:.1f}" y="{y:.1f}">{_escape_text(label)}</text>'
         )
     return "".join(labels)
 
@@ -5563,9 +6316,10 @@ def _server_icon_node(x: float, y: float, category: str, layer: str, label: str,
     object_type = data_object or _server_map_object_type(category)
     glyph = _server_icon_glyph(icon)
     base_transform = f"translate({x:.1f} {y:.1f})"
+    hidden_style = ' style="display:none"' if object_type == "osm_parks" else ""
     return (
         f'<g data-map-layer="{layer}" data-map-object="{object_type}" data-map-icon="true" '
-        f'data-base-transform="{base_transform}" transform="{base_transform} scale(0.18)" opacity="0.92">'
+        f'data-base-transform="{base_transform}" transform="{base_transform} scale(0.05)" opacity="0.92"{hidden_style}>'
         f'<title>{label} · {provenance_id}</title>'
         f'<circle r="15" fill="rgba(255,255,255,0.90)" stroke="{color}" stroke-width="1.4" />'
         f'<path d="{glyph}" fill="{color}" stroke="none" />'
@@ -5615,12 +6369,12 @@ def _server_map_object_type(category: str) -> str:
     if category == "address_point":
         return "addresses"
     if category == "park":
-        return "parks"
+        return "osm_parks"
     if category == "interest":
-        return "interest"
+        return "osm_interest"
     if category in {"community_center", "culture", "parking", "municipal_poi"}:
         return "municipal_pois"
-    return "interest"
+    return "osm_interest"
 
 
 def _server_icon_glyph(kind: str) -> str:
@@ -5639,7 +6393,7 @@ def _server_icon_glyph(kind: str) -> str:
 
 
 def _collect_points(coordinates: Any, out: list[tuple[float, float]]) -> None:
-    if isinstance(coordinates, list) and len(coordinates) >= 2 and all(isinstance(value, int | float) for value in coordinates[:2]):
+    if isinstance(coordinates, list) and len(coordinates) >= 2 and all(isinstance(value, (int, float)) for value in coordinates[:2]):
         out.append((float(coordinates[0]), float(coordinates[1])))
         return
     if isinstance(coordinates, list):

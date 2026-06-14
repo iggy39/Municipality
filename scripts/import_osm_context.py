@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import httpx
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -29,6 +29,7 @@ def main() -> None:
     parser.add_argument("--center-lon", type=float, help="Optional WGS84 longitude for spatial filtering.")
     parser.add_argument("--center-lat", type=float, help="Optional WGS84 latitude for spatial filtering.")
     parser.add_argument("--radius-m", type=float, help="Optional spatial filter radius in meters. Requires --center-lon and --center-lat.")
+    parser.add_argument("--municipality-code", help="Optional official municipal boundary code used as a WGS84 bbox prefilter.")
     args = parser.parse_args()
 
     if args.zip_path:
@@ -43,6 +44,7 @@ def main() -> None:
 
     engine = create_engine(os.environ["DATABASE_URL"], future=True)
     with Session(engine) as session, session.begin():
+        spatial_bbox = _municipality_boundary_bbox(session, args.municipality_code) if args.municipality_code else None
         summary = import_osm_context_zip(
             session,
             source_id=args.source_id,
@@ -55,10 +57,35 @@ def main() -> None:
             center_lon=args.center_lon,
             center_lat=args.center_lat,
             radius_m=args.radius_m,
+            spatial_bbox=spatial_bbox,
         )
     print(f"inserted_or_updated={summary.inserted_or_updated} rejected={summary.rejected}")
     if summary.warnings:
         print(f"warnings={summary.warnings}")
+
+
+def _municipality_boundary_bbox(session: Session, municipality_code: str) -> tuple[float, float, float, float]:
+    row = session.execute(
+        text(
+            """
+            SELECT ST_XMin(box) AS min_lon,
+                   ST_YMin(box) AS min_lat,
+                   ST_XMax(box) AS max_lon,
+                   ST_YMax(box) AS max_lat
+            FROM (
+              SELECT ST_Envelope(geom) AS box
+              FROM official_municipal_boundaries
+              WHERE municipality_code = :municipality_code
+              ORDER BY fetched_at DESC
+              LIMIT 1
+            ) boundary
+            """
+        ),
+        {"municipality_code": str(municipality_code).strip()},
+    ).mappings().first()
+    if row is None:
+        raise ValueError(f"municipal_boundary_not_found:{municipality_code}")
+    return (float(row["min_lon"]), float(row["min_lat"]), float(row["max_lon"]), float(row["max_lat"]))
 
 
 if __name__ == "__main__":

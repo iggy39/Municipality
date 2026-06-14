@@ -63,6 +63,8 @@ def test_v1_plan_and_parcel_endpoints_include_provenance_and_obey_geometry_defau
     plan_item = plan.json()["items"][0]
     assert plan_item["source"]["source_id"] == "xplan_blue_lines"
     assert plan_item["provenance_id"] == "prov-plan-1"
+    assert plan_item["plan_metadata"]["station_desc"] == "בהפקדה"
+    assert plan_item["plan_metadata"]["pl_url"] == "https://example.test/plan/603-1373075"
     assert "geometry" not in plan_item
 
     full_plan = client.get("/v1/plans/603-1373075", params={"include_geometry": True, "geometry_detail": "full"})
@@ -221,6 +223,7 @@ def _client_with_seeded_sqlite() -> TestClient:
                   validation_warnings TEXT NOT NULL,
                   geom TEXT NOT NULL,
                   geom_2039 TEXT,
+                  metadata TEXT NOT NULL,
                   fetched_at TEXT
                 )
                 """
@@ -356,10 +359,23 @@ def _client_with_seeded_sqlite() -> TestClient:
             text(
                 """
                 INSERT INTO plans VALUES
-                ('plan-1', 'xplan_blue_lines', 'prov-plan-1', '603-1373075', 'תכנית בדיקה', 'valid', '[]', :geom, :geom, '2026-06-09')
+                ('plan-1', 'xplan_blue_lines', 'prov-plan-1', '603-1373075', 'תכנית בדיקה', 'valid', '[]', :geom, :geom, :metadata, '2026-06-09')
                 """
             ),
-            {"geom": _polygon_json(34.75, 32.05, 34.83, 32.12)},
+            {
+                "geom": _polygon_json(34.75, 32.05, 34.83, 32.12),
+                "metadata": json.dumps(
+                    {
+                        "plan": {
+                            "station_desc": "בהפקדה",
+                            "internet_short_status": "ניתן להגיש התנגדויות",
+                            "pl_url": "https://example.test/plan/603-1373075",
+                        },
+                        "properties": {"station_desc": "בהפקדה"},
+                    },
+                    ensure_ascii=False,
+                ),
+            },
         )
         connection.execute(
             text(

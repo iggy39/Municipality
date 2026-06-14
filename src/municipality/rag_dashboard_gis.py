@@ -59,9 +59,9 @@ INITIAL_MUNICIPAL_CONTEXT_LIMITS = {
     "municipal_beaches": 20,
     "municipal_bike_paths": 50,
 }
-OVERVIEW_NEARBY_PARCEL_LIMIT = 150
-OVERVIEW_POINT_LIMIT = 80
-OVERVIEW_BUILDING_LIMIT = 80
+OVERVIEW_NEARBY_PARCEL_LIMIT = 0
+OVERVIEW_POINT_LIMIT = 160
+OVERVIEW_BUILDING_LIMIT = 0
 OVERVIEW_CONTEXT_GEOMETRY_LIMITS = {
     "context_roads": None,
     "context_railways": 50,
@@ -128,6 +128,102 @@ def build_dashboard_gis_map_payload(
     return payload
 
 
+def build_dashboard_gis_buildings_payload(
+    session: Session,
+    *,
+    municipality_code: str = TEL_AVIV_MUNICIPALITY_CODE,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+) -> dict[str, Any]:
+    west, east = sorted((float(min_lon), float(max_lon)))
+    south, north = sorted((float(min_lat), float(max_lat)))
+    rows, total = _building_rows_for_bbox(
+        session,
+        municipality_code=str(municipality_code).strip(),
+        min_lon=west,
+        min_lat=south,
+        max_lon=east,
+        max_lat=north,
+    )
+    return {
+        "status": "found" if rows else "not_found",
+        "query": {
+            "municipality_code": str(municipality_code).strip(),
+            "bbox": {"min_lon": west, "min_lat": south, "max_lon": east, "max_lat": north},
+        },
+        "count": len(rows),
+        "displayed_count": len(rows),
+        "total_count": int(total),
+        "items": [_building_feature(row) for row in rows],
+    }
+
+
+def build_dashboard_gis_parcels_payload(
+    session: Session,
+    *,
+    municipality_code: str = TEL_AVIV_MUNICIPALITY_CODE,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+) -> dict[str, Any]:
+    west, east = sorted((float(min_lon), float(max_lon)))
+    south, north = sorted((float(min_lat), float(max_lat)))
+    rows, total = _parcel_rows_for_bbox(
+        session,
+        municipality_code=str(municipality_code).strip(),
+        min_lon=west,
+        min_lat=south,
+        max_lon=east,
+        max_lat=north,
+    )
+    return {
+        "status": "found" if rows else "not_found",
+        "query": {
+            "municipality_code": str(municipality_code).strip(),
+            "bbox": {"min_lon": west, "min_lat": south, "max_lon": east, "max_lat": north},
+        },
+        "count": len(rows),
+        "displayed_count": len(rows),
+        "total_count": int(total),
+        "items": [_parcel_feature(row) for row in rows],
+    }
+
+
+def build_dashboard_gis_context_pois_payload(
+    session: Session,
+    *,
+    municipality_code: str = TEL_AVIV_MUNICIPALITY_CODE,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+) -> dict[str, Any]:
+    west, east = sorted((float(min_lon), float(max_lon)))
+    south, north = sorted((float(min_lat), float(max_lat)))
+    rows, total = _context_poi_rows_for_bbox(
+        session,
+        municipality_code=str(municipality_code).strip(),
+        min_lon=west,
+        min_lat=south,
+        max_lon=east,
+        max_lat=north,
+    )
+    return {
+        "status": "found" if rows else "not_found",
+        "query": {
+            "municipality_code": str(municipality_code).strip(),
+            "bbox": {"min_lon": west, "min_lat": south, "max_lon": east, "max_lat": north},
+        },
+        "count": len(rows),
+        "displayed_count": len(rows),
+        "total_count": int(total),
+        "items": [_context_poi_feature(row) for row in rows],
+    }
+
+
 def _cached_gis_payload(cache_key: tuple[Any, ...]) -> dict[str, Any] | None:
     entry = _GIS_PAYLOAD_CACHE.get(cache_key)
     if entry is None:
@@ -165,8 +261,9 @@ def _tel_aviv_parcel_payload(session: Session, *, gush: str, helka: str, radius_
         municipal_layer_limits = INITIAL_MUNICIPAL_CONTEXT_LIMITS
         nearby_parcel_limit = INITIAL_NEARBY_PARCEL_LIMIT
         address_limit = 0
+    overview_spread = profile == "overview"
     try:
-        parcel = _parcel_row(session, gush=gush, helka=helka, source_id="mapi_parcels")
+        parcel = _parcel_row(session, gush=gush, helka=helka, source_id="mapi_parcels", municipality_code=TEL_AVIV_MUNICIPALITY_CODE)
         if parcel is None:
             return _not_found_payload(gush=gush, helka=helka, radius_m=radius_m)
         center = _center_from_geometry(parcel.get("centroid") or parcel.get("geometry"))
@@ -180,6 +277,7 @@ def _tel_aviv_parcel_payload(session: Session, *, gush: str, helka: str, radius_
             lat=center["lat"],
             category="transport_stop",
             limit=point_limit,
+            spread=overview_spread,
         )
         school_rows, school_total = _municipal_boundary_poi_rows_by_category(
             session,
@@ -188,22 +286,24 @@ def _tel_aviv_parcel_payload(session: Session, *, gush: str, helka: str, radius_
             lat=center["lat"],
             category="school",
             limit=point_limit,
+            spread=overview_spread,
         )
-        context_rows, context_total = _municipal_boundary_context_poi_rows_with_count(session, municipality_code=TEL_AVIV_MUNICIPALITY_CODE, lon=center["lon"], lat=center["lat"], limit=point_limit)
-        building_rows, building_total = _municipal_boundary_building_rows_with_count(session, municipality_code=TEL_AVIV_MUNICIPALITY_CODE, lon=center["lon"], lat=center["lat"], limit=building_limit)
+        context_rows, context_total = _municipal_boundary_context_poi_rows_with_count(session, municipality_code=TEL_AVIV_MUNICIPALITY_CODE, lon=center["lon"], lat=center["lat"], limit=point_limit, spread=overview_spread)
+        building_rows, building_total = _municipal_boundary_building_rows_with_count(session, municipality_code=TEL_AVIV_MUNICIPALITY_CODE, lon=center["lon"], lat=center["lat"], limit=building_limit, spread=overview_spread)
         context_geometry_layers = {
-            layer_key: _municipal_boundary_context_geometry_rows_with_count(session, context_layer=layer_key, municipality_code=TEL_AVIV_MUNICIPALITY_CODE, lon=center["lon"], lat=center["lat"], limit=limit)
+            layer_key: _municipal_boundary_context_geometry_rows_with_count(session, context_layer=layer_key, municipality_code=TEL_AVIV_MUNICIPALITY_CODE, lon=center["lon"], lat=center["lat"], limit=limit, spread=overview_spread)
             for layer_key, limit in context_layer_limits.items()
         }
         municipal_context_layers = {
-            layer_key: _municipal_boundary_context_geometry_rows_with_count(session, context_layer=layer_key, municipality_code=TEL_AVIV_MUNICIPALITY_CODE, lon=center["lon"], lat=center["lat"], limit=limit)
+            layer_key: _municipal_boundary_context_geometry_rows_with_count(session, context_layer=layer_key, municipality_code=TEL_AVIV_MUNICIPALITY_CODE, lon=center["lon"], lat=center["lat"], limit=limit, spread=overview_spread)
             for layer_key, limit in municipal_layer_limits.items()
         }
         boundary_rows = _boundary_rows_for_municipality(session, municipality_code=TEL_AVIV_MUNICIPALITY_CODE, limit=1)
+        neighboring_boundary_rows = _neighboring_boundary_rows_for_municipality(session, municipality_code=TEL_AVIV_MUNICIPALITY_CODE, padding_degrees=0.02, limit=32)
         plan_rows = _polygon_rows_covering_point(session, "plans", lon=center["lon"], lat=center["lat"], limit=8)
         neighborhood_rows = _municipal_neighborhood_rows(session, lon=center["lon"], lat=center["lat"], municipality_code=TEL_AVIV_MUNICIPALITY_CODE, radius_m=None, limit=None)
         address_rows, address_total = _municipal_address_rows_with_count(session, lon=center["lon"], lat=center["lat"], municipality_code=TEL_AVIV_MUNICIPALITY_CODE, radius_m=None, limit=address_limit)
-        municipal_poi_rows, municipal_poi_total = _municipal_poi_rows_with_count(session, lon=center["lon"], lat=center["lat"], municipality_code=TEL_AVIV_MUNICIPALITY_CODE, radius_m=None, limit=point_limit)
+        municipal_poi_rows, municipal_poi_total = _municipal_poi_rows_with_count(session, lon=center["lon"], lat=center["lat"], municipality_code=TEL_AVIV_MUNICIPALITY_CODE, radius_m=None, limit=point_limit, spread=overview_spread)
         nearby_parcel_rows, nearby_parcel_total = _mapi_parcel_rows_for_municipality_boundary(
             session,
             municipality_code=TEL_AVIV_MUNICIPALITY_CODE,
@@ -212,6 +312,7 @@ def _tel_aviv_parcel_payload(session: Session, *, gush: str, helka: str, radius_
             lon=center["lon"],
             lat=center["lat"],
             limit=nearby_parcel_limit,
+            spread=overview_spread,
         )
         coverage = _coverage_rows_for_municipality(session, municipality_code=TEL_AVIV_MUNICIPALITY_CODE)
     except SQLAlchemyError as exc:
@@ -251,6 +352,7 @@ def _tel_aviv_parcel_payload(session: Session, *, gush: str, helka: str, radius_
             "nearby_parcels": {"count": len(nearby_parcel_rows), "displayed_count": len(nearby_parcel_rows), "total_count": int(nearby_parcel_total), "items": [_parcel_feature(row) for row in nearby_parcel_rows], "status": "found" if nearby_parcel_rows else "not_found"},
             "plans": {"count": len(plan_rows), "displayed_count": len(plan_rows), "total_count": len(plan_rows), "items": [_plan_feature(row) for row in plan_rows], "status": "found" if plan_rows else "not_found"},
             "municipal_boundaries": {"count": len(boundary_rows), "items": [_boundary_feature(row) for row in boundary_rows], "status": "found" if boundary_rows else "not_found"},
+            "neighboring_municipal_boundaries": {"count": len(neighboring_boundary_rows), "displayed_count": len(neighboring_boundary_rows), "total_count": len(neighboring_boundary_rows), "items": [_boundary_feature(row) for row in neighboring_boundary_rows], "status": "found" if neighboring_boundary_rows else "not_found"},
             "neighborhoods": {"count": len(neighborhood_rows), "displayed_count": len(neighborhood_rows), "total_count": len(neighborhood_rows), "items": [_neighborhood_feature(row) for row in neighborhood_rows], "status": "municipal_license_under_review" if neighborhood_rows else "not_ingested", "message_he": "שכבת שכונות עירונית של תל אביב מוצגת רק אם נטענה בפועל, ובכל מקרה מסומנת בבדיקת רישיון."},
             "address_points": {"count": len(address_rows), "displayed_count": len(address_rows), "total_count": int(address_total), "items": [_address_feature(row) for row in address_rows], "status": "municipal_license_under_review" if address_rows else "not_loaded", "message_he": "כתובות אינן מוצגות בטעינה הראשונית כי השכבה חלקית ומטעה כתצוגה עירונית."},
             "municipal_pois": {"count": len(municipal_poi_rows), "displayed_count": len(municipal_poi_rows), "total_count": int(municipal_poi_total), "items": [_poi_feature(row) for row in municipal_poi_rows], "status": "municipal_license_under_review" if municipal_poi_rows else "not_ingested", "message_he": "מוקדים עירוניים של תל אביב מוצגים רק כמידע בבדיקת רישיון."},
@@ -283,6 +385,7 @@ def _tel_aviv_parcel_payload(session: Session, *, gush: str, helka: str, radius_
             {"id": "parcel", "label": "חלקת MAPI רשמית", "kind": "polygon", "color": "#14532d", "display_status": "official"},
             {"id": "nearby_parcels", "label": "חלקות MAPI סמוכות", "kind": "polygon", "color": "#7c6f55", "display_status": "official"},
             {"id": "municipal_boundaries", "label": "גבול תל אביב רשמי", "kind": "polygon", "color": "#0f766e", "display_status": "official"},
+            {"id": "neighboring_municipal_boundaries", "label": "גבולות רשויות סמוכות", "kind": "polygon", "color": "#94a3b8", "display_status": "official"},
             {"id": "transport_stop", "label": "תחנות תחבורה רשמיות", "kind": "point", "color": "#0b68d1", "display_status": "official"},
             {"id": "school", "label": "מוסדות חינוך רשמיים", "kind": "point", "color": "#f59e0b", "display_status": "official"},
             {"id": "neighborhoods", "label": "שכונות תל אביב - בבדיקת רישיון", "kind": "polygon", "color": "#2563eb", "display_status": "municipal_license_under_review"},
@@ -417,9 +520,10 @@ def _legend_items() -> list[dict[str, str]]:
     ]
 
 
-def _parcel_row(session: Session, *, gush: str, helka: str, source_id: str | None = None) -> Mapping[str, Any] | None:
+def _parcel_row(session: Session, *, gush: str, helka: str, source_id: str | None = None, municipality_code: str | None = None) -> Mapping[str, Any] | None:
     source_filter = "AND p.source_id = :source_id" if source_id else ""
-    params = {"gush": str(gush).strip(), "helka": str(helka).strip(), "source_id": source_id}
+    municipality_filter = f"AND {_municipal_boundary_filter('p')}" if municipality_code else ""
+    params = {"gush": str(gush).strip(), "helka": str(helka).strip(), "source_id": source_id, "municipality_code": municipality_code}
     row = session.execute(
         text(
             f"""
@@ -438,6 +542,7 @@ def _parcel_row(session: Session, *, gush: str, helka: str, source_id: str | Non
             JOIN source_registry sr ON sr.source_id = p.source_id
             WHERE p.gush = :gush AND p.helka = :helka
               {source_filter}
+              {municipality_filter}
             ORDER BY p.fetched_at DESC
             LIMIT 1
             """
@@ -577,8 +682,11 @@ def _municipal_boundary_poi_rows_by_category(
     lat: float,
     category: str,
     limit: int | None,
+    spread: bool = False,
 ) -> tuple[list[Mapping[str, Any]], int]:
     params = _limit_params({"municipality_code": municipality_code, "lon": lon, "lat": lat, "category": category}, limit)
+    distance_expr = "ST_Distance(p.geom_2039, ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039))"
+    order_clause = _spatial_grid_order("p.geom", distance_expr) if spread else "distance_m ASC"
     count = int(
         session.execute(
             text(
@@ -605,16 +713,13 @@ def _municipal_boundary_poi_rows_by_category(
                    p.name_en,
                    p.official_identifier,
                    ST_AsGeoJSON(p.geom) AS geometry,
-                   ST_Distance(
-                     p.geom_2039,
-                     ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039)
-                   ) AS distance_m,
-                   {SOURCE_COLUMNS}
+                    {distance_expr} AS distance_m,
+                    {SOURCE_COLUMNS}
             FROM poi_points p
             JOIN source_registry sr ON sr.source_id = p.source_id
             WHERE p.poi_category = :category
               AND {_municipal_boundary_filter("p")}
-            ORDER BY distance_m ASC
+            ORDER BY {order_clause}
             {_limit_clause(limit)}
             """
         ),
@@ -684,6 +789,48 @@ def _boundary_rows_for_municipality(session: Session, *, municipality_code: str,
     )
 
 
+def _neighboring_boundary_rows_for_municipality(session: Session, *, municipality_code: str, padding_degrees: float, limit: int) -> list[Mapping[str, Any]]:
+    try:
+        return list(
+            session.execute(
+                text(
+                    f"""
+                    WITH selected_boundary AS (
+                      SELECT geom
+                      FROM official_municipal_boundaries
+                      WHERE municipality_code = :municipality_code
+                      ORDER BY fetched_at DESC
+                      LIMIT 1
+                    )
+                    SELECT b.id,
+                           b.source_id AS feature_source_id,
+                           b.provenance_id,
+                           NULL AS plan_number,
+                           NULL AS plan_name,
+                           b.municipality_code,
+                           b.municipality_name_he,
+                           NULL AS name_he,
+                           NULL AS name_en,
+                           NULL AS source_object_id,
+                           b.validation_status,
+                           ST_AsGeoJSON(b.geom) AS geometry,
+                           {SOURCE_COLUMNS}
+                    FROM official_municipal_boundaries b
+                    JOIN source_registry sr ON sr.source_id = b.source_id
+                    JOIN selected_boundary selected ON ST_Intersects(b.geom, ST_Expand(selected.geom, :padding_degrees))
+                    WHERE b.municipality_code <> :municipality_code
+                    ORDER BY ST_Distance(b.geom_2039, (SELECT ST_Transform(geom, 2039) FROM selected_boundary)) ASC,
+                             b.municipality_name_he ASC
+                    LIMIT :limit
+                    """
+                ),
+                {"municipality_code": municipality_code, "padding_degrees": float(padding_degrees), "limit": int(limit)},
+            ).mappings().all()
+        )
+    except SQLAlchemyError:
+        return []
+
+
 def _municipal_boundary_filter(table_alias: str) -> str:
     return f"""
     EXISTS (
@@ -692,6 +839,19 @@ def _municipal_boundary_filter(table_alias: str) -> str:
       WHERE boundary.municipality_code = :municipality_code
         AND ST_Covers(boundary.geom, ST_PointOnSurface({table_alias}.geom))
     )
+    """
+
+
+def _spatial_grid_order(point_expr: str, distance_expr: str) -> str:
+    # For overview maps, limited result sets should represent the visible city,
+    # not just the rows nearest to the selected parcel.
+    grid_x = f"floor(ST_X({point_expr}) * 120)::int"
+    grid_y = f"floor(ST_Y({point_expr}) * 120)::int"
+    cell_key = f"({grid_x})::text || ':' || ({grid_y})::text"
+    return f"""
+    row_number() OVER (PARTITION BY {grid_x}, {grid_y} ORDER BY {distance_expr} ASC) ASC,
+    mod(abs(hashtext({cell_key})), 1000000) ASC,
+    {distance_expr} ASC
     """
 
 
@@ -811,6 +971,7 @@ def _mapi_parcel_rows_for_municipality_boundary(
     lon: float,
     lat: float,
     limit: int | None,
+    spread: bool = False,
 ) -> tuple[list[Mapping[str, Any]], int]:
     # Shows all already-ingested official MAPI parcels inside the official municipal boundary.
     params = _limit_params(
@@ -823,6 +984,9 @@ def _mapi_parcel_rows_for_municipality_boundary(
         },
         limit,
     )
+    point_expr = "ST_PointOnSurface(p.geom)"
+    distance_expr = "ST_Distance(ST_PointOnSurface(p.geom_2039), ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039))"
+    order_clause = _spatial_grid_order(point_expr, distance_expr) if spread else "distance_m ASC"
     try:
         count = int(
             session.execute(
@@ -851,16 +1015,14 @@ def _mapi_parcel_rows_for_municipality_boundary(
                        p.parcel_label,
                        p.validation_status,
                        ST_AsGeoJSON(p.geom) AS geometry,
+                       {distance_expr} AS distance_m,
                        {SOURCE_COLUMNS}
                 FROM parcels p
                 JOIN source_registry sr ON sr.source_id = p.source_id
                 WHERE p.source_id = 'mapi_parcels'
                   AND NOT (p.gush = :selected_gush AND p.helka = :selected_helka)
                   AND {_municipal_boundary_filter("p")}
-                ORDER BY ST_Distance(
-                  p.geom_2039,
-                  ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039)
-                ) ASC
+                ORDER BY {order_clause}
                 {_limit_clause(limit)}
                 """
             ),
@@ -962,8 +1124,10 @@ def _context_poi_rows_with_count(session: Session, *, lon: float, lat: float, ra
         return [], 0
 
 
-def _municipal_boundary_context_poi_rows_with_count(session: Session, *, municipality_code: str, lon: float, lat: float, limit: int | None) -> tuple[list[Mapping[str, Any]], int]:
+def _municipal_boundary_context_poi_rows_with_count(session: Session, *, municipality_code: str, lon: float, lat: float, limit: int | None, spread: bool = False) -> tuple[list[Mapping[str, Any]], int]:
     params = _limit_params({"municipality_code": municipality_code, "lon": lon, "lat": lat}, limit)
+    distance_expr = "ST_Distance(c.geom_2039, ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039))"
+    order_clause = _spatial_grid_order("c.geom", distance_expr) if spread else "distance_m ASC"
     try:
         count = int(
             session.execute(
@@ -984,12 +1148,12 @@ def _municipal_boundary_context_poi_rows_with_count(session: Session, *, municip
                 SELECT c.id, c.source_id AS feature_source_id, c.provenance_id,
                        c.source_object_id, c.poi_category, c.name AS name_he, NULL AS name_en,
                        ST_AsGeoJSON(c.geom) AS geometry,
-                       ST_Distance(c.geom_2039, ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039)) AS distance_m,
+                       {distance_expr} AS distance_m,
                        {SOURCE_COLUMNS}
                 FROM context_pois c
                 JOIN source_registry sr ON sr.source_id = c.source_id
                 WHERE {_municipal_boundary_filter("c")}
-                ORDER BY distance_m ASC
+                ORDER BY {order_clause}
                 {_limit_clause(limit)}
                 """
             ),
@@ -1046,8 +1210,11 @@ def _building_rows_with_count(session: Session, *, lon: float, lat: float, radiu
         return [], 0
 
 
-def _municipal_boundary_building_rows_with_count(session: Session, *, municipality_code: str, lon: float, lat: float, limit: int | None) -> tuple[list[Mapping[str, Any]], int]:
+def _municipal_boundary_building_rows_with_count(session: Session, *, municipality_code: str, lon: float, lat: float, limit: int | None, spread: bool = False) -> tuple[list[Mapping[str, Any]], int]:
     params = _limit_params({"municipality_code": municipality_code, "lon": lon, "lat": lat}, limit)
+    point_expr = "ST_PointOnSurface(b.geom)"
+    distance_expr = "ST_Distance(ST_PointOnSurface(b.geom_2039), ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039))"
+    order_clause = _spatial_grid_order(point_expr, distance_expr) if spread else "distance_m ASC"
     try:
         count = int(
             session.execute(
@@ -1068,18 +1235,188 @@ def _municipal_boundary_building_rows_with_count(session: Session, *, municipali
                 SELECT b.id, b.source_id AS feature_source_id, b.provenance_id,
                        b.source_object_id, b.municipality_code, b.validation_status,
                        ST_AsGeoJSON(b.geom) AS geometry,
-                       ST_Distance(ST_PointOnSurface(b.geom_2039), ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039)) AS distance_m,
+                       {distance_expr} AS distance_m,
                        {SOURCE_COLUMNS}
                 FROM buildings b
                 JOIN source_registry sr ON sr.source_id = b.source_id
                 WHERE {_municipal_boundary_filter("b")}
-                ORDER BY distance_m ASC
+                ORDER BY {order_clause}
                 {_limit_clause(limit)}
                 """
             ),
             params,
         ).mappings().all()
         return list(rows), count
+    except SQLAlchemyError:
+        return [], 0
+
+
+def _building_rows_for_bbox(
+    session: Session,
+    *,
+    municipality_code: str,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+) -> tuple[list[Mapping[str, Any]], int]:
+    params = {
+        "municipality_code": municipality_code,
+        "min_lon": float(min_lon),
+        "min_lat": float(min_lat),
+        "max_lon": float(max_lon),
+        "max_lat": float(max_lat),
+    }
+    envelope = "ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)"
+    try:
+        total = int(
+            session.execute(
+                text(
+                    f"""
+                    SELECT count(*)
+                    FROM buildings b
+                    WHERE b.municipality_code = :municipality_code
+                      AND ST_Intersects(b.geom, {envelope})
+                    """
+                ),
+                params,
+            ).scalar_one()
+            or 0
+        )
+        rows = session.execute(
+            text(
+                f"""
+                SELECT b.id, b.source_id AS feature_source_id, b.provenance_id,
+                       b.source_object_id, b.municipality_code, b.validation_status,
+                       ST_AsGeoJSON(b.geom) AS geometry,
+                       NULL::double precision AS distance_m,
+                       {SOURCE_COLUMNS}
+                FROM buildings b
+                JOIN source_registry sr ON sr.source_id = b.source_id
+                WHERE b.municipality_code = :municipality_code
+                  AND ST_Intersects(b.geom, {envelope})
+                ORDER BY b.id ASC
+                """
+            ),
+            params,
+        ).mappings().all()
+        return list(rows), total
+    except SQLAlchemyError:
+        return [], 0
+
+
+def _parcel_rows_for_bbox(
+    session: Session,
+    *,
+    municipality_code: str,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+) -> tuple[list[Mapping[str, Any]], int]:
+    params = {
+        "municipality_code": municipality_code,
+        "min_lon": float(min_lon),
+        "min_lat": float(min_lat),
+        "max_lon": float(max_lon),
+        "max_lat": float(max_lat),
+    }
+    envelope = "ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)"
+    try:
+        total = int(
+            session.execute(
+                text(
+                    f"""
+                    SELECT count(*)
+                    FROM parcels p
+                    WHERE p.source_id = 'mapi_parcels'
+                      AND ST_Intersects(p.geom, {envelope})
+                      AND {_municipal_boundary_filter("p")}
+                    """
+                ),
+                params,
+            ).scalar_one()
+            or 0
+        )
+        rows = session.execute(
+            text(
+                f"""
+                SELECT p.id,
+                       p.source_id AS feature_source_id,
+                       p.provenance_id,
+                       p.source_object_id,
+                       p.gush,
+                       p.helka,
+                       p.parcel_label,
+                       p.validation_status,
+                       ST_AsGeoJSON(p.geom) AS geometry,
+                       NULL::double precision AS distance_m,
+                       {SOURCE_COLUMNS}
+                FROM parcels p
+                JOIN source_registry sr ON sr.source_id = p.source_id
+                WHERE p.source_id = 'mapi_parcels'
+                  AND ST_Intersects(p.geom, {envelope})
+                  AND {_municipal_boundary_filter("p")}
+                ORDER BY p.id ASC
+                """
+            ),
+            params,
+        ).mappings().all()
+        return list(rows), total
+    except SQLAlchemyError:
+        return [], 0
+
+
+def _context_poi_rows_for_bbox(
+    session: Session,
+    *,
+    municipality_code: str,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+) -> tuple[list[Mapping[str, Any]], int]:
+    params = {
+        "municipality_code": municipality_code,
+        "min_lon": float(min_lon),
+        "min_lat": float(min_lat),
+        "max_lon": float(max_lon),
+        "max_lat": float(max_lat),
+    }
+    envelope = "ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)"
+    try:
+        total = int(
+            session.execute(
+                text(
+                    f"""
+                    SELECT count(*)
+                    FROM context_pois c
+                    WHERE ST_Intersects(c.geom, {envelope})
+                      AND {_municipal_boundary_filter("c")}
+                    """
+                ),
+                params,
+            ).scalar_one()
+            or 0
+        )
+        rows = session.execute(
+            text(
+                f"""
+                SELECT c.id, c.source_id AS feature_source_id, c.provenance_id,
+                       c.source_object_id, c.poi_category, c.name AS name_he, NULL AS name_en,
+                       ST_AsGeoJSON(c.geom) AS geometry,
+                       NULL::double precision AS distance_m,
+                       {SOURCE_COLUMNS}
+                FROM context_pois c
+                JOIN source_registry sr ON sr.source_id = c.source_id
+                WHERE ST_Intersects(c.geom, {envelope})
+                  AND {_municipal_boundary_filter("c")}
+                ORDER BY c.id ASC
+                """
+            ),
+            params,
+        ).mappings().all()
+        return list(rows), total
     except SQLAlchemyError:
         return [], 0
 
@@ -1133,8 +1470,11 @@ def _context_geometry_rows_with_count(session: Session, *, context_layer: str, l
         return [], 0
 
 
-def _municipal_boundary_context_geometry_rows_with_count(session: Session, *, context_layer: str, municipality_code: str, lon: float, lat: float, limit: int | None) -> tuple[list[Mapping[str, Any]], int]:
+def _municipal_boundary_context_geometry_rows_with_count(session: Session, *, context_layer: str, municipality_code: str, lon: float, lat: float, limit: int | None, spread: bool = False) -> tuple[list[Mapping[str, Any]], int]:
     params = _limit_params({"context_layer": context_layer, "municipality_code": municipality_code, "lon": lon, "lat": lat}, limit)
+    point_expr = "ST_PointOnSurface(g.geom)"
+    distance_expr = "ST_Distance(g.geom_2039, ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039))"
+    order_clause = _spatial_grid_order(point_expr, distance_expr) if spread else "distance_m ASC"
     try:
         count = int(
             session.execute(
@@ -1157,13 +1497,13 @@ def _municipal_boundary_context_geometry_rows_with_count(session: Session, *, co
                        g.source_object_id, g.context_layer, g.geometry_type,
                        g.category, g.name, g.validation_status,
                        ST_AsGeoJSON(g.geom) AS geometry,
-                       ST_Distance(g.geom_2039, ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039)) AS distance_m,
+                       {distance_expr} AS distance_m,
                        {SOURCE_COLUMNS}
                 FROM context_geometries g
                 JOIN source_registry sr ON sr.source_id = g.source_id
                 WHERE g.context_layer = :context_layer
                   AND {_municipal_boundary_filter("g")}
-                ORDER BY distance_m ASC
+                ORDER BY {order_clause}
                 {_limit_clause(limit)}
                 """
             ),
@@ -1182,18 +1522,40 @@ def _municipal_neighborhood_rows(session: Session, *, lon: float, lat: float, mu
             session.execute(
                 text(
                     f"""
-                    SELECT n.id, n.source_id AS feature_source_id, n.provenance_id,
+                    SELECT DISTINCT ON (n.municipality_code, n.name_he)
+                           n.id, n.source_id AS feature_source_id, n.provenance_id,
                            NULL AS plan_number, NULL AS plan_name, n.municipality_code,
                            NULL AS municipality_name_he, n.name_he, n.name_en,
                            NULL AS source_object_id, n.validation_status,
-                           ST_AsGeoJSON(n.geom) AS geometry,
+                            ST_AsGeoJSON(n.geom) AS geometry,
+                            ST_AsGeoJSON(COALESCE(
+                                (
+                                    SELECT ST_PointOnSurface(b.geom)
+                                    FROM buildings b
+                                    WHERE b.municipality_code = n.municipality_code
+                                      AND b.geom && n.geom
+                                      AND ST_Covers(n.geom, ST_PointOnSurface(b.geom))
+                                    ORDER BY ST_Distance(ST_PointOnSurface(b.geom_2039), ST_PointOnSurface(n.geom_2039)) ASC
+                                    LIMIT 1
+                                ),
+                                (
+                                    SELECT ST_PointOnSurface(p.geom)
+                                    FROM parcels p
+                                    WHERE p.source_id = 'mapi_parcels'
+                                      AND p.geom && n.geom
+                                      AND ST_Covers(n.geom, ST_PointOnSurface(p.geom))
+                                    ORDER BY ST_Distance(ST_PointOnSurface(p.geom_2039), ST_PointOnSurface(n.geom_2039)) ASC
+                                    LIMIT 1
+                                ),
+                                ST_PointOnSurface(n.geom)
+                            )) AS label_point,
                            ST_Distance(ST_PointOnSurface(n.geom_2039), ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039)) AS distance_m,
                            {SOURCE_COLUMNS}
                     FROM neighborhoods n
                     JOIN source_registry sr ON sr.source_id = n.source_id
                     WHERE n.municipality_code = :municipality_code
                       {radius_filter}
-                    ORDER BY ST_Covers(n.geom, ST_SetSRID(ST_Point(:lon, :lat), 4326)) DESC, distance_m ASC
+                    ORDER BY n.municipality_code, n.name_he, n.fetched_at DESC, ST_Area(n.geom_2039) DESC
                     {_limit_clause(limit)}
                     """
                 ),
@@ -1246,9 +1608,11 @@ def _municipal_address_rows_with_count(session: Session, *, lon: float, lat: flo
         return [], 0
 
 
-def _municipal_poi_rows_with_count(session: Session, *, lon: float, lat: float, municipality_code: str, radius_m: float | None, limit: int | None) -> tuple[list[Mapping[str, Any]], int]:
+def _municipal_poi_rows_with_count(session: Session, *, lon: float, lat: float, municipality_code: str, radius_m: float | None, limit: int | None, spread: bool = False) -> tuple[list[Mapping[str, Any]], int]:
     params = _limit_params({"lon": lon, "lat": lat, "municipality_code": municipality_code, **({"radius_m": float(radius_m)} if radius_m is not None else {})}, limit)
     radius_filter = "AND ST_DWithin(p.geom_2039, ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039), :radius_m)" if radius_m is not None else ""
+    distance_expr = "ST_Distance(p.geom_2039, ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039))"
+    order_clause = _spatial_grid_order("p.geom", distance_expr) if spread else "distance_m ASC"
     try:
         count = int(
             session.execute(
@@ -1277,14 +1641,14 @@ def _municipal_poi_rows_with_count(session: Session, *, lon: float, lat: float, 
                        p.name_en,
                        p.official_identifier,
                        ST_AsGeoJSON(p.geom) AS geometry,
-                       ST_Distance(p.geom_2039, ST_Transform(ST_SetSRID(ST_Point(:lon, :lat), 4326), 2039)) AS distance_m,
+                       {distance_expr} AS distance_m,
                        {SOURCE_COLUMNS}
                 FROM poi_points p
                 JOIN source_registry sr ON sr.source_id = p.source_id
                 WHERE p.source_id = 'tel_aviv_open_data_discovered'
                   AND p.municipality_code = :municipality_code
                   {radius_filter}
-                ORDER BY distance_m ASC
+                ORDER BY {order_clause}
                 {_limit_clause(limit)}
                 """
             ),
@@ -1368,6 +1732,7 @@ def _neighborhood_feature(row: Mapping[str, Any]) -> dict[str, Any]:
         "name_he": row.get("name_he"),
         "name_en": row.get("name_en"),
         "validation_status": row.get("validation_status"),
+        "label_point": _load_geojson(row.get("label_point")),
         "geometry": _load_geojson(row.get("geometry")),
     }
 

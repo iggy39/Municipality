@@ -373,24 +373,36 @@ def import_xplan_arcgis_plans(
     plan_name_field: str = "plan_name",
     page_size: int = 1000,
     where: str = "1=1",
+    municipality_code: str | None = None,
 ) -> ImportSummary:
-    pages = fetch_arcgis_feature_pages(service_url=service_url, fetch_json=fetch_json, page_size=page_size, where=where)
+    municipality_filter = _xplan_municipality_filter(session, municipality_code=municipality_code)
+    query_params = _xplan_municipality_query_params(municipality_filter)
+    pages = fetch_arcgis_feature_pages(service_url=service_url, fetch_json=fetch_json, page_size=page_size, where=where, query_params=query_params)
     count = 0
     rejected = 0
+    skipped_outside_municipality = 0
     warnings: list[str] = []
     for page_index, page in enumerate(pages):
         raw_uri = raw_storage.write_json(source_id=source_id, name=f"xplan_page_{page_index}.geojson", payload=page)
         for feature in page.get("features") or []:
             properties = _properties(feature)
-            plan_number = str(properties.get(plan_number_field) or "").strip()
+            plan_number = _xplan_property_value(properties, plan_number_field, ["pl_number", "plan_number", "plan_no", "pl_num"])
             geometry = normalize_polygon_geometry(_geometry(feature))
             result = validate_geojson_geometry(geometry, expected_type="MultiPolygon")
             if result.status == "invalid" or not plan_number:
                 rejected += 1
                 warnings.extend(result.warnings or ["missing_plan_number"])
                 continue
+            if municipality_filter and not _xplan_geometry_intersects_municipality(session, geometry=geometry, municipality_code=municipality_filter["municipality_code"]):
+                skipped_outside_municipality += 1
+                continue
             geom_hash = geometry_hash(geometry)
             source_key = f"{source_id}:{plan_number}:{geom_hash}"
+            metadata = _xplan_plan_metadata(
+                properties,
+                municipality_code=municipality_filter.get("municipality_code") if municipality_filter else None,
+                municipality_name_he=municipality_filter.get("municipality_name_he") if municipality_filter else None,
+            )
             provenance_id = _get_or_create_provenance(
                 session,
                 canonical_table="plans",
@@ -398,7 +410,7 @@ def import_xplan_arcgis_plans(
                 source_key=source_key,
                 raw_storage_uri=raw_uri,
                 geom_hash=geom_hash,
-                metadata={"properties": properties},
+                metadata=metadata,
             )
             session.execute(
                 text(
@@ -424,10 +436,21 @@ def import_xplan_arcgis_plans(
                       updated_at = now()
                     """
                 ),
-                _polygon_params(source_id, provenance_id, plan_number, properties.get(plan_name_field), geom_hash, geometry, result, properties),
+                _polygon_params(
+                    source_id,
+                    provenance_id,
+                    plan_number,
+                    _xplan_property_value(properties, plan_name_field, ["pl_name", "plan_name", "plan_title", "name"]),
+                    geom_hash,
+                    geometry,
+                    result,
+                    metadata,
+                ),
             )
             count += 1
-    _refresh_national_polygon_coverage(session, source_id=source_id, layer_key="plans", table_name="plans")
+    _refresh_national_plan_coverage(session, source_id=source_id)
+    if skipped_outside_municipality:
+        warnings.append(f"skipped_outside_municipality:{skipped_outside_municipality}")
     return ImportSummary(count, rejected, _dedupe(warnings))
 
 
@@ -792,10 +815,11 @@ def import_osm_context_zip(
     center_lon: float | None = None,
     center_lat: float | None = None,
     radius_m: float | None = None,
+    spatial_bbox: tuple[float, float, float, float] | None = None,
 ) -> ImportSummary:
     _assert_context_only_source(session, source_id)
     raw_uri = raw_storage.write_bytes(source_id=source_id, name=source_name, content=zip_bytes)
-    spatial_bbox = _spatial_bbox(center_lon=center_lon, center_lat=center_lat, radius_m=radius_m)
+    spatial_bbox = spatial_bbox or _spatial_bbox(center_lon=center_lon, center_lat=center_lat, radius_m=radius_m)
     count = 0
     rejected = 0
     warnings: list[str] = []
@@ -1690,6 +1714,36 @@ def _refresh_national_polygon_coverage(session: Session, *, source_id: str, laye
     )
 
 
+def _refresh_national_plan_coverage(session: Session, *, source_id: str) -> None:
+    if not _has_municipal_boundaries(session):
+        return
+    session.execute(
+        text(
+            """
+            INSERT INTO layer_coverage (
+              municipality_code, municipality_name_he, layer_key, status, source_id,
+              feature_count, last_successful_ingest_at, updated_at
+            )
+            SELECT boundary.municipality_code, boundary.municipality_name_he, 'plans',
+                   'national_available', :source_id, count(feature.id), now(), now()
+            FROM official_municipal_boundaries boundary
+            JOIN plans feature
+              ON feature.source_id = :source_id
+             AND ST_Intersects(boundary.geom, feature.geom)
+            GROUP BY boundary.municipality_code, boundary.municipality_name_he
+            ON CONFLICT (municipality_code, layer_key) DO UPDATE SET
+              municipality_name_he = EXCLUDED.municipality_name_he,
+              status = EXCLUDED.status,
+              source_id = EXCLUDED.source_id,
+              feature_count = EXCLUDED.feature_count,
+              last_successful_ingest_at = now(),
+              updated_at = now()
+            """
+        ),
+        {"source_id": source_id},
+    )
+
+
 def _refresh_national_point_coverage(session: Session, *, source_id: str, layer_key: str, table_name: str) -> None:
     if not _has_municipal_boundaries(session):
         return
@@ -1830,6 +1884,145 @@ def _refresh_osm_context_coverage(session: Session, *, source_id: str) -> None:
 def _has_municipal_boundaries(session: Session) -> bool:
     count = session.execute(text("SELECT count(*) FROM official_municipal_boundaries")).scalar_one()
     return int(count or 0) > 0
+
+
+def _xplan_municipality_filter(session: Session, *, municipality_code: str | None) -> dict[str, Any] | None:
+    normalized_code = normalize_municipality_code(municipality_code) if municipality_code else None
+    if not normalized_code:
+        return None
+    row = session.execute(
+        text(
+            """
+            SELECT municipality_code, municipality_name_he,
+                   ST_AsGeoJSON(geom)::text AS geometry,
+                   ST_AsGeoJSON(ST_Envelope(geom))::text AS envelope
+            FROM official_municipal_boundaries
+            WHERE municipality_code = :municipality_code
+            ORDER BY fetched_at DESC
+            LIMIT 1
+            """
+        ),
+        {"municipality_code": normalized_code},
+    ).mappings().first()
+    if row is None:
+        raise ValueError(f"municipal_boundary_not_found:{normalized_code}")
+    return {
+        "municipality_code": str(row["municipality_code"]),
+        "municipality_name_he": row.get("municipality_name_he"),
+        "geometry": _load_geojson(row.get("geometry")),
+        "envelope": _load_geojson(row.get("envelope")),
+    }
+
+
+def _xplan_municipality_query_params(municipality_filter: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not municipality_filter:
+        return None
+    bbox = _geojson_bbox(municipality_filter.get("envelope") or municipality_filter.get("geometry"))
+    if bbox is None:
+        return None
+    min_lon, min_lat, max_lon, max_lat = bbox
+    return {
+        "geometry": json.dumps(
+            {
+                "xmin": min_lon,
+                "ymin": min_lat,
+                "xmax": max_lon,
+                "ymax": max_lat,
+                "spatialReference": {"wkid": 4326},
+            }
+        ),
+        "geometryType": "esriGeometryEnvelope",
+        "inSR": 4326,
+        "spatialRel": "esriSpatialRelIntersects",
+    }
+
+
+def _xplan_geometry_intersects_municipality(session: Session, *, geometry: dict[str, Any], municipality_code: str) -> bool:
+    return bool(
+        session.execute(
+            text(
+                """
+                SELECT EXISTS (
+                  SELECT 1
+                  FROM official_municipal_boundaries
+                  WHERE municipality_code = :municipality_code
+                    AND ST_Intersects(geom, ST_SetSRID(ST_GeomFromGeoJSON(:geometry), 4326))
+                )
+                """
+            ),
+            {"municipality_code": municipality_code, "geometry": json.dumps(geometry)},
+        ).scalar_one()
+    )
+
+
+def _xplan_plan_metadata(properties: Mapping[str, Any], *, municipality_code: str | None = None, municipality_name_he: str | None = None) -> dict[str, Any]:
+    compact = {
+        "station_desc": _xplan_property_value(properties, "station_desc", ["station_desc", "station_description"]),
+        "internet_short_status": _xplan_property_value(properties, "internet_short_status", ["internet_short_status", "short_status"]),
+        "pl_url": _xplan_property_value(properties, "pl_url", ["pl_url", "plan_url", "url"]),
+        "land_use": _xplan_property_value(properties, "land_use", ["pl_landuse_string", "land_use", "landuse", "landuse_string", "main_landuse"]),
+        "objectives": _xplan_property_value(properties, "objectives", ["pl_objectives", "objectives", "pl_objective", "plan_objectives", "goals"]),
+        "dates": _xplan_named_fields(properties, ["date", "dt", "deadline"]),
+        "quantity_deltas": _xplan_named_fields(properties, ["delta", "addition", "units", "housing", "quantity", "yahid", "dira"]),
+    }
+    return {
+        "properties": dict(properties),
+        "plan": {key: value for key, value in compact.items() if value not in (None, {}, [])},
+        "municipality_code": municipality_code,
+        "municipality_name_he": municipality_name_he,
+    }
+
+
+def _xplan_property_value(properties: Mapping[str, Any], preferred_field: str, aliases: list[str]) -> str | None:
+    for field in [preferred_field, *aliases]:
+        if not field:
+            continue
+        value = _case_insensitive_value(properties, field)
+        if value not in (None, ""):
+            return str(value).strip()
+    return None
+
+
+def _xplan_named_fields(properties: Mapping[str, Any], markers: list[str]) -> dict[str, str]:
+    selected: dict[str, str] = {}
+    for key, value in properties.items():
+        normalized_key = str(key).lower()
+        if value in (None, ""):
+            continue
+        if any(marker in normalized_key for marker in markers):
+            selected[str(key)] = str(value).strip()
+    return selected
+
+
+def _load_geojson(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _geojson_bbox(geometry: Any) -> tuple[float, float, float, float] | None:
+    coordinates = geometry.get("coordinates") if isinstance(geometry, Mapping) else None
+    points = list(_geojson_points(coordinates))
+    if not points:
+        return None
+    lon_values = [point[0] for point in points]
+    lat_values = [point[1] for point in points]
+    return min(lon_values), min(lat_values), max(lon_values), max(lat_values)
+
+
+def _geojson_points(value: Any) -> Iterable[tuple[float, float]]:
+    if isinstance(value, (list, tuple)) and len(value) >= 2 and all(isinstance(item, (int, float)) for item in value[:2]):
+        yield float(value[0]), float(value[1])
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _geojson_points(item)
 
 
 def _refresh_context_coverage_for_table(
@@ -1989,10 +2182,10 @@ def _upsert_municipal_building(
               ST_Transform(ST_Multi(ST_MakeValid(ST_GeomFromGeoJSON(:geometry)::geometry)), 2039)::geometry(MultiPolygon, 2039),
               :validation_status, CAST(:validation_warnings AS jsonb), CAST(:metadata AS jsonb)
             )
-            ON CONFLICT (source_id, source_object_id) WHERE source_object_id IS NOT NULL DO UPDATE SET
+            ON CONFLICT (source_id, normalized_geometry_hash) DO UPDATE SET
               provenance_id = EXCLUDED.provenance_id,
+              source_object_id = COALESCE(buildings.source_object_id, EXCLUDED.source_object_id),
               municipality_code = EXCLUDED.municipality_code,
-              normalized_geometry_hash = EXCLUDED.normalized_geometry_hash,
               geom = EXCLUDED.geom,
               geom_2039 = EXCLUDED.geom_2039,
               validation_status = EXCLUDED.validation_status,
@@ -2310,7 +2503,7 @@ def _polygon_params(
     geom_hash: str,
     geometry: dict[str, Any],
     result: Any,
-    properties: dict[str, Any],
+    metadata: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "source_id": source_id,
@@ -2321,7 +2514,7 @@ def _polygon_params(
         "geometry": json.dumps(geometry),
         "validation_status": result.status,
         "validation_warnings": json.dumps(result.warnings, ensure_ascii=False),
-        "metadata": json.dumps({"properties": properties}, ensure_ascii=False, default=str),
+        "metadata": json.dumps(metadata, ensure_ascii=False, default=str),
     }
 
 

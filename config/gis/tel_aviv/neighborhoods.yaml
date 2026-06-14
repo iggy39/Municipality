@@ -1,6 +1,7 @@
 layer_key: neighborhoods
 municipality_code: "5000"
 municipality_name_he: תל אביב-יפו
+source_url: https://gisn.tel-aviv.gov.il/arcgis/rest/services/IView2/MapServer/511
 field_mappings:
   source_object_id: [oid_shchuna, ms_shchuna]
   name_he: [shem_shchuna]

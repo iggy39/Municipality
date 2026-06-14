@@ -251,6 +251,8 @@ def test_rag_dashboard_mock_payload_covers_current_dashboard_visual_data() -> No
 
     assert expected_visual_strings <= endpoint_strings
     assert all(value in ask_body for value in expected_body_strings)
+    assert 'muni: "ashdod"' not in ask_body
+    assert "selectedMunicipalityForQuery" in ask_body
 
     assert [row["count"] for row in payload["start_discovery_panel"]["categories"]] == [342, 128, 95, 76, 64]
     assert [row["count"] for row in payload["start_discovery_panel"]["hot_topics"]] == [23, 18, 14, 11]
@@ -885,6 +887,7 @@ def _seed_gis_dashboard_sqlite():
                   plan_name TEXT,
                   validation_status TEXT NOT NULL,
                   geom TEXT NOT NULL,
+                  metadata TEXT NOT NULL,
                   fetched_at TEXT
                 )
                 """
@@ -1002,10 +1005,13 @@ def _seed_gis_dashboard_sqlite():
             text(
                 """
                 INSERT INTO plans VALUES
-                ('plan-dashboard', 'xplan_blue_lines', 'prov-plan-dashboard', '101-0057273', 'תכנית ירושלים בדיקה', 'valid', :plan_geom, '2026-06-10')
+                ('plan-dashboard', 'xplan_blue_lines', 'prov-plan-dashboard', '101-0057273', 'תכנית ירושלים בדיקה', 'valid', :plan_geom, :metadata, '2026-06-10')
                 """
             ),
-            {"plan_geom": _gis_polygon_json(35.2216, 31.7951, 35.2224, 31.7959)},
+            {
+                "plan_geom": _gis_polygon_json(35.2216, 31.7951, 35.2224, 31.7959),
+                "metadata": json.dumps({"plan": {"internet_short_status": "בדיקה"}, "properties": {}}, ensure_ascii=False),
+            },
         )
         connection.execute(
             text(
