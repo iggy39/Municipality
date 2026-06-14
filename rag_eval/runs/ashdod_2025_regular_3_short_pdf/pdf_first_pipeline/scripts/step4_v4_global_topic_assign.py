@@ -1118,6 +1118,11 @@ def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label:
     child_id = child_topic_id(root_topic_id, child_label) if child_label else None
     parsed_contract = parsed_contract or {}
     root_adjudication = root_adjudication or {}
+    is_topic_bearing = bool(_contract_value(parsed_contract, item, "is_topic_bearing"))
+    row_type = item.get("row_type")
+    if not is_topic_bearing and row_type == "topic_item":
+        row_type = "fragment"
+    topic_subject = _contract_value(parsed_contract, item, "topic_subject_he") if is_topic_bearing else None
     return {
         "structure_unit_id": item["structure_unit_id"],
         "semantic_unit_id": item["semantic_unit_id"],
@@ -1128,15 +1133,15 @@ def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label:
         "structural_role": item.get("structural_role"),
         "section_id": item.get("section_id"),
         "section_number": item.get("section_number"),
-        "row_type": item.get("row_type"),
+        "row_type": row_type,
         "skip_model_assignment": bool(item.get("skip_model_assignment")),
         "packet_role": str((item.get("document_context") or {}).get("packet_role") or ""),
         "topic_identification_context": item.get("topic_identification_context"),
         "topic_headline_he": item.get("topic_headline_he"),
         "agenda_carrier_he": _contract_value(parsed_contract, item, "agenda_carrier_he"),
-        "topic_subject_he": _contract_value(parsed_contract, item, "topic_subject_he"),
+        "topic_subject_he": topic_subject,
         "attribution_he": _contract_value(parsed_contract, item, "attribution_he"),
-        "is_topic_bearing": bool(_contract_value(parsed_contract, item, "is_topic_bearing")),
+        "is_topic_bearing": is_topic_bearing,
         "agenda_item_title_he": item.get("agenda_item_title_he"),
         "parent_agenda_unit_id": item.get("parent_agenda_unit_id"),
         "topic_context_source": item.get("topic_context_source"),
@@ -1496,10 +1501,16 @@ def _non_topic_protocol_reason(*, headline: str, raw_text: str, structural_role:
         return "container_heading"
     if _looks_like_procedural_carrier_heading(text):
         return "procedural_carrier_heading"
+    if _looks_like_legal_boilerplate_fragment(text):
+        return "legal_boilerplate_fragment"
+    if _looks_like_signature_or_end_page_fragment(text):
+        return "signature_or_end_page_fragment"
     if _looks_like_no_topic_continuation(raw or text):
         return "no_topic_continuation"
     if _looks_like_procedural_dialogue_fragment(raw or text):
         return "procedural_dialogue_fragment"
+    if _looks_like_transcript_speech_fragment(raw or text):
+        return "transcript_speech_fragment"
     return None
 
 
@@ -1528,7 +1539,7 @@ def _protocol_topic_provenance_reject_reason(*, unit: dict[str, Any], headline: 
         token_count = len(_hebrew_tokens(compact_raw))
         # Raw text can stand in for a heading only when the unit itself is short.
         # Long transcript windows often contain incidental heading-like phrases.
-        if role in {"outline_item", "section_heading", "task_row", "continuation"} and token_count <= 28 and len(compact_raw) <= 360:
+        if role in {"outline_item", "section_heading", "task_row"} and token_count <= 28 and len(compact_raw) <= 360:
             return None
         return "transcript_window_without_bounded_headline"
     if headline_source == "none":
@@ -1602,6 +1613,22 @@ def _looks_like_procedural_carrier_heading(text: str) -> bool:
     return bool(re.match(r"^פרוטוקול(?:י)?\s+ועדת\b", normalized))
 
 
+def _looks_like_legal_boilerplate_fragment(text: str) -> bool:
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    cues = ["לפקודת העיריות", "בתוקף סמכות", "המועצה החליטה", "להתקין חוק עזר", "חוק עזר זה"]
+    return sum(1 for cue in cues if cue in normalized) >= 2
+
+
+def _looks_like_signature_or_end_page_fragment(text: str) -> bool:
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    cues = ["תצלום סיום", "סיום הפרוטוקול", "חתימות", "יור הישיבה", "מנכל"]
+    return sum(1 for cue in cues if cue in normalized) >= 2
+
+
 def _looks_like_no_topic_continuation(text: str) -> bool:
     compact = _compact(text).strip(" .:-–")
     cleaned = clean_protocol_subject_text(compact)
@@ -1649,6 +1676,17 @@ def _looks_like_procedural_dialogue_fragment(text: str) -> bool:
         return False
     substantive_markers = ["בנושא", "הנדון", "הסכם", "ארנונה", "מפעל", "תאונות", "כביש", "תחבורה", "תמיכות", "הקצאה", "מינוי", "חינוך", "דירות", "שכירות"]
     return not any(term in normalized for term in substantive_markers)
+
+
+def _looks_like_transcript_speech_fragment(text: str) -> bool:
+    normalized = _norm(text)
+    if not normalized or _has_explicit_local_topic_marker(normalized):
+        return False
+    speech_cues = ["אני רוצה", "אני מבקש", "אנחנו מתחילים", "תודה", "לשאלתך", "שלחתי", "בדקתי", "חסרת לנו"]
+    if not any(cue in normalized for cue in speech_cues):
+        return False
+    sentence_breaks = len(re.findall(r"[.;:]|\s[-–]\s", text))
+    return sentence_breaks >= 1 or len(_hebrew_tokens(normalized)) >= 12
 
 
 def _has_explicit_local_topic_marker(text: str) -> bool:

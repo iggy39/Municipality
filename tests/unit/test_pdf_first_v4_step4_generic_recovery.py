@@ -141,6 +141,66 @@ def test_incidental_strong_marker_in_long_transcript_does_not_create_topic() -> 
     ) == "transcript_window_without_bounded_headline"
 
 
+def test_short_continuation_without_local_marker_is_not_standalone_topic() -> None:
+    raw_text = "2026 יפו מתן פטור מאגרות בעקבות המלחמה הוראת שעה הסעיף הבא חוק העזר לתל אביב"
+    unit = {"structural_role": "continuation", "raw_text": raw_text}
+
+    assert step4._protocol_topic_provenance_reject_reason(
+        unit=unit,
+        headline="יפו מתן פטור מאגרות בעקבות המלחמה",
+        raw_text=raw_text,
+        topic_context_source="unit_heading",
+        headline_source="raw_extracted",
+        packet_role="protocol",
+    ) == "transcript_window_without_bounded_headline"
+
+
+def test_legal_boilerplate_fragment_is_not_topic() -> None:
+    assert step4._non_topic_protocol_reason(
+        headline="לפקודת העיריות המועצה החליטה בתוקף סמכותה לפי סעיף",
+        raw_text="לפקודת העיריות המועצה החליטה בתוקף סמכותה לפי סעיף",
+        structural_role="outline_item",
+        packet_role="protocol",
+    ) == "legal_boilerplate_fragment"
+
+
+def test_transcript_thank_you_fragment_is_not_topic() -> None:
+    assert step4._non_topic_protocol_reason(
+        headline="בדקתי ושלחתי לה תודה על טיפול מסור וסבלני אז תודה לך",
+        raw_text="בדקתי, הראשון שבהם היה בפברואר. שלחתי לה. תודה על טיפול מסור וסבלני אז תודה לך",
+        structural_role="outline_item",
+        packet_role="protocol",
+    ) == "transcript_speech_fragment"
+
+
+def test_signature_end_page_fragment_is_not_topic() -> None:
+    assert step4._non_topic_protocol_reason(
+        headline='תצלום סיום הפרוטוקול וחתימות יו"ר הישיבה ומנכ"ל העירייה',
+        raw_text='תצלום סיום הפרוטוקול וחתימות יו"ר הישיבה ומנכ"ל העירייה',
+        structural_role="continuation",
+        packet_role="protocol",
+    ) == "signature_or_end_page_fragment"
+
+
+def test_model_non_topic_topic_item_is_normalized_to_fragment() -> None:
+    row = step4._non_topic_assignment(
+        {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "topic_item",
+            "topic_headline_he": "תצלום סיום הפרוטוקול וחתימות",
+            "topic_subject_he": "תצלום סיום הפרוטוקול וחתימות",
+            "document_context": {"packet_role": "protocol"},
+            "raw_text": "תצלום סיום הפרוטוקול וחתימות",
+        },
+        reason="model_or_shape_non_topic",
+    )
+
+    assert row["row_type"] == "fragment"
+    assert row["is_topic_bearing"] is False
+    assert row["topic_subject_he"] is None
+
+
 def test_cleaned_continuation_without_source_is_not_topic() -> None:
     unit = {"structural_role": "task_row", "raw_text": "מר כהן ממשיך לדבר על בית הספר והעירייה"}
 
