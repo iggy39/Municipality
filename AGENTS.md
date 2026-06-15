@@ -34,4 +34,5 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 - Verify each stage before proceeding to the next.
 - Tests alone are not enough.
 - Act as a judge: run or demonstrate the feature with representative input and print concise input/output evidence to the console.
+- When running a pipeline on documents, after each document print a table report with topic/subject identifier, real text, model prediction, ground truth from agent judgement, and the reason for success or failure.
 - Keep verification output concise unless debugging requires more detail.
