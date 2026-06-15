@@ -663,6 +663,219 @@ class ArtifactSemanticLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class TopicDecisionRun(Base):
+    __tablename__ = "topic_decision_run"
+    __table_args__ = (
+        Index("ix_topic_decision_run_municipality", "municipality_slug", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    municipality_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    write_mode: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source_artifact_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    extraction_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    accepted_decision_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TopicDecision(Base):
+    __tablename__ = "topic_decision"
+    __table_args__ = (
+        UniqueConstraint("run_id", "artifact_id", "semantic_node_id", "decision_index", name="uq_topic_decision_run_artifact_index"),
+        Index("ix_topic_decision_artifact", "artifact_id"),
+        Index("ix_topic_decision_semantic_node", "semantic_node_id"),
+        Index("ix_topic_decision_codelists", "decision_kind_code", "outcome_status_code", "legal_effect_code"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("topic_decision_run.id"), nullable=False)
+    municipality_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    artifact_id: Mapped[str] = mapped_column(String(64), ForeignKey("retrieval_artifact.artifact_id"), nullable=False)
+    semantic_node_id: Mapped[int] = mapped_column(ForeignKey("semantic_node.id"), nullable=False)
+    decision_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    root_topic_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    child_topic_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    topic_label_he: Mapped[str] = mapped_column(Text, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
+    source_document_version_id: Mapped[int] = mapped_column(ForeignKey("document_version.id"), nullable=False)
+    source_page_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_title_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_text_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_summary_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_kind_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision_kind_label_he: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome_status_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    outcome_status_label_he: Mapped[str] = mapped_column(Text, nullable=False)
+    legal_effect_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    legal_effect_label_he: Mapped[str] = mapped_column(Text, nullable=False)
+    primary_time_kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    primary_time_start: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    primary_time_end: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    primary_time_precision: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    primary_time_label_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    validation_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_quote_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    time_anchors_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_refs_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resident_evidence_links_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    limitations_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dicta_payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judge_payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TopicDecisionQualityReport(Base):
+    __tablename__ = "topic_decision_quality_report"
+    __table_args__ = (
+        Index("ix_topic_decision_quality_run", "run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("topic_decision_run.id"), nullable=False)
+    artifact_id: Mapped[str] = mapped_column(String(64), ForeignKey("retrieval_artifact.artifact_id"), nullable=False)
+    semantic_node_id: Mapped[int] = mapped_column(ForeignKey("semantic_node.id"), nullable=False)
+    topic_label_he: Mapped[str] = mapped_column(Text, nullable=False)
+    real_text: Mapped[str] = mapped_column(Text, nullable=False)
+    decision_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_ground_truth: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_for_failure: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TopicSubjectRun(Base):
+    __tablename__ = "topic_subject_run"
+    __table_args__ = (
+        Index("ix_topic_subject_run_municipality", "municipality_slug", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    municipality_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    write_mode: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source_artifact_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    extraction_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    candidate_subject_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    candidate_decision_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TopicSubject(Base):
+    __tablename__ = "topic_subject"
+    __table_args__ = (
+        UniqueConstraint("run_id", "artifact_id", "semantic_node_id", "subject_index", name="uq_topic_subject_run_artifact_index"),
+        Index("ix_topic_subject_artifact", "artifact_id"),
+        Index("ix_topic_subject_semantic_node", "semantic_node_id"),
+        Index("ix_topic_subject_labels", "subject_root_label_norm", "subject_child_label_norm"),
+        Index("ix_topic_subject_decision", "is_decision", "decision_label_norm"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("topic_subject_run.id"), nullable=False)
+    municipality_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    artifact_id: Mapped[str] = mapped_column(String(64), ForeignKey("retrieval_artifact.artifact_id"), nullable=False)
+    semantic_node_id: Mapped[int] = mapped_column(ForeignKey("semantic_node.id"), nullable=False)
+    subject_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    root_topic_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    child_topic_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    topic_label_he: Mapped[str] = mapped_column(Text, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
+    source_document_version_id: Mapped[int] = mapped_column(ForeignKey("document_version.id"), nullable=False)
+    source_ordinal: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_page_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_root_label_he: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_root_label_norm: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_child_label_he: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_child_label_norm: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_object_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_details_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_role: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    topic_relevance: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    event_topic_label_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_role: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    anchor_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    linked_event_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    link_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    link_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_summary_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    what_text_is_about_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate")
+    is_decision: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    decision_label_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_label_norm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_summary_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_source_quote_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    validation_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_refs_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resident_evidence_links_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    neighbor_contexts_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dicta_payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judge_payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TopicSubjectQualityReport(Base):
+    __tablename__ = "topic_subject_quality_report"
+    __table_args__ = (
+        Index("ix_topic_subject_quality_run", "run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("topic_subject_run.id"), nullable=False)
+    artifact_id: Mapped[str] = mapped_column(String(64), ForeignKey("retrieval_artifact.artifact_id"), nullable=False)
+    semantic_node_id: Mapped[int] = mapped_column(ForeignKey("semantic_node.id"), nullable=False)
+    topic_label_he: Mapped[str] = mapped_column(Text, nullable=False)
+    real_text: Mapped[str] = mapped_column(Text, nullable=False)
+    what_text_is_about_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_role: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    topic_relevance: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    event_topic_label_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_role: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    anchor_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    linked_event_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    link_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    link_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_root_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_child_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_object_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_details_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    my_judgment: Mapped[str] = mapped_column(Text, nullable=False)
+    ground_truth: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_for_failure: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class SemanticCandidateReject(Base):
     __tablename__ = "semantic_candidate_reject"
     __table_args__ = (

@@ -1,0 +1,12 @@
+ALTER TABLE topic_subject ADD COLUMN event_id VARCHAR(96);
+ALTER TABLE topic_subject ADD COLUMN event_topic_label_he TEXT;
+ALTER TABLE topic_subject ADD COLUMN row_role VARCHAR(64);
+ALTER TABLE topic_subject ADD COLUMN linked_event_id VARCHAR(96);
+ALTER TABLE topic_subject ADD COLUMN link_confidence REAL;
+ALTER TABLE topic_subject ADD COLUMN link_reason TEXT;
+ALTER TABLE topic_subject_quality_report ADD COLUMN event_id VARCHAR(96);
+ALTER TABLE topic_subject_quality_report ADD COLUMN event_topic_label_he TEXT;
+ALTER TABLE topic_subject_quality_report ADD COLUMN row_role VARCHAR(64);
+ALTER TABLE topic_subject_quality_report ADD COLUMN linked_event_id VARCHAR(96);
+ALTER TABLE topic_subject_quality_report ADD COLUMN link_confidence REAL;
+ALTER TABLE topic_subject_quality_report ADD COLUMN link_reason TEXT;

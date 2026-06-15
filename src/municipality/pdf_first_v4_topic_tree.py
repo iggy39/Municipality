@@ -21,7 +21,7 @@ from municipality.models import (
     SemanticNode,
 )
 from municipality.pdf_first_v4_topic_policy import best_topic_policy_match
-from municipality.topic_label_quality import is_low_quality_topic_label
+from municipality.topic_label_quality import canonicalize_topic_label, is_low_quality_topic_label
 
 
 TOPIC_TREE_VERSION = "pdf_first_v4_global_tree_2026_06_07"
@@ -48,16 +48,16 @@ V4_ROOT_TOPICS: tuple[dict[str, Any], ...] = (
     {"root_topic_id": "root_allocations", "root_label_he": "הקצאות ושימושים", "keywords": ["הקצאה", "הקצאות", "רשות שימוש", "שימוש", "מקרקעין", "גוש", "חלקה", "מגרש"]},
     {"root_topic_id": "root_agreements", "root_label_he": "הסכמים והתקשרויות", "keywords": ["הסכם", "הסכמים", "התקשרות", "מכרז", "פטור ממכרז", "הרשאה"]},
     {"root_topic_id": "root_supports", "root_label_he": "תמיכות", "keywords": ["תמיכה", "תמיכות", "ועדת תמיכות"]},
-    {"root_topic_id": "root_budget_finance", "root_label_he": "תקציב וכספים", "keywords": ["תקציב", "כספים", "תב\"ר", "תבר", "חובות", "דוח כספי", "דוחות כספיים", "הרשאות", "ארנונה", "צו ארנונה", "אגרה", "אגרות", "תעריף", "סיווג", "מיסוי", "מסים"]},
-    {"root_topic_id": "root_planning_building", "root_label_he": "תכנון ובנייה", "keywords": ["תכנון", "בנייה", "בניה", "תוכנית", "תכנית", "היתר", "הסכם הגג", "טופס"]},
+    {"root_topic_id": "root_budget_finance", "root_label_he": "תקציב וכספים", "keywords": ["תקציב", "כספים", "תב\"ר", "תבר", "חובות", "דוח כספי", "דוחות כספיים", "הרשאות", "ארנונה", "צו ארנונה", "אגרה", "אגרות", "תעריף", "סיווג", "מיסוי", "מסים", "מיסים", "הנחות במיסים", "הנחות במסים", "הטבות", "מדד חברתי", "חברתי-כלכלי", "היטל השבחה"]},
+    {"root_topic_id": "root_planning_building", "root_label_he": "תכנון ובנייה", "keywords": ["תכנון", "בנייה", "בניה", "תוכנית", "תכנית", "היתר", "הסכם הגג", "טופס", "מבנה יביל", "מבני ציבור", "מבנה ציבור", "מתנ\"סים", "מתנסים", "שיפוץ חזיתות", "חזיתות"]},
     {"root_topic_id": "root_transport_safety", "root_label_he": "תחבורה ובטיחות", "keywords": ["תחבורה", "בטיחות", "בטיחות בדרכים", "תמרור", "חניה", "כביש", "אוטובוס", "תאונות", "תאונות דרכים", "אפס תאונות", "צומת", "רחוב", "רחובות", "שדרות", "רמזור", "מעבר חציה", "באמפר", "באמפרים", "פס האטה", "פסי האטה", "מהירות", "תחבורתית"]},
-    {"root_topic_id": "root_education", "root_label_he": "חינוך", "keywords": ["חינוך", "בית ספר", "בתי ספר", "גן", "גנים", "תלמידים", "צהרון", "מעונות"]},
-    {"root_topic_id": "root_welfare_social", "root_label_he": "רווחה ושירותים חברתיים", "keywords": ["רווחה", "שירותים חברתיים", "נזקקים", "קשישים", "הגיל השלישי", "עריריים", "אלמנים", "אלמנות", "היפוטרמיה"]},
-    {"root_topic_id": "root_culture_sport", "root_label_he": "תרבות וספורט", "keywords": ["תרבות", "ספורט", "איצטדיון", "אצטדיון", "כדורסל", "כדורגל", "כדוריד", "ליגה", "אליפות", "גביע", "קבוצת ספורט", "ספורטאי", "משכן", "אומנויות הבמה", "אמנויות הבמה", "אודיטוריום", "אולם", "אולמות", "תיאטרון", "מרכז תרבות"], "profile": {"aliases_he": ["ספורט ופנאי", "קבוצות ספורט", "ספורט עירוני"], "aliases_en": ["sports", "sport", "recreation", "football", "soccer", "handball", "basketball"]}},
-    {"root_topic_id": "root_infrastructure_environment", "root_label_he": "תשתיות וסביבה", "keywords": ["תשתיות", "סביבה", "הצפות", "ניקיון", "ביוב", "מים", "פארק", "זיהום"]},
+    {"root_topic_id": "root_education", "root_label_he": "חינוך", "keywords": ["חינוך", "בית ספר", "בתי ספר", "גן", "גנים", "תלמידים", "צהרון", "צהרונים", "מעונות", "תשלומי הורים", "מדעניות העתיד"]},
+    {"root_topic_id": "root_welfare_social", "root_label_he": "רווחה ושירותים חברתיים", "keywords": ["רווחה", "שירותים חברתיים", "נזקקים", "קשישים", "הגיל השלישי", "עריריים", "אלמנים", "אלמנות", "היפוטרמיה", "דרי רחוב", "חסרי בית", "ביטחון תזונתי", "בטחון תזונתי", "חתולי רחוב", "גורי חתולי רחוב"]},
+    {"root_topic_id": "root_culture_sport", "root_label_he": "תרבות וספורט", "keywords": ["תרבות", "ספורט", "איצטדיון", "אצטדיון", "כדורסל", "כדורגל", "כדוריד", "ליגה", "אליפות", "גביע", "קבוצת ספורט", "ספורטאי", "משכן", "אומנויות הבמה", "אמנויות הבמה", "אודיטוריום", "אולם", "אולמות", "תיאטרון", "מרכז תרבות", "פסל", "פסל ציבורי"], "profile": {"aliases_he": ["ספורט ופנאי", "קבוצות ספורט", "ספורט עירוני"], "aliases_en": ["sports", "sport", "recreation", "football", "soccer", "handball", "basketball"]}},
+    {"root_topic_id": "root_infrastructure_environment", "root_label_he": "תשתיות וסביבה", "keywords": ["תשתיות", "סביבה", "סביבתי", "סביבתית", "הסברה סביבתית", "מחזור", "מיחזור", "הצפות", "ניקיון", "ביוב", "מים", "פארק", "זיהום"]},
     {"root_topic_id": "root_religious_services", "root_label_he": "דת ושירותי דת", "keywords": ["דת", "דתית", "שירותי דת", "מועצה דתית", "בית כנסת", "מקווה", "מקווה טהרה", "רב", "הרבצת תורה"]},
-    {"root_topic_id": "root_administration", "root_label_he": "מנהל עירוני ומינויים", "keywords": ["מינוי", "מינויים", "מורשי חתימה", "האצלת סמכויות", "ועדה", "דירקטוריון", "דירקטוריונים", "תאגידים", "ביקורת", "דוח ביקורת", "דו\"ח ביקורת", "החלטות מועצה", "חברי מועצה", "מליאה", "ישיבות מליאה", "היעדרויות", "איחורים", "נוכחות", "חילופי גברי", "קריאת רחוב", "שם רחוב", "שמות רחובות"]},
-    {"root_topic_id": "root_security_enforcement", "root_label_he": "ביטחון ואכיפה", "keywords": ["ביטחון", "בטחון", "אכיפה", "אלימות", "אלימות במשפחה", "משטרה", "מיגון", "מקלט"]},
+    {"root_topic_id": "root_administration", "root_label_he": "מנהל עירוני ומינויים", "keywords": ["מינוי", "מינויים", "מורשי חתימה", "האצלת סמכויות", "ועדה", "דירקטוריון", "דירקטוריונים", "תאגידים", "ביקורת", "דוח ביקורת", "דו\"ח ביקורת", "החלטות מועצה", "חברי מועצה", "מליאה", "ישיבות מליאה", "היעדרויות", "איחורים", "נוכחות", "חילופי גברי", "קריאת רחוב", "שם רחוב", "שמות רחובות", "מסרונים", "מסרי וידאו", "מאגר מסרונים", "שימוע", "מהנדס העיר"]},
+    {"root_topic_id": "root_security_enforcement", "root_label_he": "ביטחון ואכיפה", "keywords": ["ביטחון", "בטחון", "אכיפה", "אלימות", "אלימות במשפחה", "משטרה", "מיגון", "מקלט", "אבטחת מידע", "סייבר", "הגנת פרטיות", "הגנת הפרטיות", "רעידת אדמה", "מערכת התראה", "מיגור תופעת האלימות", "אלרגיות מסכנות חיים", "מזרקי אפיפן", "אפיפן"]},
     {"root_topic_id": "root_travel_approvals", "root_label_he": "אישורי נסיעות", "keywords": ["אישור נסיעה", "נסיעה", "משלחת", "דוח נסיעה"]},
     {"root_topic_id": "root_guard_services", "root_label_he": "שמירה והיטלים", "keywords": ["שמירה", "היטל שמירה", "שירותי שמירה"]},
     {"root_topic_id": "root_commerce_assets", "root_label_he": "נכסים ומרכזים מסחריים", "keywords": ["נכס", "נכסים", "מרכז מסחרי", "מרכזים מסחריים", "קניון", "מבנה"]},
@@ -772,6 +772,7 @@ def clean_topic_label(value: Any) -> str | None:
     label = re.split(r"\s+מחליטים\b|\s+מאשרים\b|\s+הוחלט\b|\s+הצביעו\b", label, maxsplit=1)[0].strip()
     label = re.split(r"\d{1,2}\.\d{1,2}(?:\.\d{2,4})?", label, maxsplit=1)[0].strip()
     label = re.split(r"\s+מס\s*\d|\s+מספר\s*\d|\s+מיום\s*\d|\s+מתאריך\s*\d", label, maxsplit=1)[0].strip()
+    label = _strip_temporal_label_parts(label)
     label = re.split(r"\s+[–-]\s+מצ[\"'״]?ל", label, maxsplit=1)[0].strip()
     label = re.split(r"\s+[–-]\s+", label, maxsplit=1)[0].strip()
     label = re.sub(r"\b(?:גוש|חלקה|מגרש)\b.*$", "", label).strip()
@@ -782,7 +783,18 @@ def clean_topic_label(value: Any) -> str | None:
     label = label.strip(" .,:;()[]{}\"'׳״-–*")
     label = re.sub(r"\s+", " ", label).strip()
     label = canonical_child_label(label)
-    return label or None
+    canonical, _reason = canonicalize_topic_label(label)
+    return canonical or label or None
+
+
+def _strip_temporal_label_parts(label: str) -> str:
+    label = re.sub(r"\b\d{1,4}/\d{4}\b", " ", label)
+    label = re.sub(r"\b(?:לשנת|בשנת|שנת|שנה|תקציב)\s*\d{4}\b", lambda match: "תקציב" if match.group(0).startswith("תקציב") else " ", label)
+    label = re.sub(r"\b\d{4}\s*(?:לשנת|בשנת|שנת)?\b", " ", label)
+    label = re.sub(r"\s+(?:לשנת|בשנת|שנת)\s*$", "", label)
+    label = re.sub(r"\s*/\s*[\"'׳״]?\s*", " ", label)
+    label = re.sub(r"(מכרז\s+פומבי)\s+מס\b\s*[-–]?\s*", r"\1 ", label)
+    return re.sub(r"\s+", " ", label).strip()
 
 
 def canonical_child_label(value: str | None, *, evidence_text: str = "") -> str | None:

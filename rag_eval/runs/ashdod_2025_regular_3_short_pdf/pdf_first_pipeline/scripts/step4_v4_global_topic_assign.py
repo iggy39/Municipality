@@ -42,11 +42,12 @@ from municipality.pdf_first_v4_topic_policy import (  # noqa: E402
     topic_policy_prompt_payload,
 )
 from municipality.pdf_first_v4_topic_classifier import build_topic_profile_index, find_topic_candidates  # noqa: E402
+from municipality.topic_label_quality import canonicalize_topic_label  # noqa: E402
 
 DEFAULT_MODEL = "dicta-il/DictaLM-3.0-24B-Thinking:bf16"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 EXCLUDED_STRUCTURAL_ROLES = {"noise", "table_header_only"}
-CACHE_VERSION = "step4_v4_global_topic_assign_v28_preserve_explicit_headline_provenance"
+CACHE_VERSION = "step4_v4_global_topic_assign_v30_canonical_topic_labels"
 
 
 def main() -> int:
@@ -81,8 +82,8 @@ def main() -> int:
 
     units = [unit for unit in structure_payload.get("structure_units") or [] if str(unit.get("structural_role") or "") not in EXCLUDED_STRUCTURAL_ROLES]
     facts_by_unit = _facts_by_unit(entity_payload.get("entity_facts") or [])
-    topic_contexts_by_unit = _topic_contexts_by_unit(units)
     document_context = _document_context(input_pdf=args.input_pdf, packet_role=str(args.packet_role), units=units)
+    topic_contexts_by_unit = _topic_contexts_by_unit(units)
     document_child_candidates = _document_child_candidates(units=units, document_context=document_context, topic_contexts_by_unit=topic_contexts_by_unit)
     tree_payload = global_topic_tree_payload(existing_tree=existing_tree, attachment_contexts=[])
     topic_profile_index = build_topic_profile_index(tree_payload)
@@ -189,17 +190,27 @@ def _build_item(*, unit: dict[str, Any], facts: list[dict[str, Any]], max_raw_ch
     source_actions = [str(value) for value in unit.get("explicit_actions") or [] if str(value).strip()]
     topic_text = _compact(topic_context.get("topic_identification_text"))
     headline_source = _headline_source_from_unit(unit)
+    subject_scoped_anchor = _subject_scoped_transcript_topic_anchor(unit=unit, document_context=document_context)
+    topic_context_source = str(topic_context.get("context_source") or "")
+    if subject_scoped_anchor:
+        topic_text = str(subject_scoped_anchor.get("topic_subject_he") or "")
+        topic_context_source = str(subject_scoped_anchor.get("context_source") or "subject_scoped_speaker_anchor")
+        headline_source = str(subject_scoped_anchor.get("headline_source") or "subject_scoped_speaker_opening")
+    elif packet_role == "protocol" and str(document_context.get("topic_carrier_mode") or "") == "subject_scoped_transcript_topics":
+        topic_text = ""
+        topic_context_source = "subject_scoped_no_anchor"
     repaired_topic_text = _repair_embedded_carrier_subject(topic_text) or ("" if topic_text else _repair_embedded_carrier_subject(raw_text))
     if repaired_topic_text:
         topic_text = repaired_topic_text
     topic_contract = _topic_contract_from_headline(topic_text, structural_role=str(unit.get("structural_role") or ""), packet_role=packet_role)
-    provenance_reason = _protocol_topic_provenance_reject_reason(unit=unit, headline=topic_text, raw_text=raw_text, topic_context_source=str(topic_context.get("context_source") or ""), headline_source=headline_source, packet_role=packet_role)
+    provenance_reason = None if subject_scoped_anchor else _protocol_topic_provenance_reject_reason(unit=unit, headline=topic_text, raw_text=raw_text, topic_context_source=topic_context_source, headline_source=headline_source, packet_role=packet_role)
     if provenance_reason:
         topic_contract = {**topic_contract, "is_topic_bearing": False, "topic_subject_he": None, "non_topic_reason": provenance_reason}
-    non_topic_reason = _non_topic_protocol_reason(headline=topic_text or raw_text, raw_text=raw_text, structural_role=str(unit.get("structural_role") or ""), packet_role=packet_role)
+    non_topic_shape_text = topic_text if subject_scoped_anchor else raw_text
+    non_topic_reason = _non_topic_protocol_reason(headline=topic_text or raw_text, raw_text=non_topic_shape_text, structural_role=str(unit.get("structural_role") or ""), packet_role=packet_role)
     if non_topic_reason:
         topic_contract = {**topic_contract, "is_topic_bearing": False, "topic_subject_he": None, "non_topic_reason": non_topic_reason}
-    row_type = _row_type_for_unit(unit=unit, topic_contract=topic_contract, packet_role=packet_role)
+    row_type = "topic_item" if subject_scoped_anchor and bool(topic_contract.get("is_topic_bearing")) else _row_type_for_unit(unit=unit, topic_contract=topic_contract, packet_role=packet_role)
     if row_type in {"metadata", "container", "vote_or_result", "fragment", "attribution_fragment"}:
         topic_contract = {**topic_contract, "is_topic_bearing": False, "topic_subject_he": None}
     topic_subject = str(topic_contract.get("topic_subject_he") or "")
@@ -252,9 +263,12 @@ def _build_item(*, unit: dict[str, Any], facts: list[dict[str, Any]], max_raw_ch
         "non_topic_reason": topic_contract.get("non_topic_reason"),
         "agenda_item_title_he": topic_context.get("agenda_item_title_he"),
         "parent_agenda_unit_id": topic_context.get("parent_agenda_unit_id"),
-        "topic_context_source": topic_context.get("context_source"),
+        "topic_context_source": topic_context_source or None,
         "topic_headline_source": headline_source,
         "topic_provenance_reject_reason": provenance_reason,
+        "topic_anchor_quote_he": subject_scoped_anchor.get("topic_supporting_quote_he") if subject_scoped_anchor else None,
+        "protocol_subject_he": document_context.get("protocol_subject_he"),
+        "topic_carrier_mode": document_context.get("topic_carrier_mode"),
         "raw_text": evidence_text[: max(250, int(max_raw_chars))],
         "explicit_actions": explicit_actions[:8],
         "accepted_entity_spans": [str(fact.get("canonical_raw_span") or "") for fact in facts[:16] if str(fact.get("canonical_raw_span") or "").strip()],
@@ -302,8 +316,10 @@ def _call_dictalm(*, items: list[dict[str, Any]], topic_tree: dict[str, Any], mo
             "For protocol items, separate agenda carrier/type from semantic subject: carrier examples include question/proposal/approval/protocol form; classify the semantic subject, not the carrier.",
             "Return agenda_carrier_he, topic_subject_he, attribution_he, and is_topic_bearing for every item so the assignment can be audited.",
             "Do not include requester, submitter, signer, vote, date, or person attribution inside child_label_he or topic_subject_he.",
+            "Do not include years or dates in topic_subject_he or child_label_he; treat them only as metadata/context.",
             "If the headline/context is only a container, fragment, vote/result, person name, date, or generic procedural heading, set is_topic_bearing false and root_topic_id null.",
             "For protocol items, raw_text is evidence only; do not use transcript/body details as the primary topic source.",
+            "If topic_carrier_mode is subject_scoped_transcript_topics, use protocol_subject_he only as context and classify the bounded speaker-opening item as the topic.",
             "topic_supporting_quote_he must be copied from raw_text, explicit_actions, document_context, or attachment context.",
             "Metadata role does not force root-only when explicit_actions or document_context contain a concrete municipal subject.",
             "Treat protocol/agenda carriers such as שאילתה, הצעה לסדר, אישור, פרוטוקול ועדה, ועדה, ביקורת, החלטות, dates, requester names, and vote text as context, not as the semantic subject.",
@@ -595,7 +611,8 @@ def _assignment_from_parsed(*, item: dict[str, Any], parsed: dict[str, Any] | No
         return _fallback_assignment(item, reason="model_omitted_unit")
     text = str(item.get("raw_text") or "")
     topic_text = _topic_basis_text(item)
-    if _parsed_declares_non_topic(parsed) or _non_topic_protocol_reason(headline=topic_text, raw_text=text, structural_role=str(item.get("structural_role") or ""), packet_role=str((item.get("document_context") or {}).get("packet_role") or "")):
+    shape_text = _shape_guard_raw_text(item=item, topic_text=topic_text, fallback_text=text)
+    if _parsed_declares_non_topic(parsed) or _non_topic_protocol_reason(headline=topic_text, raw_text=shape_text, structural_role=str(item.get("structural_role") or ""), packet_role=str((item.get("document_context") or {}).get("packet_role") or "")):
         return _non_topic_assignment(item, reason="model_or_shape_non_topic")
     parsed_subject = clean_protocol_subject_text(parsed.get("clean_subject_he") or parsed.get("topic_subject_he"))
     if _is_protocol_item(item) and parsed_subject:
@@ -733,7 +750,7 @@ def _recover_root_only_topic(*, item: dict[str, Any], parsed: dict[str, Any], su
     and it avoids procedural roots. This covers one-off real subjects while keeping
     child taxonomy maintenance separate from root classification.
     """
-    if _non_topic_protocol_reason(headline=subject, raw_text=str(item.get("raw_text") or ""), structural_role=str(item.get("structural_role") or ""), packet_role=str((item.get("document_context") or {}).get("packet_role") or "")):
+    if _non_topic_protocol_reason(headline=subject, raw_text=_shape_guard_raw_text(item=item, topic_text=subject, fallback_text=str(item.get("raw_text") or "")), structural_role=str(item.get("structural_role") or ""), packet_role=str((item.get("document_context") or {}).get("packet_role") or "")):
         return None
     for match in topic_policy_matches(subject, limit=3):
         root_topic_id = str(match.get("root_topic_id") or "")
@@ -899,6 +916,8 @@ def _unknown_root_candidate_assignment(*, item: dict[str, Any], parsed: dict[str
 def _parsed_subject_should_preserve_item_subject(*, parsed_contract: dict[str, Any], item: dict[str, Any], root_label: str) -> bool:
     if not _is_protocol_item(item) or not item.get("topic_subject_he"):
         return False
+    if str(item.get("topic_context_source") or "") == "subject_scoped_speaker_anchor":
+        return True
     parsed_subject = _compact(parsed_contract.get("topic_subject_he"))
     if not parsed_subject:
         return True
@@ -914,7 +933,7 @@ def _parsed_subject_should_preserve_item_subject(*, parsed_contract: dict[str, A
 def _fallback_assignment(item: dict[str, Any], *, reason: str) -> dict[str, Any]:
     text = str(item.get("raw_text") or "")
     topic_text = _topic_basis_text(item)
-    if _non_topic_protocol_reason(headline=topic_text, raw_text=text, structural_role=str(item.get("structural_role") or ""), packet_role=str((item.get("document_context") or {}).get("packet_role") or "")):
+    if _non_topic_protocol_reason(headline=topic_text, raw_text=_shape_guard_raw_text(item=item, topic_text=topic_text, fallback_text=text), structural_role=str(item.get("structural_role") or ""), packet_role=str((item.get("document_context") or {}).get("packet_role") or "")):
         return _non_topic_assignment(item, reason=f"fallback_{reason}_non_topic")
     fallback_root_topic_id = infer_root_topic_id(topic_text or text)
     if _is_protocol_item(item) and bool(item.get("is_topic_bearing")) and fallback_root_topic_id == "root_agenda_queries":
@@ -1049,13 +1068,11 @@ def _non_topic_assignment(item: dict[str, Any], *, reason: str | None = None) ->
     row_type = str(item.get("row_type") or "fragment")
     root_topic_id = infer_root_topic_id(topic_text) if topic_text and row_type == "vote_or_result" else "root_agenda_queries"
     root_label = root_label_for_id(root_topic_id) or root_label_for_id("root_agenda_queries") or ""
-    selected_candidate = _best_high_confidence_candidate(item=item, root_topic_id=root_topic_id) if row_type == "vote_or_result" else None
-    child_label = clean_topic_label((selected_candidate or {}).get("label_he")) if selected_candidate else None
+    selected_candidate = None
+    child_label = None
     route = f"deterministic_v4_row_type:{row_type}"
     if reason:
         route = f"{route}:{reason}"
-    if selected_candidate and child_label:
-        route = f"{route}:inherited_candidate"
     return _assignment_payload(
         item=item,
         root_topic_id=root_topic_id,
@@ -1115,14 +1132,46 @@ def _strong_body_evidence_root(item: dict[str, Any]) -> str | None:
 
 
 def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label: str, child_label: str | None, raw_child_label: str | None, status: str, reject_reason: str | None, aliases: list[str], confidence: float, quote: str, route: str, rationale_he: str, parsed_contract: dict[str, Any] | None = None, root_adjudication: dict[str, Any] | None = None) -> dict[str, Any]:
-    child_id = child_topic_id(root_topic_id, child_label) if child_label else None
     parsed_contract = parsed_contract or {}
     root_adjudication = root_adjudication or {}
     is_topic_bearing = bool(_contract_value(parsed_contract, item, "is_topic_bearing"))
     row_type = item.get("row_type")
     if not is_topic_bearing and row_type == "topic_item":
         row_type = "fragment"
-    topic_subject = _contract_value(parsed_contract, item, "topic_subject_he") if is_topic_bearing else None
+    raw_topic_subject = _contract_value(parsed_contract, item, "topic_subject_he") if is_topic_bearing else None
+    topic_subject = raw_topic_subject
+    canonical_reason = None
+    if is_topic_bearing and raw_topic_subject:
+        canonical_subject, canonical_reason = canonicalize_topic_label(
+            raw_topic_subject,
+            root_label_he=root_label,
+            evidence_text=_join_unique([raw_topic_subject, item.get("topic_headline_he"), item.get("raw_text"), quote]),
+        )
+        if canonical_subject:
+            topic_subject = canonical_subject
+            if _norm(canonical_subject) != _norm(raw_topic_subject):
+                aliases = _dedupe_strings([*aliases, str(raw_topic_subject)])
+                route = f"{route}:canonical_topic_label"
+                canonical_root_topic_id = infer_root_topic_id(canonical_subject)
+                if canonical_root_topic_id in ROOT_BY_ID and canonical_root_topic_id not in {"root_agenda_queries", "root_order_proposals"} and canonical_root_topic_id != root_topic_id:
+                    root_topic_id = canonical_root_topic_id
+                    root_label = root_label_for_id(root_topic_id) or root_label
+                    root_adjudication = {
+                        **root_adjudication,
+                        "root_topic_id": root_topic_id,
+                        "adjudicated_root_label_he": root_label,
+                        "resolved_root_topic_id": root_topic_id,
+                        "resolved_root_label_he": root_label,
+                        "decision": f"{root_adjudication.get('decision') or 'unknown'}:canonical_root_reparent",
+                    }
+                    route = f"{route}:canonical_root_reparent"
+        else:
+            is_topic_bearing = False
+            row_type = "fragment"
+            topic_subject = None
+            reject_reason = reject_reason or f"topic_subject_rejected:{canonical_reason or 'no_canonical_label'}"
+            route = f"{route}:topic_subject_rejected"
+    child_id = child_topic_id(root_topic_id, child_label) if child_label else None
     return {
         "structure_unit_id": item["structure_unit_id"],
         "semantic_unit_id": item["semantic_unit_id"],
@@ -1140,6 +1189,8 @@ def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label:
         "topic_headline_he": item.get("topic_headline_he"),
         "agenda_carrier_he": _contract_value(parsed_contract, item, "agenda_carrier_he"),
         "topic_subject_he": topic_subject,
+        "raw_topic_subject_he": raw_topic_subject,
+        "topic_subject_canonicalization_reason": canonical_reason,
         "attribution_he": _contract_value(parsed_contract, item, "attribution_he"),
         "is_topic_bearing": is_topic_bearing,
         "agenda_item_title_he": item.get("agenda_item_title_he"),
@@ -1147,6 +1198,9 @@ def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label:
         "topic_context_source": item.get("topic_context_source"),
         "topic_headline_source": item.get("topic_headline_source"),
         "topic_provenance_reject_reason": item.get("topic_provenance_reject_reason"),
+        "topic_anchor_quote_he": item.get("topic_anchor_quote_he"),
+        "protocol_subject_he": item.get("protocol_subject_he"),
+        "topic_carrier_mode": item.get("topic_carrier_mode"),
         "topic_tree_version": TOPIC_TREE_VERSION,
         "topic_assignment_backend": TOPIC_ASSIGNMENT_BACKEND,
         "root_topic_id": root_topic_id,
@@ -1291,6 +1345,8 @@ def _duplicate_topic_key(row: dict[str, Any]) -> tuple[str, str, str] | None:
     if structural_role not in {"body", "continuation", "outline_item", "section_heading", "task_row"}:
         return None
     scope = str(row.get("section_id") or row.get("parent_agenda_unit_id") or "")
+    if str(row.get("topic_context_source") or "") == "subject_scoped_speaker_anchor":
+        scope = f"subject_scoped:{_norm(str(row.get('protocol_subject_he') or ''))}"
     if not scope:
         return None
     subject_norm = _duplicate_subject_norm(row.get("topic_subject_he") or row.get("topic_identification_context") or "")
@@ -1499,14 +1555,32 @@ def _non_topic_protocol_reason(*, headline: str, raw_text: str, structural_role:
         return "empty_fragment"
     if _looks_like_container_heading(text):
         return "container_heading"
+    if raw and raw != text and _looks_like_protocol_listing(raw):
+        return "protocol_listing"
     if _looks_like_procedural_carrier_heading(text):
         return "procedural_carrier_heading"
     if _looks_like_query_attribution_only(text):
         return "query_attribution_only"
+    if _looks_like_query_intro_only(text):
+        return "query_intro_only"
+    if _looks_like_order_proposal_intro_only(text):
+        return "order_proposal_intro_only"
+    if raw and raw != text and _looks_like_order_proposal_intro_only(raw):
+        return "order_proposal_intro_only"
+    if _looks_like_personal_topic_reference(raw or text):
+        return "personal_topic_reference"
+    if _looks_like_speaker_reference_heading(text):
+        return "speaker_reference_heading"
+    if _looks_like_speaker_dialogue_fragment(raw or text):
+        return "speaker_dialogue_fragment"
     if _looks_like_legal_boilerplate_fragment(text):
         return "legal_boilerplate_fragment"
     if _looks_like_signature_or_end_page_fragment(text):
         return "signature_or_end_page_fragment"
+    if raw and raw != text and _looks_like_signature_or_end_page_fragment(raw):
+        return "signature_or_end_page_fragment"
+    if _looks_like_contract_approval_procedure_fragment(text) or (raw and raw != text and _looks_like_contract_approval_procedure_fragment(raw)):
+        return "contract_approval_procedure_fragment"
     if _looks_like_no_topic_continuation(raw or text):
         return "no_topic_continuation"
     if _looks_like_procedural_dialogue_fragment(raw or text):
@@ -1616,7 +1690,7 @@ def _looks_like_procedural_carrier_heading(text: str) -> bool:
 
 
 def _looks_like_query_attribution_only(text: str) -> bool:
-    compact = _clean_heading(text)
+    compact = _compact(text)
     normalized = _norm(compact)
     if not normalized.startswith("שאילת"):
         return False
@@ -1624,7 +1698,58 @@ def _looks_like_query_attribution_only(text: str) -> bool:
         return False
     role_cues = ["חבר מועצה", "חברת מועצה", "מועצה", "ראש העיר", "סגן", "סגנית", "עוד", "דר", "מר", "גברת"]
     tokens = _hebrew_tokens(normalized)
-    return len(tokens) <= 8 and any(cue in normalized for cue in role_cues)
+    has_role_cue = any(cue in normalized for cue in role_cues)
+    if len(tokens) <= 8 and has_role_cue:
+        return True
+    intro_cues = ["אדוני ראש העיר", "שאילתה מס", "שאילתה מספר", "שאילתא מס", "של חבר המועצה", "של חברת המועצה"]
+    return has_role_cue and any(cue in normalized for cue in intro_cues)
+
+
+def _looks_like_query_intro_only(text: str) -> bool:
+    normalized = _norm(_compact(text))
+    if not normalized or _has_explicit_local_topic_marker(normalized):
+        return False
+    if "שאילתה" not in normalized and "שאילתא" not in normalized:
+        return False
+    intro_cues = ["אדוני ראש העיר", "בבקשה", "שאילתה ראשונה", "שאילתה שנייה", "שאילתה שלישית", "שאילתא ראשונה"]
+    return any(cue in normalized for cue in intro_cues) and len(_hebrew_tokens(normalized)) <= 8
+
+
+def _looks_like_order_proposal_intro_only(text: str) -> bool:
+    compact = _compact(text)
+    normalized = _norm(compact)
+    if not normalized.startswith("הצעה לסדר"):
+        return False
+    if _has_explicit_local_topic_marker(normalized) or "–" in compact or " - " in compact:
+        return False
+    if _speaker_marker_re().search(compact):
+        return True
+    tokens = _hebrew_tokens(normalized)
+    speech_cues = ["אני", "אנחנו", "אגיד", "אומר", "מבקש", "את צודקת", "בהמשך של זה", "הוא באמת"]
+    return len(tokens) <= 9 and (normalized in {"הצעה לסדר", "הצעה לסדר היום"} or any(cue in normalized for cue in speech_cues))
+
+
+def _looks_like_speaker_reference_heading(text: str) -> bool:
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    starts_with_speaker = re.match(r"^(?:יו\"?ר|יור|מר|גב'?|גברת)\b", normalized) is not None
+    dialogue_cues = ["את צודקת", "בהמשך של זה", "הוא באמת", "תודה", "בבקשה", "רגע"]
+    return starts_with_speaker and any(cue in normalized for cue in dialogue_cues)
+
+
+def _looks_like_speaker_dialogue_fragment(text: str) -> bool:
+    compact = _compact(text)
+    normalized = _norm(compact)
+    if not normalized:
+        return False
+    if re.search(r"\b(?:בנושא|הנדון|נושא\s+נוסף|הנושא\s+הבא)\b", normalized):
+        return False
+    speaker_markers = re.findall(r":\s*(?:מר|גב'?|גברת|היו[\"'׳״]?ר)(?=\s|[-–]|$)|היו[\"'׳״]?ר\s*[-–]?\s*(?:מר|גב'?)", compact)
+    if not speaker_markers:
+        return False
+    punctuation_breaks = len(re.findall(r"[.?!]|\s[-–]\s", compact))
+    return len(speaker_markers) >= 2 or punctuation_breaks >= 2 or len(_hebrew_tokens(normalized)) >= 22
 
 
 def _looks_like_legal_boilerplate_fragment(text: str) -> bool:
@@ -1639,8 +1764,29 @@ def _looks_like_signature_or_end_page_fragment(text: str) -> bool:
     normalized = _norm(text)
     if not normalized:
         return False
-    cues = ["תצלום סיום", "סיום הפרוטוקול", "חתימות", "יור הישיבה", "מנכל"]
+    cues = ["תצלום סיום", "סיום הפרוטוקול", "חתימות", "יור הישיבה", "יו\"ר הישיבה", "מנכל", "מנכ\"ל", "הישיבה נעולה", "הישיבה ננעלה", "ננעלה בשעה"]
     return sum(1 for cue in cues if cue in normalized) >= 2
+
+
+def _looks_like_contract_approval_procedure_fragment(text: str) -> bool:
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    procedure_cues = ["יובאו לאישור ועדת התקשרויות", "ההתקשרות בחוזה", "ללא מכרז", "ועדת התקשרויות עליונה"]
+    cue_count = sum(1 for cue in procedure_cues if cue in normalized)
+    return cue_count >= 3 or ("נספח" in normalized and cue_count >= 2)
+
+
+def _looks_like_personal_topic_reference(text: str) -> bool:
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    personal_cues = [
+        r"\b(?:שלי|שלנו)\b.{0,40}\b(?:בנושא|בעניין|לגבי)\b",
+        r"\bאני\b.{0,50}\b(?:בנושא|בעניין|לגבי)\b",
+        r"\bההצעה\s+שלי\b.{0,50}\b(?:בנושא|בעניין|לגבי)\b",
+    ]
+    return any(re.search(pattern, normalized) for pattern in personal_cues)
 
 
 def _looks_like_no_topic_continuation(text: str) -> bool:
@@ -1696,11 +1842,13 @@ def _looks_like_transcript_speech_fragment(text: str) -> bool:
     normalized = _norm(text)
     if not normalized or _has_explicit_local_topic_marker(normalized):
         return False
-    speech_cues = ["אני רוצה", "אני מבקש", "אנחנו מתחילים", "תודה", "לשאלתך", "שלחתי", "בדקתי", "חסרת לנו"]
+    speech_cues = ["אני רוצה", "אני מבקש", "אני אגיד", "אני אומר", "אני מזכיר", "אנחנו מתחילים", "אתם צריכים", "תסתכלו", "רגע", "אתה לא", "את יכולה", "עוד מישהו", "תודה", "לשאלתך", "שלחתי", "בדקתי", "חסרת לנו"]
     if not any(cue in normalized for cue in speech_cues):
         return False
     sentence_breaks = len(re.findall(r"[.;:]|\s[-–]\s", text))
-    return sentence_breaks >= 1 or len(_hebrew_tokens(normalized)) >= 12
+    if sentence_breaks >= 1 or len(_hebrew_tokens(normalized)) >= 12:
+        return True
+    return bool(re.search(r"\bאני\b.{0,24}\b(?:אגיד|אומר|מבקש)\b", normalized))
 
 
 def _has_explicit_local_topic_marker(text: str) -> bool:
@@ -1776,7 +1924,16 @@ def _split_headline_contract(headline: str) -> tuple[str | None, str, str | None
 
 
 def _clean_topic_subject(value: str) -> str:
-    return clean_protocol_subject_text(value)
+    raw_text = _compact(value)
+    discussion_subject_pattern = r"^שעסק(?:ה|ו)?\s+בנושא\s+(.+?)(?=[.;,]|\s+(?:ו?ביקשנו|ו?אמרנו|ו?אני|ו?הוא|ו?היא|ו?דיון|ו?יהיה)\b|$)"
+    raw_match = re.search(discussion_subject_pattern, raw_text)
+    if raw_match:
+        return clean_protocol_subject_text(raw_match.group(1))
+    text = clean_protocol_subject_text(value)
+    match = re.search(discussion_subject_pattern, text)
+    if match:
+        return clean_protocol_subject_text(match.group(1))
+    return text
 
 
 def _best_repeated_subject_before_or_after_decision(text: str) -> str:
@@ -1822,11 +1979,11 @@ def _is_substantive_topic_subject(subject: str) -> bool:
         return False
     tokens = [token for token in _hebrew_tokens(text) if len(token) >= 3]
     if len(tokens) < 2:
-        return False
+        return _has_short_topic_signal(text)
     if len(text) <= 3 or re.fullmatch(r"[\d\W_]+", text):
         return False
     # Single-person/attribution fragments should not become topics.
-    if len(tokens) <= 2 and not any(term in text for term in ["חינוך", "תמיכות", "רווחה", "שמירה", "הסכם", "מינוי", "עובדים", "הקצאה", "הקצאות"]):
+    if len(tokens) <= 2 and not any(term in text for term in ["חינוך", "תמיכות", "רווחה", "שמירה", "הסכם", "מינוי", "עובדים", "הקצאה", "הקצאות"]) and not _has_short_topic_signal(text):
         return False
     return True
 
@@ -1960,6 +2117,7 @@ def _extract_heading_from_text(text: str) -> str:
         r"(פרוטוקול\s+ועדת\s+משנה\s+להקצאות\s+קרקע)(?=\s+מס|\s+מתאריך|[.;]|$)",
         r"(פרוטוקול\s+ועדה\s+משנה\s+לתמיכות)(?=\s+מס|\s+מתאריך|[.;]|$)",
         r"((?:דו\"?ח\s+)?ביקורת\s+.{6,180}?)(?=\s+מס\b|\s+מתאריך|[.;]|$)",
+        r"(מינוי\s+[^.;:\n]{6,180}?)(?=[.;:\n]|$)",
         r"(?:^|\s)(?:הנדון|נדון|בנושא|נושא)\s*[:\-–]?\s+(.{6,180}?)(?=[.;\n]|$)",
     ]
     for pattern in patterns:
@@ -2061,6 +2219,190 @@ def _topic_basis_text(item: dict[str, Any]) -> str:
     return str(item.get("raw_text") or "")
 
 
+def _shape_guard_raw_text(*, item: dict[str, Any], topic_text: str, fallback_text: str) -> str:
+    if _is_protocol_item(item) and str(item.get("topic_context_source") or "") == "subject_scoped_speaker_anchor":
+        return topic_text
+    return fallback_text
+
+
+def _subject_scoped_transcript_topic_anchor(*, unit: dict[str, Any], document_context: dict[str, Any]) -> dict[str, Any] | None:
+    if str(document_context.get("topic_carrier_mode") or "") != "subject_scoped_transcript_topics":
+        return None
+    role = str(unit.get("structural_role") or "")
+    if role in {"metadata", "noise", "table_header_only", "vote_or_result"}:
+        return None
+    raw_text = _compact(unit.get("raw_text"))
+    if not raw_text or _looks_like_vote_fragment(raw_text) or _looks_like_signature_or_end_page_fragment(raw_text):
+        return None
+    candidates = _subject_scoped_anchor_candidates(raw_text)
+    if not candidates:
+        return None
+    protocol_subject = str(document_context.get("protocol_subject_he") or "")
+    valid: list[dict[str, Any]] = []
+    for candidate in candidates:
+        subject = _clean_subject_scoped_anchor_label(str(candidate.get("topic_subject_he") or ""))
+        if not subject or _norm(subject) == _norm(protocol_subject):
+            continue
+        if _non_topic_protocol_reason(headline=subject, raw_text=subject, structural_role=role, packet_role="protocol"):
+            continue
+        if not _is_substantive_topic_subject(subject):
+            continue
+        root_topic_id = infer_root_topic_id(subject)
+        if root_topic_id in {"root_agenda_queries", "root_order_proposals"}:
+            subject_root = infer_root_topic_id(_join_unique([subject, protocol_subject]))
+            if subject_root in ROOT_BY_ID and subject_root not in {"root_agenda_queries", "root_order_proposals"}:
+                root_topic_id = subject_root
+        if root_topic_id not in ROOT_BY_ID or root_topic_id in {"root_agenda_queries", "root_order_proposals"}:
+            continue
+        valid.append({**candidate, "topic_subject_he": subject, "root_topic_id": root_topic_id})
+    if not valid:
+        return None
+    valid.sort(key=lambda row: (float(row.get("score") or 0.0), len(str(row.get("topic_subject_he") or ""))), reverse=True)
+    best = valid[0]
+    return {
+        "topic_subject_he": best["topic_subject_he"],
+        "context_source": "subject_scoped_speaker_anchor",
+        "headline_source": str(best.get("source") or "subject_scoped_speaker_opening"),
+        "topic_supporting_quote_he": _compact(best.get("quote_he"))[:500],
+    }
+
+
+def _subject_scoped_anchor_candidates(text: str) -> list[dict[str, Any]]:
+    compact = _strip_protocol_chrome(text)
+    if not compact or not _speaker_marker_re().search(compact):
+        return []
+    opening_segments = _speaker_opening_segments(compact)
+    if not opening_segments:
+        return []
+    rows: list[dict[str, Any]] = []
+    patterns = [
+        (r"(?:הסתייגות|ההסתייגות)\s+(?:היא\s+)?(?:בנושא|בעניין|לגבי)\s+(.{4,180}?)(?=\s*:\s*(?:מר|גב'?|גברת|היו[\"'׳״]?ר)|[.;?]|$)", "speaker_subject_objection", 0.92),
+        (r"(?:הסתייגות|ההסתייגות)\s+בנוגע\s+.{0,80}?\bבנושא\s+([^.;:?]{4,120})", "speaker_subject_objection", 0.9),
+        (r"(בתקציב\s+[^.;:?]{4,120}?)(?=\d|\s+הסתייגות|\s+ההסתייגות|[.;:]|$)", "speaker_subject_budget_phrase", 0.86),
+        (r"לתב[\"']?ר\s+בנושא\s+([^.;:?]{4,120})", "speaker_subject_capital_budget", 0.86),
+        (r"סעיף\s+[\"'׳״]([^\"'׳״]{3,90})[\"'׳״]", "speaker_quoted_section_label", 0.85),
+        (r"(ביטול\s+תב[\"']?ר[^.;:?]{4,120})", "speaker_action_subject", 0.84),
+        (r"(שיפור\s+תאורה[^.;:?]{0,100})", "speaker_action_subject", 0.82),
+        (r"([\u0590-\u05FF][\u0590-\u05FF\s\"'׳״()]{4,90}?)[-–]\s*\d{2,}(?:/\d+)*\s*סעיף", "speaker_section_label", 0.84),
+        (r"סעיף(?:\s+תקציבי)?\s*[\d/]+\s*[-–]?\s*([^.;:?]{4,120})", "speaker_section_label", 0.74),
+    ]
+    for segment in opening_segments:
+        for pattern, source, score in patterns:
+            for match in re.finditer(pattern, segment):
+                raw_label = match.group(1)
+                label = _clean_subject_scoped_anchor_label(_refine_subject_scoped_anchor_label(raw_label))
+                if label:
+                    rows.append({"topic_subject_he": label, "source": source, "quote_he": match.group(0), "score": score})
+    return rows
+
+
+def _refine_subject_scoped_anchor_label(value: str) -> str:
+    text = _compact(value)
+    if not text:
+        return ""
+    text = re.sub(r"^(?:מר|גב'?|גברת)?\s*[\u0590-\u05FF]{2,20}\s+(?=(?:הסתייגות|ההסתייגות|בנוגע|היא\s+בנושא|מליון|ועומד))", "", text)
+    normalized = _norm(text)
+    phrase_rules = [
+        ("מצבת כוח האדם", "מצבת כוח האדם"),
+        ("מסגרות ותכניות טיפוליות", "מסגרות ותכניות טיפוליות"),
+        ("מסגרות ותוכניות טיפוליות", "מסגרות ותכניות טיפוליות"),
+        ("תשלומי רשות נוספים", "תשלומי רשות נוספים"),
+        ("התחנה המרכזית", "התחנה המרכזית"),
+        ("החלפה ושיקום מדרכות", "החלפה ושיקום מדרכות"),
+        ("שיפור תאורה", "שיפור תאורה"),
+    ]
+    for needle, label in phrase_rules:
+        if needle in normalized:
+            return label
+    match = re.search(r"(תכנית\s+[^,.;:]{4,100}(?:,\s*[^,.;:]{4,80}){0,3})", text)
+    if match:
+        return match.group(1)
+    match = re.search(r"(עתודת\s+[^,.;:]{4,80})(?=,|\s+סעיף|$)", text)
+    if match:
+        return match.group(1)
+    match = re.search(r"(פארק\s+[^,.;:]{4,120})", text)
+    if match and "ביטול" in normalized:
+        return f"ביטול תב\"ר {match.group(1)}"
+    match = re.search(r"(?:שיפור|לשיפור)\s+(?:ה)?מרחב\s+הציבורי\s+([^,.;:]{0,80})", text)
+    if match:
+        return _compact(f"שיפור המרחב הציבורי {match.group(1)}")
+    match = re.search(r"בתקציב\s+([^.;:,]{4,100})", text)
+    if match:
+        return f"תקציב {match.group(1)}"
+    match = re.search(r"עתודה.{0,80}?סעיף\s+[\"'׳״]([^\"'׳״]{3,80})[\"'׳״]", text)
+    if match:
+        return f"עתודה {match.group(1)}"
+    match = re.search(r"(?:לעבודות|עבודות)\s+([^.;:,]{4,120})", text)
+    if match:
+        return f"עבודות {match.group(1)}"
+    return text
+
+
+def _clean_subject_scoped_anchor_label(value: str) -> str:
+    text = clean_protocol_subject_text(value)
+    text = re.sub(r"\s+השנה\s+לעומת\s+שנה\s+שעברה\b.*$", "", text)
+    text = re.sub(r",?\s*(?:קיצוץ|תוספת|גידול|הוספה)\b.*$", "", text)
+    text = re.sub(r"\bסעיף\s+שכלל\b.*$", "", text)
+    text = re.sub(r"\b(?:הופיע|הופיעו)\s+בתקציבים\s+קודמים\b.*$", "", text)
+    text = re.sub(r"\b(?:הסתייגות|ההסתייגות|בעניין|לגבי|הוספה|משמעותית|קיצוץ|של|בסך|סך)\b", " ", text)
+    text = re.sub(r"\b\d+(?:[.,]\d+)?\s*(?:מליון|מיליון|שח|ש\"ח|₪|%)\b", " ", text)
+    text = re.sub(r"\b(?:מר|גב'?|גברת|היו[\"'׳״]?ר)\b.*$", "", text)
+    text = re.sub(r"(?<=[\u0590-\u05FF])[\"'׳״](?=,|$)", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" ' \"׳״()[]-–:.,")
+    if _looks_like_subject_scoped_dialogue_only(text):
+        return ""
+    if _norm(text).startswith("תקציב העירייה") or "ספר התקציב נסגר" in _norm(text):
+        return ""
+    if text.startswith("תקציב") and not _specific_budget_phrase(text):
+        return ""
+    return text[:180]
+
+
+def _specific_budget_phrase(text: str) -> bool:
+    normalized = _norm(text)
+    tokens = [token for token in _hebrew_tokens(normalized) if len(token) >= 3]
+    if not tokens or tokens[0] != "תקציב":
+        return True
+    stopwords = {"תקציב", "הקודם", "העירייה", "הרגיל", "רגיל", "בהיקף", "השנה", "לעומת", "ואין", "אם", "גידול", "בסה"}
+    meaningful = [token for token in tokens[1:] if token not in stopwords]
+    return len(meaningful) >= 2
+
+
+def _looks_like_subject_scoped_dialogue_only(text: str) -> bool:
+    normalized = _norm(text)
+    if not normalized:
+        return True
+    dialogue_cues = ["אני", "אתה", "את", "אנחנו", "רגע", "תודה", "תסתכלו", "תגיד", "עוד מישהו", "נמוך", "להלן סעיף", "סעיף הוראות", "לא יכול", "יכולה", "ראש העירייה", "הוא יהיה", "מעכשיו", "נדע"]
+    if any(cue in normalized for cue in dialogue_cues):
+        return True
+    return len([token for token in _hebrew_tokens(normalized) if len(token) >= 3]) < 2
+
+
+def _speaker_opening_segments(text: str) -> list[str]:
+    compact = _strip_protocol_chrome(text)
+    segments: list[str] = []
+    for match in _speaker_marker_re().finditer(compact):
+        after = compact[match.end() : match.end() + 220]
+        after = re.sub(r"^\s*[.:;!?\-–]+\s*", "", after)
+        after = re.sub(r"^\s*[\u0590-\u05FF][\u0590-\u05FF'׳״\-–]{1,24}\s*[.:;!?\-–]+\s*", "", after)
+        after = re.split(r"\s*:\s*(?:מר|גב'?|גברת|היו[\"'׳״]?ר)|[.?!]", after, maxsplit=1)[0]
+        after = _compact(after).strip(" ' \"׳״()[]-–:.,")
+        if after:
+            segments.append(after)
+    return segments
+
+
+def _strip_protocol_chrome(text: str) -> str:
+    compact = _compact(text)
+    compact = re.sub(r"פרוטוקול\s+ישיבות?\s+המועצה[^:.;]{0,160}?[-–]\s*\d+\s*[-–]", " ", compact)
+    compact = re.sub(r"^\s*סעיף\s*\d{1,6}(?:/\d+){0,3}\s*", "סעיף ", compact)
+    return _compact(compact)
+
+
+def _speaker_marker_re() -> re.Pattern[str]:
+    return re.compile(r":\s*(?:מר|גב'?|גברת|היו[\"'׳״]?ר)(?=\s|[-–]|$)|היו[\"'׳״]?ר\s*[-–]?\s*(?:מר|גב'?)")
+
+
 def _validation_evidence_text(*, item: dict[str, Any], quote: str, selected_candidate: dict[str, Any] | None) -> str:
     candidate_quote = str((selected_candidate or {}).get("evidence_quote_he") or "")
     if _is_protocol_item(item):
@@ -2083,12 +2425,148 @@ def _document_context(*, input_pdf: str | None, packet_role: str, units: list[di
                 text = _compact(action)
                 if text and text not in all_actions:
                     all_actions.append(text)
+    subject = _protocol_subject_from_title_or_first_pages(file_stem=file_stem, units=units) if packet_role == "protocol" else {}
+    protocol_subject = str(subject.get("protocol_subject_he") or "")
+    topic_carrier_mode = "subject_scoped_transcript_topics" if _uses_subject_scoped_transcript_topics(protocol_subject=protocol_subject, units=units) else "headline_topics"
     return {
         "pdf_file_stem": file_stem,
         "packet_role": packet_role or "unknown",
         "document_title_candidates": _title_candidates_from_filename(file_stem),
+        "protocol_subject_he": protocol_subject or None,
+        "protocol_subject_source": subject.get("source"),
+        "protocol_subject_quote_he": subject.get("quote_he"),
+        "temporal_metadata": subject.get("temporal_metadata") or [],
+        "topic_carrier_mode": topic_carrier_mode,
         "explicit_actions": all_actions[:12],
     }
+
+
+def _protocol_subject_from_title_or_first_pages(*, file_stem: str, units: list[dict[str, Any]]) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+    for title in _title_candidates_from_filename(file_stem):
+        candidates.extend(_protocol_subject_candidates_from_text(text=title, source="filename"))
+    for unit in units[: min(len(units), 6)]:
+        raw_text = _compact(unit.get("raw_text"))
+        if raw_text:
+            candidates.extend(_protocol_subject_candidates_from_text(text=raw_text, source="early_document_text"))
+        for key in ("header_text", "title_he", "section_title_he"):
+            value = _compact(unit.get(key))
+            if value:
+                candidates.extend(_protocol_subject_candidates_from_text(text=value, source=f"early_{key}"))
+    candidates = [row for row in candidates if _is_substantive_topic_subject(str(row.get("protocol_subject_he") or ""))]
+    candidates = [row for row in candidates if str(row.get("root_topic_id") or "") not in {"root_agenda_queries", "root_order_proposals"}]
+    if not candidates:
+        return {}
+    candidates.sort(key=lambda row: (float(row.get("score") or 0.0), len(str(row.get("protocol_subject_he") or ""))), reverse=True)
+    return candidates[0]
+
+
+def _protocol_subject_candidates_from_text(*, text: str, source: str) -> list[dict[str, Any]]:
+    compact = _compact(text)
+    if not compact:
+        return []
+    rows: list[dict[str, Any]] = []
+    patterns = [
+        r"סדר\s+הישיבה\s+(.{4,180}?)(?=\*{3,}|\s+:\s*(?:היו[\"'׳״]?ר|מר|גב'?)|$)",
+        r"(?:^|\s)[-–]\s*([^.;:\n]{4,120}?)(?=\.pdf|$)",
+        r"(?:ישיבה\s+לא\s+מן\s+המניין|ישיבה\s+מיוחדת).{0,140}?\b(תקציב\s*\d{4}|דו[\"']?ח\s+מבקר[^.;:\n]{0,80}|ביקורת[^.;:\n]{0,80})",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, compact):
+            raw = _compact(match.group(1))
+            candidate = _clean_protocol_subject_candidate(raw)
+            row = _protocol_subject_candidate_row(candidate=candidate, quote=match.group(0), source=source)
+            if row:
+                rows.append(row)
+    if re.search(r"\bתקציב\s*\d{4}\b", compact) and any(term in compact for term in ["לא מן המניין", "סדר הישיבה", "פרוטוקול"]):
+        row = _protocol_subject_candidate_row(candidate="תקציב", quote=compact[:240], source=source)
+        if row:
+            rows.append(row)
+    return rows
+
+
+def _clean_protocol_subject_candidate(value: str) -> str:
+    text = _compact(value)
+    text = re.sub(r"\*+", " ", text)
+    text = clean_protocol_subject_text(text)
+    text = re.sub(r"\s+(?:לשנת|בשנת|שנת)\s*$", "", text)
+    return _compact(text).strip(" ' \"׳״()[]-–:.,")
+
+
+def _protocol_subject_candidate_row(*, candidate: str, quote: str, source: str) -> dict[str, Any] | None:
+    subject = _clean_protocol_subject_candidate(candidate)
+    if not subject or _looks_like_protocol_listing(subject) or _looks_like_malformed_protocol_subject_candidate(subject):
+        return None
+    root_topic_id = infer_root_topic_id(subject)
+    if root_topic_id not in ROOT_BY_ID or root_topic_id in {"root_agenda_queries", "root_order_proposals"}:
+        return None
+    score = _subject_quality_score(subject) + (4 if source.startswith("filename") else 0) + (3 if "סדר הישיבה" in quote else 0)
+    return {
+        "protocol_subject_he": subject,
+        "root_topic_id": root_topic_id,
+        "source": source,
+        "quote_he": _compact(quote)[:300],
+        "score": score,
+        "temporal_metadata": _temporal_metadata_from_text(quote),
+    }
+
+
+def _uses_subject_scoped_transcript_topics(*, protocol_subject: str, units: list[dict[str, Any]]) -> bool:
+    if not protocol_subject:
+        return False
+    early_text = _compact(" ".join(str(unit.get("raw_text") or "") for unit in units[: min(len(units), 6)]))
+    if not early_text:
+        return False
+    single_subject_signal = "לא מן המניין" in early_text or "ישיבה מיוחדת" in early_text or "סדר הישיבה" in early_text
+    if not single_subject_signal:
+        return False
+    speaker_markers = sum(len(_speaker_marker_re().findall(_compact(unit.get("raw_text")))) for unit in units)
+    return speaker_markers >= 8
+
+
+def _looks_like_malformed_protocol_subject_candidate(subject: str) -> bool:
+    text = _compact(subject)
+    if not text:
+        return True
+    if _looks_like_malformed_protocol_subject(text):
+        return True
+    normalized = _norm(text)
+    speech_or_deictic_cues = [
+        "אני",
+        "אנחנו",
+        "אנו",
+        "אתם",
+        "בפניכם",
+        "כאן",
+        "כמו",
+        "דנים",
+        "נדון",
+        "דנו",
+        "הזה",
+        "הזאת",
+        "שלנו",
+    ]
+    if any(cue in normalized for cue in speech_or_deictic_cues):
+        return True
+    connector_cues = ["וגם", "אבל", "ואז", "ועכשיו", "מכל מקום"]
+    if any(cue in normalized for cue in connector_cues):
+        return True
+    if re.search(r"\b[בלמכש]?[-–]\s*,", text):
+        return True
+    if text.count(",") >= 2:
+        return True
+    return False
+
+
+def _temporal_metadata_from_text(text: str) -> list[str]:
+    values = re.findall(r"\b\d{1,2}\.\d{1,2}\.\d{2,4}\b|\b\d{4}\b", _compact(text))
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out[:8]
 
 
 def _document_child_candidates(*, units: list[dict[str, Any]], document_context: dict[str, Any], topic_contexts_by_unit: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2197,7 +2675,9 @@ def _looks_like_protocol_listing(text: str) -> bool:
     dot_leaders = len(re.findall(r"\.{6,}", compact))
     agenda_mentions = len({_norm(match.group(0)) for match in re.finditer(r"(?:שאילתה\s+בנושא\s+[^,;.]{4,120}|הצעה\s+לסדר\s+[^,;.]{4,120}|נושא\s+לדיון\s+[^,;.]{4,120}|פרוטוקול\s+ועדת?\s+[^,;.]{4,120}|אישור\s+[^,;.]{4,120})", compact)})
     numbered_items = len(re.findall(r"(?:^|\s)\d+(?:\.\d+)?\s*[.)]", compact))
-    return bracketed_items >= 2 or (bracketed_items >= 1 and dot_leaders >= 1) or agenda_mentions >= 2 or numbered_items >= 3
+    page_ref_mentions = len(re.findall(r"\(?\s*עמ", compact))
+    dotted_suffix_items = len(re.findall(r"\.\d{1,2}(?=\s|[)'\"׳״]|$)", compact))
+    return bracketed_items >= 2 or (bracketed_items >= 1 and dot_leaders >= 1) or agenda_mentions >= 2 or numbered_items >= 3 or (page_ref_mentions >= 2 and dotted_suffix_items >= 2)
 
 
 def _existing_tree_candidate_row(*, root_topic_id: str, root_label: str, child: dict[str, Any], label: str, evidence_quote: str, confidence_hint: float) -> dict[str, Any] | None:
