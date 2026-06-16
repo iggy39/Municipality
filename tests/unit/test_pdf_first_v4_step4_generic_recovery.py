@@ -638,6 +638,240 @@ def test_non_topic_vote_row_does_not_inherit_child_candidate() -> None:
     assert "inherited_candidate" not in row["topic_assignment_route"]
 
 
+def test_model_omission_uses_candidate_review_instead_of_active_guess() -> None:
+    row = step4._fallback_assignment(
+        {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "topic_item",
+            "structural_role": "body",
+            "is_topic_bearing": True,
+            "topic_subject_he": "מקור לכיסוי גירעון תקציבי",
+            "topic_identification_context": "מקור לכיסוי גירעון תקציבי",
+            "topic_headline_he": "מקור לכיסוי גירעון תקציבי",
+            "document_context": {"packet_role": "protocol"},
+            "raw_text": "דיון בנושא מקור לכיסוי גירעון תקציבי בפרויקט עירוני",
+            "deterministic_topic_decision": {
+                "needs_dicta": True,
+                "root_topic_id": "root_budget_finance",
+                "reason": "ambiguous_candidates",
+            },
+            "root_topic_candidates": [
+                {"root_topic_id": "root_budget_finance", "root_label_he": "תקציב וכספים", "score": 0.8}
+            ],
+        },
+        reason="model_omitted_unit",
+    )
+
+    assert row["root_topic_id"] == "root_budget_finance"
+    assert row["topic_node_status"] == "candidate"
+    assert row["child_label_he"] is None
+    assert row["topic_reject_reason"] == "non_blocking_topic_review:model_omitted_unit:ambiguous_candidates"
+
+
+def test_policy_match_inside_dialogue_fragment_is_non_topic() -> None:
+    row = step4._assignment_from_candidate_finder(
+        {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "topic_item",
+            "structural_role": "outline_item",
+            "is_topic_bearing": True,
+            "topic_subject_he": "לגבי תקציב, אם צריך, אולי לא צריך",
+            "topic_identification_context": "לגבי תקציב, אם צריך, אולי לא צריך",
+            "topic_headline_he": "לגבי תקציב, אם צריך, אולי לא צריך",
+            "document_context": {"packet_role": "protocol"},
+            "raw_text": "הצעה לסדר, איך אנחנו יכולים לקבל החלטות לגבי תקציב, אם צריך, אולי לא צריך",
+            "deterministic_topic_decision": {
+                "action": "choose_existing_topic",
+                "needs_dicta": False,
+                "confidence": 0.98,
+                "reason": "strong_policy_match",
+                "root_topic_id": "root_budget_finance",
+                "root_label_he": "תקציב וכספים",
+                "policy_id": "budget_line_or_reserve",
+            },
+            "root_topic_candidates": [],
+            "candidate_child_topics": [],
+        }
+    )
+
+    assert row["is_topic_bearing"] is False
+    assert row["topic_assignment_route"].endswith("policy_match_inside_dialogue_fragment")
+
+
+def test_order_proposal_dialogue_only_is_non_topic() -> None:
+    assert step4._non_topic_protocol_reason(
+        headline="הצעה לסדר, קיבלת תשובה, זה לא עובד ככה",
+        raw_text="הצעה לסדר, קיבלת תשובה, זה לא עובד ככה",
+        structural_role="outline_item",
+        packet_role="protocol",
+    ) == "order_proposal_intro_only"
+
+
+def test_policy_root_attaches_existing_child_candidate() -> None:
+    row = step4._assignment_from_candidate_finder(
+        {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "topic_item",
+            "structural_role": "outline_item",
+            "is_topic_bearing": True,
+            "topic_subject_he": "גני ילדים",
+            "topic_identification_context": "גני ילדים",
+            "topic_headline_he": "גני ילדים",
+            "document_context": {"packet_role": "protocol"},
+            "raw_text": "גני ילדים",
+            "deterministic_topic_decision": {
+                "action": "choose_existing_topic",
+                "needs_dicta": False,
+                "confidence": 0.98,
+                "reason": "strong_policy_match",
+                "root_topic_id": "root_education",
+                "root_label_he": "חינוך",
+                "policy_id": "parent_payments_education",
+            },
+            "root_topic_candidates": [],
+            "candidate_child_topics": [
+                {
+                    "candidate_child_id": "child-education",
+                    "label_he": "מוסדות חינוך",
+                    "root_topic_id": "root_education",
+                    "root_label_he": "חינוך",
+                    "evidence_quote_he": "גני ילדים",
+                    "evidence_source": "existing_tree",
+                    "confidence_hint": 0.94,
+                    "aliases_he": ["גני ילדים"],
+                }
+            ],
+        }
+    )
+
+    assert row["root_topic_id"] == "root_education"
+    assert row["child_label_he"] == "מוסדות חינוך"
+
+
+def test_semantic_child_facets_return_existing_closed_list_children() -> None:
+    topic_tree = {
+        "root_topics": [
+            {
+                "root_topic_id": "root_budget_finance",
+                "root_label_he": "תקציב וכספים",
+                "children": [
+                    {"child_topic_id": "c1", "child_label_he": "מימון פרויקטים עירוניים", "status": "active"},
+                    {"child_topic_id": "c2", "child_label_he": "הנחות ופטורים", "status": "active"},
+                    {"child_topic_id": "c3", "child_label_he": "תקצוב שירותים עירוניים", "status": "active"},
+                ],
+            },
+            {
+                "root_topic_id": "root_agreements",
+                "root_label_he": "הסכמים והתקשרויות",
+                "children": [{"child_topic_id": "c4", "child_label_he": "מכרזים והתקשרויות", "status": "active"}],
+            },
+            {
+                "root_topic_id": "root_security_enforcement",
+                "root_label_he": "ביטחון ואכיפה",
+                "children": [{"child_topic_id": "c5", "child_label_he": "מוכנות לחירום", "status": "active"}],
+            },
+        ]
+    }
+
+    tbr = step4._candidate_child_topics(unit_id="u1", text="קרצוף כבישים, תב\"ר", evidence_text="קרצוף כבישים, תב\"ר", outline_title="", explicit_actions=[], document_context={"packet_role": "protocol"}, document_child_candidates=[], referenced_attachment_contexts=[], topic_tree=topic_tree, structural_role="outline_item")
+    exemption = step4._candidate_child_topics(unit_id="u2", text="פטור לנכס שאינו ראוי לשימוש ולא ישולם היטל", evidence_text="פטור לנכס שאינו ראוי לשימוש ולא ישולם היטל", outline_title="", explicit_actions=[], document_context={"packet_role": "protocol"}, document_child_candidates=[], referenced_attachment_contexts=[], topic_tree=topic_tree, structural_role="outline_item")
+    tender = step4._candidate_child_topics(unit_id="u3", text="אישור התקשרות עם זוכה במכרז פומבי", evidence_text="אישור התקשרות עם זוכה במכרז פומבי", outline_title="", explicit_actions=[], document_context={"packet_role": "protocol"}, document_child_candidates=[], referenced_attachment_contexts=[], topic_tree=topic_tree, structural_role="outline_item")
+    emergency = step4._candidate_child_topics(unit_id="u4", text="דיון בנושא מיגון וחירום", evidence_text="דיון בנושא מיגון וחירום", outline_title="", explicit_actions=[], document_context={"packet_role": "protocol"}, document_child_candidates=[], referenced_attachment_contexts=[], topic_tree=topic_tree, structural_role="outline_item")
+
+    assert any(row["label_he"] == "מימון פרויקטים עירוניים" for row in tbr)
+    assert any(row["label_he"] == "הנחות ופטורים" for row in exemption)
+    assert any(row["label_he"] == "מכרזים והתקשרויות" for row in tender)
+    assert any(row["label_he"] == "מוכנות לחירום" for row in emergency)
+
+
+def test_rejected_topic_subject_clears_child_label() -> None:
+    row = step4._assignment_payload(
+        item={
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "topic_item",
+            "structural_role": "outline_item",
+            "document_context": {"packet_role": "protocol"},
+            "topic_identification_context": "ניהול משא ומתן עם ספקים פוטנציאליים לצורך התקשרות ללא מכרז, לאור אי",
+            "topic_headline_he": "ניהול משא ומתן עם ספקים פוטנציאליים לצורך התקשרות ללא מכרז, לאור אי",
+            "raw_text": "ניהול משא ומתן עם ספקים פוטנציאליים לצורך התקשרות ללא מכרז, לאור אי",
+            "source_region_ids": [],
+            "source_block_ids": [],
+        },
+        root_topic_id="root_agreements",
+        root_label="הסכמים והתקשרויות",
+        child_label="מכרזים והתקשרויות",
+        raw_child_label="מכרזים והתקשרויות",
+        status="active",
+        reject_reason=None,
+        aliases=[],
+        confidence=0.9,
+        quote="ניהול משא ומתן עם ספקים פוטנציאליים לצורך התקשרות ללא מכרז, לאור אי",
+        route="test",
+        rationale_he="test",
+        parsed_contract={"is_topic_bearing": True, "topic_subject_he": "ניהול משא ומתן עם ספקים פוטנציאליים לצורך התקשרות ללא מכרז, לאור אי"},
+    )
+
+    assert row["is_topic_bearing"] is False
+    assert row["child_label_he"] is None
+
+
+def test_dicta_prompt_tree_is_compact_and_child_context_is_per_item() -> None:
+    payload = step4._topic_tree_prompt_payload(
+        {
+            "topic_tree_version": "test",
+            "root_topics": [
+                {
+                    "root_topic_id": "root_budget_finance",
+                    "root_label_he": "תקציב וכספים",
+                    "keywords": ["תקציב"],
+                    "profile": {"positive_examples": [{"quote_he": "long example"}]},
+                    "children": [
+                        {
+                            "child_topic_id": "c1",
+                            "child_label_he": "תקצוב שירותים עירוניים",
+                            "profile": {"positive_examples": [{"quote_he": "child example"}]},
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert payload["root_topics"][0]["child_count"] == 1
+    assert "children" not in payload["root_topics"][0]
+    assert "profile" not in payload["root_topics"][0]
+
+
+def test_model_prompt_adds_compact_child_choices() -> None:
+    items = step4._items_for_model_prompt(
+        [
+            {
+                "structure_unit_id": "u1",
+                "candidate_child_topics": [
+                    {
+                        "candidate_child_id": "child-1",
+                        "root_topic_id": "root_budget_finance",
+                        "root_label_he": "תקציב וכספים",
+                        "label_he": "תקצוב שירותים עירוניים",
+                        "evidence_quote_he": "תקציב הגיל הרך",
+                        "evidence_source": "existing_tree",
+                        "confidence_hint": 0.9,
+                        "profile": {"summary_he": "long child profile"},
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert items[0]["candidate_child_choices"][0]["candidate_child_id"] == "child-1"
+    assert items[0]["candidate_child_choices"][0]["label_he"] == "תקצוב שירותים עירוניים"
+    assert "profile" not in items[0]["candidate_child_choices"][0]
+
+
 def test_cleaned_continuation_without_source_is_not_topic() -> None:
     unit = {"structural_role": "task_row", "raw_text": "מר כהן ממשיך לדבר על בית הספר והעירייה"}
 
@@ -682,6 +916,44 @@ def test_query_intro_speaker_prompt_without_subject_is_not_topic() -> None:
         structural_role="outline_item",
         packet_role="protocol",
     ) == "query_intro_only"
+
+
+def test_query_carrier_person_dash_subject_prefers_real_subject() -> None:
+    contract = step4._topic_contract_from_headline(
+        "שאילתה: יובל צלנר, חבר המועצה – בעיית המפונים שבתיהם נפגעו",
+        structural_role="outline_item",
+        packet_role="protocol",
+    )
+
+    assert contract["is_topic_bearing"] is True
+    assert contract["agenda_carrier_he"] == "שאילתה"
+    assert contract["topic_subject_he"] == "בעיית המפונים שבתיהם נפגעו"
+    assert step4.infer_root_topic_id(contract["topic_subject_he"]) == "root_welfare_social"
+
+
+def test_query_subject_after_benosheh_prefers_evacuated_residents() -> None:
+    contract = step4._topic_contract_from_headline(
+        "שאילתה של יובל צלנר בנושא פינוי תושבים מבתים שנפגעו",
+        structural_role="outline_item",
+        packet_role="protocol",
+    )
+
+    assert contract["is_topic_bearing"] is True
+    assert contract["topic_subject_he"] == "פינוי תושבים מבתים שנפגעו"
+    assert step4.infer_root_topic_id(contract["topic_subject_he"]) == "root_welfare_social"
+
+
+def test_order_proposal_person_dash_subject_prefers_real_subject() -> None:
+    contract = step4._topic_contract_from_headline(
+        "הצעה לסדר: חברת מועצה – טיפול בדרי רחוב",
+        structural_role="outline_item",
+        packet_role="protocol",
+    )
+
+    assert contract["is_topic_bearing"] is True
+    assert contract["agenda_carrier_he"] == "הצעה לסדר"
+    assert contract["topic_subject_he"] == "טיפול בדרי רחוב"
+    assert step4.infer_root_topic_id(contract["topic_subject_he"]) == "root_welfare_social"
 
 
 def test_order_proposal_intro_without_subject_is_not_topic() -> None:
@@ -861,3 +1133,256 @@ def test_canonical_subjects_align_to_non_procedural_roots() -> None:
     assert step4.infer_root_topic_id("שימוע למהנדס העיר") == "root_administration"
     assert step4.infer_root_topic_id("אלרגיות ואפיפן במרחב הציבורי") == "root_security_enforcement"
     assert step4.infer_root_topic_id("הקמת פסל ציבורי") == "root_culture_sport"
+
+
+def test_child_only_judge_applies_same_root_existing_child() -> None:
+    item = {
+        "structure_unit_id": "u1",
+        "semantic_unit_id": "u1",
+        "document_context": {"packet_role": "protocol"},
+        "topic_identification_context": "פטור לנכס שאינו ראוי לשימוש בשל נזק מלחמה",
+        "topic_headline_he": "פטור לנכס שאינו ראוי לשימוש בשל נזק מלחמה",
+        "topic_subject_he": "פטור לנכס בשל נזק מלחמה",
+        "raw_text": "פטור לנכס שאינו ראוי לשימוש בשל נזק מלחמה",
+        "explicit_actions": [],
+    }
+    assignment = {
+        "structure_unit_id": "u1",
+        "root_topic_id": "root_budget_finance",
+        "root_label_he": "תקציב וכספים",
+        "row_type": "topic_item",
+        "is_topic_bearing": True,
+        "topic_node_status": "active",
+        "topic_supporting_quote_he": "פטור לנכס שאינו ראוי לשימוש בשל נזק מלחמה",
+        "topic_assignment_route": "dictalm_v4_global_tree:root_only",
+    }
+    candidate = {
+        "candidate_child_id": "c1",
+        "root_topic_id": "root_budget_finance",
+        "root_label_he": "תקציב וכספים",
+        "label_he": "הנחות ופטורים",
+        "evidence_source": "existing_tree",
+        "evidence_quote_he": "פטור לנכס שאינו ראוי לשימוש בשל נזק מלחמה",
+        "confidence_hint": 0.9,
+        "aliases_he": [],
+    }
+
+    updated, error = step4._assignment_with_child_only_decision(
+        item=item,
+        assignment=assignment,
+        decision={"structure_unit_id": "u1", "child_choice_id": "c1", "confidence": 0.88, "rationale_he": "הפריט עוסק בפטור"},
+        candidate_child_choices=[candidate],
+    )
+
+    assert error is None
+    assert updated["root_topic_id"] == "root_budget_finance"
+    assert updated["child_label_he"] == "הנחות ופטורים"
+    assert ":child_only_dicta:existing_tree" in updated["topic_assignment_route"]
+
+
+def test_child_only_judge_rejects_cross_root_choice() -> None:
+    item = {
+        "structure_unit_id": "u1",
+        "document_context": {"packet_role": "protocol"},
+        "topic_identification_context": "עתיד מינויים ושינויים בוועדת מכרזים",
+        "topic_headline_he": "עתיד מינויים ושינויים בוועדת מכרזים",
+        "raw_text": "עתיד מינויים ושינויים בוועדת מכרזים",
+        "explicit_actions": [],
+    }
+    assignment = {
+        "structure_unit_id": "u1",
+        "root_topic_id": "root_administration",
+        "root_label_he": "מנהל עירוני ומינויים",
+        "row_type": "topic_item",
+        "is_topic_bearing": True,
+        "topic_node_status": "active",
+        "topic_assignment_route": "dictalm_v4_global_tree:root_only",
+    }
+    candidate = {
+        "candidate_child_id": "c_wrong_root",
+        "root_topic_id": "root_agreements",
+        "root_label_he": "הסכמים והתקשרויות",
+        "label_he": "מכרזים והתקשרויות",
+        "evidence_source": "existing_tree",
+        "evidence_quote_he": "ועדת מכרזים",
+    }
+
+    updated, error = step4._assignment_with_child_only_decision(
+        item=item,
+        assignment=assignment,
+        decision={"structure_unit_id": "u1", "child_choice_id": "c_wrong_root", "confidence": 0.9},
+        candidate_child_choices=[candidate],
+    )
+
+    assert updated["root_topic_id"] == "root_administration"
+    assert updated.get("child_label_he") is None
+    assert error["error_code"] == "CHILD_MODEL_ROOT_MISMATCH"
+
+
+def test_child_only_candidate_choices_are_fixed_to_assignment_root() -> None:
+    item = {
+        "candidate_child_topics": [
+            {
+                "candidate_child_id": "c_wrong_root",
+                "root_topic_id": "root_agreements",
+                "root_label_he": "הסכמים והתקשרויות",
+                "label_he": "מכרזים והתקשרויות",
+                "evidence_source": "existing_tree",
+            }
+        ]
+    }
+    assignment = {"root_topic_id": "root_administration", "root_label_he": "מנהל עירוני ומינויים"}
+
+    assert step4._fixed_root_child_candidate_rows(item=item, assignment=assignment) == []
+
+
+def test_committee_appointments_do_not_become_procurement_child() -> None:
+    item = {
+        "structure_unit_id": "u1",
+        "semantic_unit_id": "u1",
+        "document_context": {"packet_role": "protocol"},
+        "structural_role": "outline_item",
+        "row_type": "topic_item",
+        "skip_model_assignment": False,
+        "topic_identification_context": "עתיד מינויים ושינויים בוועדת מכרזים",
+        "topic_headline_he": "עתיד מינויים ושינויים בוועדת מכרזים",
+        "topic_subject_he": "עתיד מינויים ושינויים בוועדת מכרזים",
+        "raw_text": "עתיד מינויים ושינויים בוועדת מכרזים",
+        "explicit_actions": [],
+        "candidate_child_topics": [
+            {
+                "candidate_child_id": "c_tenders",
+                "root_topic_id": "root_agreements",
+                "root_label_he": "הסכמים והתקשרויות",
+                "label_he": "מכרזים והתקשרויות",
+                "evidence_source": "existing_tree",
+                "evidence_quote_he": "עתיד מינויים ושינויים בוועדת מכרזים",
+                "confidence_hint": 0.86,
+            }
+        ],
+        "root_topic_candidates": [
+            {"root_topic_id": "root_agreements", "score": 0.84},
+            {"root_topic_id": "root_administration", "score": 0.84},
+        ],
+    }
+    parsed = {
+        "root_topic_id": "root_agreements",
+        "is_topic_bearing": True,
+        "topic_subject_he": "עתיד מינויים ושינויים בוועדת מכרזים",
+        "clean_subject_he": "עתיד מינויים ושינויים בוועדת מכרזים",
+        "topic_supporting_quote_he": "עתיד מינויים ושינויים בוועדת מכרזים",
+        "confidence": 0.82,
+        "rationale_he": "הנושא עוסק בוועדת מכרזים",
+    }
+
+    assignment = step4._assignment_from_parsed(item=item, parsed=parsed)
+
+    assert assignment["root_topic_id"] == "root_administration"
+    assert assignment["child_label_he"] is None
+    assert "committee_governance_override" in assignment["root_adjudication_decision"]
+
+
+def test_child_only_judge_skips_non_topic_rows(monkeypatch) -> None:
+    def fail_call(**_kwargs):
+        raise AssertionError("child-only judge should not be called for non-topic rows")
+
+    monkeypatch.setattr(step4, "_call_child_only_dictalm", fail_call)
+    assignments, errors, count = step4._apply_child_only_dicta_judgements(
+        assignments=[
+            {
+                "structure_unit_id": "u1",
+                "root_topic_id": "root_budget_finance",
+                "root_label_he": "תקציב וכספים",
+                "row_type": "fragment",
+                "is_topic_bearing": False,
+                "topic_node_status": "active",
+            }
+        ],
+        items=[
+            {
+                "structure_unit_id": "u1",
+                "candidate_child_topics": [
+                    {
+                        "candidate_child_id": "c1",
+                        "root_topic_id": "root_budget_finance",
+                        "label_he": "הנחות ופטורים",
+                        "evidence_source": "existing_tree",
+                    }
+                ],
+            }
+        ],
+        model="unused",
+        base_url="http://localhost:1",
+        timeout_seconds=1.0,
+        model_call_dir=Path("/tmp"),
+    )
+
+    assert count == 0
+    assert errors == []
+    assert assignments[0].get("child_label_he") is None
+
+
+def test_child_only_judge_runs_for_active_root_only_same_root_candidate(monkeypatch) -> None:
+    def fake_call(**kwargs):
+        assert kwargs["assignment"]["root_topic_id"] == "root_budget_finance"
+        assert kwargs["candidate_child_choices"][0]["candidate_child_id"] == "c_budget"
+        return {"decisions": [{"structure_unit_id": "u1", "fixed_root_topic_id": "root_budget_finance", "child_choice_id": "c_budget", "confidence": 0.91, "rationale_he": "תקצוב שירות עירוני"}]}
+
+    monkeypatch.setattr(step4, "_call_child_only_dictalm", fake_call)
+    assignments, errors, count = step4._apply_child_only_dicta_judgements(
+        assignments=[
+            {
+                "structure_unit_id": "u1",
+                "root_topic_id": "root_budget_finance",
+                "root_label_he": "תקציב וכספים",
+                "row_type": "topic_item",
+                "is_topic_bearing": True,
+                "topic_node_status": "active",
+                "topic_supporting_quote_he": "תקציב שירותי גיל הרך",
+                "topic_assignment_route": "dictalm_v4_global_tree:root_only",
+            }
+        ],
+        items=[
+            {
+                "structure_unit_id": "u1",
+                "semantic_unit_id": "u1",
+                "document_context": {"packet_role": "protocol"},
+                "structural_role": "outline_item",
+                "topic_identification_context": "תקציב שירותי גיל הרך",
+                "topic_headline_he": "תקציב שירותי גיל הרך",
+                "topic_subject_he": "תקציב שירותי גיל הרך",
+                "raw_text": "תקציב שירותי גיל הרך",
+                "explicit_actions": [],
+                "candidate_child_topics": [
+                    {
+                        "candidate_child_id": "c_budget",
+                        "root_topic_id": "root_budget_finance",
+                        "root_label_he": "תקציב וכספים",
+                        "label_he": "תקצוב שירותים עירוניים",
+                        "evidence_source": "existing_tree",
+                        "evidence_quote_he": "תקציב שירותי גיל הרך",
+                        "confidence_hint": 0.86,
+                    },
+                    {
+                        "candidate_child_id": "c_wrong_root",
+                        "root_topic_id": "root_agreements",
+                        "root_label_he": "הסכמים והתקשרויות",
+                        "label_he": "מכרזים והתקשרויות",
+                        "evidence_source": "existing_tree",
+                        "evidence_quote_he": "תקציב שירותי גיל הרך",
+                        "confidence_hint": 0.9,
+                    },
+                ],
+            }
+        ],
+        model="unused",
+        base_url="http://localhost:1",
+        timeout_seconds=1.0,
+        model_call_dir=Path("/tmp"),
+    )
+
+    assert count == 1
+    assert errors == []
+    assert assignments[0]["root_topic_id"] == "root_budget_finance"
+    assert assignments[0]["child_label_he"] == "תקצוב שירותים עירוניים"
+    assert ":child_only_dicta:existing_tree" in assignments[0]["topic_assignment_route"]

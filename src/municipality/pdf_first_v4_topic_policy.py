@@ -120,6 +120,22 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         negative_terms=("היטל שמירה", "שירותי שמירה"),
     ),
     TopicPolicy(
+        policy_id="fiscal_exemption_or_relief_finance",
+        root_topic_id="root_budget_finance",
+        description_he="פטורים, הנחות, אי-גבייה או הקלות בתשלום עירוני מסווגים לפי הפעולה הכספית, גם כשהאובייקט הוא נכס.",
+        priority=99,
+        required_any=(("פטור", "פטורים", "הנחה", "הנחות", "לא ישולם", "לא תשולם", "אי גבייה", "אי-גבייה"), ("ארנונה", "היטל", "אגרה", "מס", "תשלום", "נכס")),
+        negative_terms=("היטל שמירה", "שירותי שמירה"),
+    ),
+    TopicPolicy(
+        policy_id="municipal_bylaw_business_regulation",
+        root_topic_id="root_local_economy",
+        description_he="חוקי עזר או תיקוני חוק עזר שמסדירים פעילות עסקית, מסחר, רוכלות או רישוי עסקים מסווגים לכלכלה ותעסוקה מקומית, אלא אם מופיעה פעולה כספית/תחבורתית/סביבתית מפורשת.",
+        priority=94,
+        required_any=(("חוק עזר", "תיקון התוספת", "תיקון סעיף"), ("רוכלות", "רוכל", "רישוי עסקים", "עסקים", "מסחר", "דוכן", "דוכנים")),
+        negative_terms=("ארנונה", "היטל", "אגרה", "סלילת רחובות", "שמירה", "סביבה", "אבטחה"),
+    ),
+    TopicPolicy(
         policy_id="betterment_levy_finance",
         root_topic_id="root_budget_finance",
         description_he="היטל השבחה מסווג לתקציב וכספים, לא לשמירה והיטלים.",
@@ -168,6 +184,14 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         description_he="ביטחון תזונתי הוא נושא רווחה, לא ביטחון ואכיפה.",
         priority=114,
         required_any=(("ביטחון תזונתי", "בטחון תזונתי"),),
+    ),
+    TopicPolicy(
+        policy_id="evacuee_resident_support_welfare",
+        root_topic_id="root_welfare_social",
+        description_he="סיוע או טיפול בתושבים מפונים, משפחות שפונו או נפגעי אירוע/אסון מסווגים לרווחה ושירותים חברתיים, אלא אם הראיה עוסקת במפורש בתיקון מבנה או היתר בנייה.",
+        priority=113,
+        required_any=(("מפונים", "מפונה", "שפונו", "פונו", "פינוי תושבים", "תושבים שפונו", "משפחות שפונו", "נפגעי אסון", "נפגעי מלחמה"),),
+        negative_terms=("היתר בנייה", "היתר בניה", "תיקון מבנה", "מבנה מסוכן", "מבנים מסוכנים"),
     ),
     TopicPolicy(
         policy_id="street_cats_welfare_subject",
@@ -465,7 +489,26 @@ def _repair_unbalanced_parenthesis(text: str) -> str:
 
 def _term_in_text(term: str, normalized_text: str) -> bool:
     normalized_term = normalize_for_search(term)
-    return bool(normalized_term and normalized_term in normalized_text)
+    if not normalized_term:
+        return False
+    term_tokens = _hebrew_tokens(normalized_term)
+    if len(term_tokens) == 1:
+        needle = term_tokens[0]
+        return any(_hebrew_token_matches_term(token=token, term=needle) for token in _hebrew_tokens(normalized_text))
+    return normalized_term in normalized_text
+
+
+def _hebrew_token_matches_term(*, token: str, term: str) -> bool:
+    stripped = token
+    while stripped:
+        if stripped == term:
+            return True
+        if term.endswith("ה") and len(term) >= 4 and stripped == f"{term[:-1]}ת":
+            return True
+        if len(stripped) <= len(term) or stripped[0] not in "ובכלמהש":
+            return False
+        stripped = stripped[1:]
+    return False
 
 
 def _compact(value: Any) -> str:

@@ -47,7 +47,7 @@ from municipality.topic_label_quality import canonicalize_topic_label  # noqa: E
 DEFAULT_MODEL = "dicta-il/DictaLM-3.0-24B-Thinking:bf16"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 EXCLUDED_STRUCTURAL_ROLES = {"noise", "table_header_only"}
-CACHE_VERSION = "step4_v4_global_topic_assign_v30_canonical_topic_labels"
+CACHE_VERSION = "step4_v4_global_topic_assign_v35_attribution_subject_extraction"
 
 
 def main() -> int:
@@ -302,14 +302,7 @@ def _call_dictalm(*, items: list[dict[str, Any]], topic_tree: dict[str, Any], mo
             "If the row says שאילתה/הצעה לסדר בנושא X, classify X, not the carrier.",
             "If the item is only a section heading, procedural dialogue, speaking-time dispute, vote-order discussion, short continuation fragment, or has no municipal subject, set is_topic_bearing false and root_topic_id null.",
             "Do not use root_agenda_queries as a substitute for non-topic. Use root_agenda_queries only for real agenda/query procedure topics.",
-            "If a substantive subject has no matching child topic, choose the closest allowed root_topic_id and leave child_choice_id/child_label_he null.",
-            "Use existing child topics from the supplied tree when they match evidence.",
-            "Choose child_choice_id from item.candidate_child_topics when a candidate is evidence-backed and more specific than the root.",
-            "Treat candidate_child_topics as a closed classifier label set; prefer evidence-backed existing_tree candidates over new document-specific phrasing.",
-            "Use candidate profile summaries, aliases, positive examples, and negative examples to judge aboutness; examples are guidance, not proof for the current item.",
-            "Select an existing_tree child only when the current item evidence is about that child topic, not merely mentioning words from an example.",
-            "Set child_choice_id to null only when no candidate_child_topics row is supported by the evidence.",
-            "Do not invent child labels. If no candidate is acceptable, set child_choice_id null and child_label_he null.",
+            "This root-assignment call does not select child topics. Always set child_choice_id null and child_label_he null here; child selection is judged later after the root is fixed.",
             "Never use נושא כללי.",
             "Do not invent entities, dates, geometry, or municipality-specific schema rules.",
             "For protocol items, identify the topic from topic_identification_context, document title, agenda title, section heading, bounded parent agenda context, or explicit referenced attachment context.",
@@ -326,7 +319,7 @@ def _call_dictalm(*, items: list[dict[str, Any]], topic_tree: dict[str, Any], mo
             "Apply topic_policies as reusable taxonomy rules. If a policy applies, return its policy_id and root_topic_id.",
             "If item.topic_policy_matches is not empty, copy item.topic_policy_matches[0].policy_id into policy_id and copy item.topic_policy_matches[0].root_topic_id into root_topic_id unless the item text clearly contradicts that policy.",
             "If no topic_policy applies, classify by the clean semantic subject and explain why the selected root fits better than nearby roots.",
-            "Prefer reusable municipal subdomains over one-off action wording; if the only child candidate is too narrow, choose root-only.",
+            "Prefer reusable municipal root domains over one-off action wording.",
         ],
         "schema": {
             "assignments": [
@@ -354,9 +347,9 @@ def _call_dictalm(*, items: list[dict[str, Any]], topic_tree: dict[str, Any], mo
         },
         "allowed_root_topics": allowed_root_topics,
         "allowed_root_topic_ids": [row["root_topic_id"] for row in allowed_root_topics],
-        "topic_tree": topic_tree,
+        "topic_tree": _topic_tree_prompt_payload(topic_tree),
         "topic_policies": topic_policy_prompt_payload(),
-        "items": items,
+        "items": _items_for_model_prompt(items, include_child_choices=False),
     }
     body = {
         "model": model,
@@ -364,7 +357,7 @@ def _call_dictalm(*, items: list[dict[str, Any]], topic_tree: dict[str, Any], mo
         "think": False,
         "format": "json",
         "messages": [
-            {"role": "system", "content": "/no_think\nYou are a Hebrew municipal topic judge. Use the supplied global topic tree. Return JSON only."},
+            {"role": "system", "content": "/no_think\nYou are a Hebrew municipal root-topic judge. Use allowed roots only. Return JSON only."},
             {"role": "user", "content": json.dumps(request_payload, ensure_ascii=False)},
         ],
         "options": {"temperature": 0.0, "num_predict": 2048},
@@ -486,6 +479,296 @@ def _allowed_root_topics(topic_tree: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _topic_tree_prompt_payload(topic_tree: dict[str, Any]) -> dict[str, Any]:
+    """Keep global prompt context compact; rich child context is per item.
+
+    Sending every child profile/example globally makes Dicta drift from the
+    required assignments schema. The model only needs root inventory globally;
+    candidate children for the current row remain in item.candidate_child_topics.
+    """
+
+    roots = []
+    for row in topic_tree.get("root_topics") or topic_tree.get("roots") or []:
+        root_topic_id = str(row.get("root_topic_id") or "")
+        if root_topic_id not in ROOT_BY_ID:
+            continue
+        roots.append(
+            {
+                "root_topic_id": root_topic_id,
+                "root_label_he": row.get("root_label_he") or root_label_for_id(root_topic_id),
+                "keywords": [str(value) for value in (row.get("keywords") or [])[:12] if str(value).strip()],
+                "child_count": len(row.get("children") or []),
+            }
+        )
+    return {"topic_tree_version": topic_tree.get("topic_tree_version") or TOPIC_TREE_VERSION, "root_topics": roots}
+
+
+def _items_for_model_prompt(items: list[dict[str, Any]], *, include_child_choices: bool = True) -> list[dict[str, Any]]:
+    prompt_items: list[dict[str, Any]] = []
+    for item in items:
+        row = dict(item)
+        if include_child_choices:
+            row["candidate_child_choices"] = _candidate_child_choices_for_prompt(item.get("candidate_child_topics") or [])
+        else:
+            row.pop("candidate_child_choices", None)
+            row.pop("candidate_child_topics", None)
+        prompt_items.append(row)
+    return prompt_items
+
+
+def _candidate_child_choices_for_prompt(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for candidate in candidates[:8]:
+        out.append(
+            {
+                "candidate_child_id": candidate.get("candidate_child_id"),
+                "root_topic_id": candidate.get("root_topic_id"),
+                "root_label_he": candidate.get("root_label_he"),
+                "label_he": candidate.get("label_he"),
+                "aliases_he": [str(value) for value in (candidate.get("aliases_he") or [])[:5] if str(value).strip()],
+                "evidence_quote_he": _compact(candidate.get("evidence_quote_he"))[:220],
+                "evidence_source": candidate.get("evidence_source"),
+                "match_reason": candidate.get("match_reason"),
+                "confidence_hint": candidate.get("confidence_hint"),
+                "profile_summary_he": _compact(((candidate.get("profile") if isinstance(candidate.get("profile"), dict) else {}) or {}).get("summary_he"))[:180],
+            }
+        )
+    return out
+
+
+def _apply_child_only_dicta_judgements(
+    *,
+    assignments: list[dict[str, Any]],
+    items: list[dict[str, Any]],
+    model: str,
+    base_url: str,
+    timeout_seconds: float,
+    model_call_dir: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+    items_by_id = {str(item.get("structure_unit_id") or ""): item for item in items}
+    out: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    judged_count = 0
+    for assignment in assignments:
+        current = dict(assignment)
+        item = items_by_id.get(str(current.get("structure_unit_id") or ""))
+        choices = _fixed_root_child_candidate_rows(item=item, assignment=current) if item else []
+        if not item or not _child_only_judge_eligible(current) or not choices:
+            out.append(current)
+            continue
+        judged_count += 1
+        response = _call_child_only_dictalm(
+            item=item,
+            assignment=current,
+            candidate_child_choices=choices,
+            model=model,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+            model_call_dir=model_call_dir,
+        )
+        if response.get("error_code"):
+            errors.append({"structure_unit_ids": [current.get("structure_unit_id")], **response})
+            out.append(current)
+            continue
+        decision = _child_only_decision_from_response(response=response, structure_unit_id=str(current.get("structure_unit_id") or ""))
+        updated, error = _assignment_with_child_only_decision(item=item, assignment=current, decision=decision, candidate_child_choices=choices)
+        if error:
+            errors.append(error)
+        out.append(updated)
+    return out, errors, judged_count
+
+
+def _child_only_judge_eligible(assignment: dict[str, Any]) -> bool:
+    if str(assignment.get("root_topic_id") or "") not in ROOT_BY_ID:
+        return False
+    if not bool(assignment.get("is_topic_bearing")):
+        return False
+    if str(assignment.get("row_type") or "") != "topic_item":
+        return False
+    if bool(assignment.get("skip_model_assignment")):
+        return False
+    if str(assignment.get("topic_node_status") or "active") != "active":
+        return False
+    if str(assignment.get("topic_review_status") or "") == "needs_review":
+        return False
+    return not bool(assignment.get("child_label_he") or assignment.get("child_topic_id"))
+
+
+def _fixed_root_child_candidate_rows(*, item: dict[str, Any] | None, assignment: dict[str, Any]) -> list[dict[str, Any]]:
+    if item is None:
+        return []
+    root_topic_id = str(assignment.get("root_topic_id") or "")
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for candidate in item.get("candidate_child_topics") or []:
+        candidate_id = str(candidate.get("candidate_child_id") or "")
+        if not candidate_id or candidate_id in seen:
+            continue
+        if str(candidate.get("root_topic_id") or "") != root_topic_id:
+            continue
+        if str(candidate.get("evidence_source") or "") != "existing_tree":
+            continue
+        if not clean_topic_label(candidate.get("label_he")):
+            continue
+        seen.add(candidate_id)
+        out.append(candidate)
+    out.sort(key=lambda row: float(row.get("confidence_hint") or 0.0), reverse=True)
+    return out[:6]
+
+
+def _call_child_only_dictalm(
+    *,
+    item: dict[str, Any],
+    assignment: dict[str, Any],
+    candidate_child_choices: list[dict[str, Any]],
+    model: str,
+    base_url: str,
+    timeout_seconds: float,
+    model_call_dir: Path | None = None,
+) -> dict[str, Any]:
+    unit_id = str(assignment.get("structure_unit_id") or item.get("structure_unit_id") or "")
+    root_topic_id = str(assignment.get("root_topic_id") or "")
+    root_label = str(assignment.get("root_label_he") or root_label_for_id(root_topic_id) or "")
+    request_payload = {
+        "task": "pdf_first_v4_child_only_topic_selection",
+        "requirements": [
+            "Return strict JSON only with key decisions.",
+            "Return exactly one decision for the provided structure_unit_id.",
+            "The root is fixed. Do not change root_topic_id or classify another root.",
+            "Choose child_choice_id only by copying an exact candidate_child_id from candidate_child_choices, or return null.",
+            "Do not invent, translate, rename, paraphrase, or compose child labels.",
+            "Choose a child only when the current item evidence is about that reusable child topic, not merely mentioning one token from an example.",
+            "If no candidate is clearly supported by the evidence, set child_choice_id null.",
+            "If the row is a fragment, vote/result, dialogue-only text, or otherwise not a topic, set child_choice_id null.",
+            "Never use נושא כללי.",
+        ],
+        "schema": {
+            "decisions": [
+                {
+                    "structure_unit_id": "string",
+                    "fixed_root_topic_id": "string",
+                    "child_choice_id": "string|null",
+                    "confidence": 0.0,
+                    "rationale_he": "string",
+                }
+            ]
+        },
+        "structure_unit_id": unit_id,
+        "fixed_root_topic_id": root_topic_id,
+        "fixed_root_label_he": root_label,
+        "item": _child_only_item_prompt(item=item, assignment=assignment),
+        "candidate_child_choices": _candidate_child_choices_for_prompt(candidate_child_choices),
+    }
+    body = {
+        "model": model,
+        "stream": False,
+        "think": False,
+        "format": "json",
+        "messages": [
+            {"role": "system", "content": "/no_think\nYou are a Hebrew municipal child-topic judge. The root is fixed. Return JSON only."},
+            {"role": "user", "content": json.dumps(request_payload, ensure_ascii=False)},
+        ],
+        "options": {"temperature": 0.0, "num_predict": 768},
+        "keep_alive": "30m",
+    }
+    call_context = {"fixed_root_topic_id": root_topic_id, "child_choice_count": len(candidate_child_choices)}
+    call_id = _model_call_id(step="step4_v4_child_only_topic_selection", ids=[unit_id], body=body, call_context=call_context)
+    call_record = _dicta_call_record(call_id=call_id, step="step4_v4_child_only_topic_selection", model=model, base_url=base_url, request_payload=request_payload, request_body=body, item_ids=[unit_id], call_context=call_context)
+    _write_dicta_call_record(model_call_dir=model_call_dir, record=call_record)
+    try:
+        with httpx.Client(timeout=httpx.Timeout(timeout_seconds, connect=10.0, read=timeout_seconds, write=30.0, pool=10.0)) as client:
+            response = client.post(f"{base_url}/api/chat", json=body)
+            response.raise_for_status()
+            raw_payload = response.json()
+    except Exception as exc:  # noqa: BLE001
+        call_record["dicta"] = {"status": "error", "error_code": "CHILD_MODEL_REQUEST_FAILED", "error_text": f"{exc.__class__.__name__}:{exc}", "raw_payload": None}
+        _write_dicta_call_record(model_call_dir=model_call_dir, record=call_record)
+        return {"error_code": "CHILD_MODEL_REQUEST_FAILED", "error_text": f"{exc.__class__.__name__}:{exc}", "raw_payload": None}
+    parsed = _parse_json_content(str(((raw_payload.get("message") or {}).get("content")) or ""))
+    if not isinstance(parsed, dict):
+        call_record["dicta"] = {"status": "error", "error_code": "CHILD_MODEL_INVALID_JSON", "error_text": str(raw_payload)[:500], "raw_payload": raw_payload, "parsed_response": None}
+        _write_dicta_call_record(model_call_dir=model_call_dir, record=call_record)
+        return {"error_code": "CHILD_MODEL_INVALID_JSON", "error_text": str(raw_payload)[:500], "raw_payload": raw_payload}
+    call_record["dicta"] = {"status": "ok", "raw_payload": raw_payload, "parsed_response": parsed}
+    _write_dicta_call_record(model_call_dir=model_call_dir, record=call_record)
+    parsed["raw_payload"] = raw_payload
+    return parsed
+
+
+def _child_only_item_prompt(*, item: dict[str, Any], assignment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "structure_unit_id": item.get("structure_unit_id"),
+        "row_type": assignment.get("row_type") or item.get("row_type"),
+        "structural_role": item.get("structural_role"),
+        "topic_identification_context": item.get("topic_identification_context"),
+        "topic_headline_he": item.get("topic_headline_he"),
+        "topic_subject_he": assignment.get("topic_subject_he") or item.get("topic_subject_he"),
+        "raw_text": item.get("raw_text"),
+        "explicit_actions": item.get("explicit_actions") or [],
+        "topic_supporting_quote_he": assignment.get("topic_supporting_quote_he"),
+    }
+
+
+def _child_only_decision_from_response(*, response: dict[str, Any], structure_unit_id: str) -> dict[str, Any] | None:
+    decisions = response.get("decisions") if isinstance(response.get("decisions"), list) else []
+    for decision in decisions:
+        if isinstance(decision, dict) and str(decision.get("structure_unit_id") or "") == structure_unit_id:
+            return decision
+    if isinstance(response.get("decision"), dict):
+        return response["decision"]
+    if "child_choice_id" in response:
+        return response
+    return None
+
+
+def _assignment_with_child_only_decision(
+    *,
+    item: dict[str, Any],
+    assignment: dict[str, Any],
+    decision: dict[str, Any] | None,
+    candidate_child_choices: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    current = dict(assignment)
+    unit_id = str(current.get("structure_unit_id") or "")
+    if not isinstance(decision, dict):
+        return current, {"structure_unit_ids": [unit_id], "error_code": "CHILD_MODEL_OMITTED_UNIT", "error_text": "child-only model returned valid JSON but omitted the unit"}
+    choice_id = str(decision.get("child_choice_id") or "").strip()
+    if not choice_id:
+        current["child_only_dicta_decision"] = {"child_choice_id": None, "rationale_he": _compact(decision.get("rationale_he"))[:180]}
+        return current, None
+    candidate_by_id = {str(row.get("candidate_child_id") or ""): row for row in candidate_child_choices}
+    selected_candidate = candidate_by_id.get(choice_id)
+    if selected_candidate is None:
+        return current, {"structure_unit_ids": [unit_id], "error_code": "CHILD_MODEL_INVALID_CHOICE", "error_text": "child-only model returned a child_choice_id outside candidate_child_choices"}
+    root_topic_id = str(current.get("root_topic_id") or "")
+    if str(selected_candidate.get("root_topic_id") or "") != root_topic_id:
+        return current, {"structure_unit_ids": [unit_id], "error_code": "CHILD_MODEL_ROOT_MISMATCH", "error_text": "child-only model returned a child outside the fixed root"}
+    root_label = str(current.get("root_label_he") or root_label_for_id(root_topic_id) or "")
+    raw_child = clean_topic_label(selected_candidate.get("label_he"))
+    quote = str(current.get("topic_supporting_quote_he") or selected_candidate.get("evidence_quote_he") or item.get("raw_text") or "")
+    validation_evidence = _validation_evidence_text(item=item, quote=quote, selected_candidate=selected_candidate)
+    validation = validate_child_label(raw_label=raw_child, root_label_he=root_label, evidence_text=validation_evidence, selected_existing=True, structural_role=str(item.get("structural_role") or "")) if raw_child else None
+    resolved = resolve_child_topic_assignment(root_topic_id=root_topic_id, root_label_he=root_label, child_label_he=validation.cleaned_label if validation and validation.status == "active" else raw_child, evidence_text=validation_evidence, structural_role=str(item.get("structural_role") or ""), selected_existing=True)
+    if str(resolved.get("root_topic_id") or "") != root_topic_id:
+        return current, {"structure_unit_ids": [unit_id], "error_code": "CHILD_MODEL_RESOLVED_ROOT_MISMATCH", "error_text": "child-only child resolution would change the fixed root"}
+    child_label = resolved.get("child_label_he")
+    if not child_label or str(resolved.get("status") or "") != "active":
+        return current, {"structure_unit_ids": [unit_id], "error_code": "CHILD_MODEL_REJECTED_LABEL", "error_text": str(resolved.get("reason") or (validation.reason if validation else "child label rejected"))}
+    current["child_topic_id"] = child_topic_id(root_topic_id, child_label)
+    current["child_label_he"] = child_label
+    current["raw_child_label_he"] = raw_child
+    current["topic_node_status"] = "active"
+    current["topic_reject_reason"] = None
+    current["topic_aliases_he"] = _dedupe_strings([*(current.get("topic_aliases_he") or []), *(resolved.get("aliases_he") or []), *(selected_candidate.get("aliases_he") or [])])
+    current["topic_assignment_route"] = f"{current.get('topic_assignment_route') or 'unknown'}:child_only_dicta:{selected_candidate.get('evidence_source') or 'existing_tree'}"
+    current["child_only_dicta_decision"] = {
+        "child_choice_id": choice_id,
+        "confidence": _confidence(decision.get("confidence")),
+        "rationale_he": _compact(decision.get("rationale_he"))[:180],
+    }
+    return current, None
 
 
 def _load_cached_assignment(*, checkpoint_dir: Path, item: dict[str, Any], model: str) -> dict[str, Any] | None:
@@ -638,25 +921,16 @@ def _assignment_from_parsed(*, item: dict[str, Any], parsed: dict[str, Any] | No
         root_topic_id = fallback_root_topic_id if fallback_root_topic_id in ROOT_BY_ID else "root_agenda_queries"
         root_adjudication = {**root_adjudication, "root_topic_id": root_topic_id, "decision": f"{root_adjudication.get('decision') or 'root_adjudication'}:invalid_root_fallback"}
     root_label = root_label_for_id(root_topic_id) or ""
+    conservative_review = _dicta_assignment_conservative_review_reason(item=item, root_adjudication=root_adjudication)
+    if conservative_review:
+        return _review_assignment(item=item, root_topic_id=root_topic_id, root_label=root_label, reason=conservative_review)
     quote = _grounded_quote(item=item, parsed_quote=_compact(parsed.get("topic_supporting_quote_he")), fallback_text=text)
-    candidate_by_id = {str(row.get("candidate_child_id") or ""): row for row in item.get("candidate_child_topics") or []}
-    selected_candidate = candidate_by_id.get(str(parsed.get("child_choice_id") or ""))
+    # Root Dicta is intentionally not trusted for child selection. Child labels
+    # are attached only by deterministic same-root candidates or the post-root
+    # child-only judge, so a child can never change the root chosen above.
+    selected_candidate = None
     selected_candidate_matched_by_label = False
-    raw_child = clean_topic_label(_strip_attribution_tail((selected_candidate or {}).get("label_he") or parsed.get("child_label_he")))
-    if selected_candidate is None and raw_child:
-        selected_candidate = _matching_candidate_by_label(item=item, root_topic_id=root_topic_id, label=raw_child)
-        selected_candidate_matched_by_label = selected_candidate is not None
-    if selected_candidate and str(selected_candidate.get("root_topic_id") or "") in ROOT_BY_ID:
-        candidate_root_topic_id = str(selected_candidate.get("root_topic_id"))
-        if root_adjudication.get("policy_id") and candidate_root_topic_id != root_topic_id:
-            selected_candidate = None
-            raw_child = None
-        else:
-            root_topic_id = candidate_root_topic_id
-            root_label = root_label_for_id(root_topic_id) or root_label
-            root_adjudication = {**root_adjudication, "root_topic_id": root_topic_id, "decision": f"{root_adjudication.get('decision') or 'root_adjudication'}:child_candidate_root"}
-    elif _is_protocol_item(item):
-        raw_child = None
+    raw_child = None
     validation_evidence = _validation_evidence_text(item=item, quote=quote, selected_candidate=selected_candidate)
     validation = validate_child_label(raw_label=raw_child, root_label_he=root_label, evidence_text=validation_evidence, selected_existing=bool(selected_candidate), structural_role=str(item.get("structural_role") or "")) if raw_child else None
     if validation is None:
@@ -664,7 +938,7 @@ def _assignment_from_parsed(*, item: dict[str, Any], parsed: dict[str, Any] | No
         raw_child = clean_topic_label((selected_candidate or {}).get("label_he"))
         validation_evidence = _validation_evidence_text(item=item, quote=quote, selected_candidate=selected_candidate)
         validation = validate_child_label(raw_label=raw_child, root_label_he=root_label, evidence_text=validation_evidence, selected_existing=bool(selected_candidate), structural_role=str(item.get("structural_role") or "")) if raw_child else None
-    resolved = resolve_child_topic_assignment(root_topic_id=root_topic_id, root_label_he=root_label, child_label_he=validation.cleaned_label if validation and validation.status == "active" else raw_child, evidence_text=validation_evidence, structural_role=str(item.get("structural_role") or ""))
+    resolved = resolve_child_topic_assignment(root_topic_id=root_topic_id, root_label_he=root_label, child_label_he=validation.cleaned_label if validation and validation.status == "active" else raw_child, evidence_text=validation_evidence, structural_role=str(item.get("structural_role") or ""), selected_existing=bool(selected_candidate))
     root_topic_id = str(resolved["root_topic_id"])
     root_label = str(resolved["root_label_he"])
     if root_topic_id != str(root_adjudication.get("root_topic_id") or ""):
@@ -712,6 +986,13 @@ def _assignment_from_parsed(*, item: dict[str, Any], parsed: dict[str, Any] | No
 def _adjudicate_assignment_root(*, item: dict[str, Any], parsed: dict[str, Any], subject: str, dicta_root_topic_id: str | None, fallback_root_topic_id: str | None) -> dict[str, Any]:
     adjudication = adjudicate_root_topic(subject=subject, dicta_root_topic_id=dicta_root_topic_id, fallback_root_topic_id=fallback_root_topic_id)
     policy_matches = item.get("topic_policy_matches") or topic_policy_matches(subject, limit=3)
+    governance_root = _committee_governance_root_override(subject=subject, item=item, adjudication=adjudication, dicta_root_topic_id=dicta_root_topic_id, fallback_root_topic_id=fallback_root_topic_id)
+    if governance_root:
+        adjudication = {
+            **adjudication,
+            "root_topic_id": governance_root,
+            "decision": f"{adjudication.get('decision') or 'root_adjudicated'}:committee_governance_override",
+        }
     first_item_policy = policy_matches[0] if policy_matches else None
     if first_item_policy and not adjudication.get("policy_id"):
         policy_root = str(first_item_policy.get("root_topic_id") or "")
@@ -732,6 +1013,69 @@ def _adjudicate_assignment_root(*, item: dict[str, Any], parsed: dict[str, Any],
         "adjudicated_root_label_he": root_label_for_id(str(adjudication.get("root_topic_id") or "")),
         "policy_matches": policy_matches,
     }
+
+
+def _dicta_assignment_conservative_review_reason(*, item: dict[str, Any], root_adjudication: dict[str, Any]) -> str | None:
+    if not _is_protocol_item(item) or not bool(item.get("is_topic_bearing")):
+        return None
+    if root_adjudication.get("policy_id"):
+        return None
+    if "committee_governance_override" in str(root_adjudication.get("decision") or ""):
+        return None
+    decision = item.get("deterministic_topic_decision") if isinstance(item.get("deterministic_topic_decision"), dict) else {}
+    if not bool(decision.get("needs_dicta")):
+        return None
+    reason = str(decision.get("reason") or "ambiguous_candidate")
+    if reason not in {"ambiguous_candidates", "weak_candidate"}:
+        return None
+    return f"dicta_conservative_review:{reason}"
+
+
+def _committee_governance_root_override(*, subject: str, item: dict[str, Any], adjudication: dict[str, Any], dicta_root_topic_id: str | None, fallback_root_topic_id: str | None) -> str | None:
+    current_root = str(adjudication.get("root_topic_id") or "")
+    if current_root != "root_agreements":
+        return None
+    if fallback_root_topic_id != "root_administration" and not _root_candidate_has_admin_tie(item):
+        return None
+    text = _norm(_join_unique([subject, item.get("topic_headline_he"), item.get("topic_identification_context")]))
+    if not text:
+        return None
+    committee_terms = ("ועדה", "וועדה", "ועדת", "וועדת", "ועדות", "דירקטוריון", "דירקטוריונים", "מועצה", "מליאה")
+    governance_terms = ("מינוי", "מינויים", "ממנה", "שינוי", "שינויים", "הרכב", "כהונה", "חבר", "חברים", "נציג", "נציגים")
+    if not any(term in text for term in committee_terms) or not any(term in text for term in governance_terms):
+        return None
+    procurement_action_terms = (
+        "מכרז פומבי",
+        "ביטול מכרז",
+        "אישור מכרז",
+        "פרסום מכרז",
+        "תוצאות מכרז",
+        "זוכה",
+        "זוכים",
+        "התקשרות עם",
+        "אישור התקשרות",
+        "אישור התקשרויות",
+        "הסכם",
+        "חוזה",
+        "פטור ממכרז",
+        "ספק",
+        "ספקים",
+    )
+    if any(term in text for term in procurement_action_terms):
+        return None
+    return "root_administration"
+
+
+def _root_candidate_has_admin_tie(item: dict[str, Any]) -> bool:
+    scores: dict[str, float] = {}
+    for candidate in item.get("root_topic_candidates") or []:
+        root_topic_id = str(candidate.get("root_topic_id") or "")
+        if root_topic_id not in {"root_agreements", "root_administration"}:
+            continue
+        scores[root_topic_id] = max(scores.get(root_topic_id, 0.0), float(candidate.get("score") or 0.0))
+    admin_score = scores.get("root_administration", 0.0)
+    agreements_score = scores.get("root_agreements", 0.0)
+    return admin_score >= 0.72 and agreements_score >= 0.72 and abs(admin_score - agreements_score) <= 0.12
 
 
 def _parsed_declares_non_topic(parsed: dict[str, Any]) -> bool:
@@ -935,6 +1279,9 @@ def _fallback_assignment(item: dict[str, Any], *, reason: str) -> dict[str, Any]
     topic_text = _topic_basis_text(item)
     if _non_topic_protocol_reason(headline=topic_text, raw_text=_shape_guard_raw_text(item=item, topic_text=topic_text, fallback_text=text), structural_role=str(item.get("structural_role") or ""), packet_role=str((item.get("document_context") or {}).get("packet_role") or "")):
         return _non_topic_assignment(item, reason=f"fallback_{reason}_non_topic")
+    candidate_review = _candidate_review_for_omitted_model(item=item, reason=reason)
+    if candidate_review:
+        return candidate_review
     fallback_root_topic_id = infer_root_topic_id(topic_text or text)
     if _is_protocol_item(item) and bool(item.get("is_topic_bearing")) and fallback_root_topic_id == "root_agenda_queries":
         recovered_root = _recover_root_only_topic(item=item, parsed={}, subject=topic_text or text, fallback_root_topic_id=fallback_root_topic_id)
@@ -958,7 +1305,7 @@ def _fallback_assignment(item: dict[str, Any], *, reason: str) -> dict[str, Any]
         candidate, candidate_route = derive_child_candidate(text=text, outline_title_he=str(item.get("outline_title_he") or ""))
     validation_evidence = _validation_evidence_text(item=item, quote=text[:500], selected_candidate=best_candidate)
     validation = validate_child_label(raw_label=candidate, root_label_he=root_label, evidence_text=validation_evidence, structural_role=str(item.get("structural_role") or "")) if candidate else None
-    resolved = resolve_child_topic_assignment(root_topic_id=root_topic_id, root_label_he=root_label, child_label_he=validation.cleaned_label if validation and validation.status == "active" else candidate, evidence_text=validation_evidence, structural_role=str(item.get("structural_role") or ""))
+    resolved = resolve_child_topic_assignment(root_topic_id=root_topic_id, root_label_he=root_label, child_label_he=validation.cleaned_label if validation and validation.status == "active" else candidate, evidence_text=validation_evidence, structural_role=str(item.get("structural_role") or ""), selected_existing=bool(best_candidate))
     root_topic_id = str(resolved["root_topic_id"])
     root_label = str(resolved["root_label_he"])
     child_label = resolved.get("child_label_he")
@@ -974,6 +1321,24 @@ def _fallback_assignment(item: dict[str, Any], *, reason: str) -> dict[str, Any]
 
 def _review_assignment(*, item: dict[str, Any], root_topic_id: str, root_label: str, reason: str) -> dict[str, Any]:
     return _assignment_payload(item=item, root_topic_id=root_topic_id, root_label=root_label, child_label=None, raw_child_label=None, status="candidate", reject_reason=f"non_blocking_topic_review:{reason}", aliases=[], confidence=0.25, quote=str(item.get("raw_text") or "")[:500], route=f"deterministic_v4_candidate_review:{reason}", rationale_he="topic assignment is imported as a candidate instead of blocking the protocol")
+
+
+def _candidate_review_for_omitted_model(*, item: dict[str, Any], reason: str) -> dict[str, Any] | None:
+    if reason not in {"model_omitted_unit", "model_error", "missing_after_retry"} or not _is_protocol_item(item) or not bool(item.get("is_topic_bearing")):
+        return None
+    decision = item.get("deterministic_topic_decision") if isinstance(item.get("deterministic_topic_decision"), dict) else {}
+    if not bool(decision.get("needs_dicta")):
+        return None
+    root_topic_id = str(decision.get("root_topic_id") or "")
+    if root_topic_id not in ROOT_BY_ID:
+        candidates = item.get("root_topic_candidates") if isinstance(item.get("root_topic_candidates"), list) else []
+        first_candidate = candidates[0] if candidates and isinstance(candidates[0], dict) else {}
+        root_topic_id = str(first_candidate.get("root_topic_id") or "")
+    if root_topic_id not in ROOT_BY_ID:
+        return None
+    root_label = root_label_for_id(root_topic_id) or ""
+    review_reason = f"{reason}:{decision.get('reason') or 'ambiguous_candidate'}"
+    return _review_assignment(item=item, root_topic_id=root_topic_id, root_label=root_label, reason=review_reason)
 
 
 def _fallback_requires_review(*, item: dict[str, Any], root_topic_id: str, reason: str) -> bool:
@@ -1007,18 +1372,24 @@ def _assignment_from_candidate_finder(item: dict[str, Any]) -> dict[str, Any]:
     if root_topic_id not in ROOT_BY_ID:
         root_topic_id = infer_root_topic_id(topic_text or text)
     root_label = root_label_for_id(root_topic_id) or ""
+    policy_block_reason = _policy_autoselect_block_reason(item=item, decision=decision)
+    if policy_block_reason:
+        return _non_topic_assignment(item, reason=policy_block_reason)
     candidate_by_id = {str(row.get("candidate_child_id") or ""): row for row in item.get("candidate_child_topics") or []}
     selected_candidate = candidate_by_id.get(str(decision.get("child_choice_id") or ""))
     raw_child = clean_topic_label((selected_candidate or {}).get("label_he") or decision.get("child_label_he"))
     if selected_candidate is None and raw_child:
         selected_candidate = _matching_candidate_by_label(item=item, root_topic_id=root_topic_id, label=raw_child)
+    if selected_candidate is None and not raw_child:
+        selected_candidate = _best_high_confidence_candidate(item=item, root_topic_id=root_topic_id)
+        raw_child = clean_topic_label((selected_candidate or {}).get("label_he"))
     if selected_candidate and str(selected_candidate.get("root_topic_id") or "") in ROOT_BY_ID:
         root_topic_id = str(selected_candidate.get("root_topic_id"))
         root_label = root_label_for_id(root_topic_id) or root_label
     quote = _grounded_quote(item=item, parsed_quote=str((selected_candidate or {}).get("evidence_quote_he") or ""), fallback_text=text)
     validation_evidence = _validation_evidence_text(item=item, quote=quote, selected_candidate=selected_candidate)
     validation = validate_child_label(raw_label=raw_child, root_label_he=root_label, evidence_text=validation_evidence, selected_existing=bool(selected_candidate), structural_role=str(item.get("structural_role") or "")) if raw_child else None
-    resolved = resolve_child_topic_assignment(root_topic_id=root_topic_id, root_label_he=root_label, child_label_he=validation.cleaned_label if validation and validation.status == "active" else raw_child, evidence_text=validation_evidence, structural_role=str(item.get("structural_role") or ""))
+    resolved = resolve_child_topic_assignment(root_topic_id=root_topic_id, root_label_he=root_label, child_label_he=validation.cleaned_label if validation and validation.status == "active" else raw_child, evidence_text=validation_evidence, structural_role=str(item.get("structural_role") or ""), selected_existing=bool(selected_candidate))
     root_topic_id = str(resolved["root_topic_id"])
     root_label = str(resolved["root_label_he"])
     child_label = resolved.get("child_label_he")
@@ -1041,6 +1412,34 @@ def _assignment_from_candidate_finder(item: dict[str, Any]) -> dict[str, Any]:
         route = f"{route}:{resolved.get('route_suffix')}"
     aliases = _dedupe_strings([*(resolved.get("aliases_he") or []), *(((selected_candidate or {}).get("aliases_he") or []) if selected_candidate else [])])
     return _assignment_payload(item=item, root_topic_id=root_topic_id, root_label=root_label, child_label=child_label, raw_child_label=raw_child, status=status, reject_reason=reject_reason, aliases=aliases, confidence=_confidence(decision.get("confidence")), quote=quote, route=route, rationale_he="deterministic topic-tree candidate finder selected a high-confidence existing topic", root_adjudication=root_adjudication)
+
+
+def _policy_autoselect_block_reason(*, item: dict[str, Any], decision: dict[str, Any]) -> str | None:
+    if not _is_protocol_item(item) or str(decision.get("reason") or "") != "strong_policy_match":
+        return None
+    text = _topic_basis_text(item)
+    normalized = _norm(text)
+    if not normalized:
+        return "policy_match_without_topic_subject"
+    if _looks_like_policy_dialogue_fragment(normalized):
+        return "policy_match_inside_dialogue_fragment"
+    return None
+
+
+def _looks_like_policy_dialogue_fragment(normalized: str) -> bool:
+    dialogue_or_uncertainty = [
+        "אם צריך",
+        "אולי לא צריך",
+        "איך אנחנו",
+        "קיבלת תשובה",
+        "זה לא עובד",
+        "אני שואל",
+        "כדי לדעת",
+    ]
+    if not any(cue in normalized for cue in dialogue_or_uncertainty):
+        return False
+    substantive_actions = ["אישור", "הסכם", "מינוי", "הקצאה", "תיקון", "חוק עזר", "תכנית", "תוכנית", "תב ר", "תבר", "פטור", "הנחה"]
+    return not any(action in normalized for action in substantive_actions)
 
 
 def _candidate_review_assignment(*, item: dict[str, Any], reason: str) -> dict[str, Any]:
@@ -1169,6 +1568,8 @@ def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label:
             is_topic_bearing = False
             row_type = "fragment"
             topic_subject = None
+            child_label = None
+            raw_child_label = None
             reject_reason = reject_reason or f"topic_subject_rejected:{canonical_reason or 'no_canonical_label'}"
             route = f"{route}:topic_subject_rejected"
     child_id = child_topic_id(root_topic_id, child_label) if child_label else None
@@ -1725,7 +2126,7 @@ def _looks_like_order_proposal_intro_only(text: str) -> bool:
     if _speaker_marker_re().search(compact):
         return True
     tokens = _hebrew_tokens(normalized)
-    speech_cues = ["אני", "אנחנו", "אגיד", "אומר", "מבקש", "את צודקת", "בהמשך של זה", "הוא באמת"]
+    speech_cues = ["אני", "אנחנו", "אגיד", "אומר", "מבקש", "את צודקת", "בהמשך של זה", "הוא באמת", "קיבלת תשובה", "זה לא עובד"]
     return len(tokens) <= 9 and (normalized in {"הצעה לסדר", "הצעה לסדר היום"} or any(cue in normalized for cue in speech_cues))
 
 
@@ -1893,10 +2294,18 @@ def _looks_like_vote_fragment(text: str) -> bool:
 
 def _split_headline_contract(headline: str) -> tuple[str | None, str, str | None]:
     attribution = _extract_attribution(headline)
+    raw_text = re.sub(r"\bבנו\s+[\"'׳״]?שא[\"'׳״]?\b", "בנושא", _compact(headline))
+    raw_attributed_subject = _subject_after_carrier_attribution_separator(raw_text)
+    if raw_attributed_subject:
+        carrier, subject = raw_attributed_subject
+        return carrier, subject, attribution
     text = _clean_heading(headline)
     text = re.sub(r"\bבנו\s+[\"'׳״]?שא[\"'׳״]?\b", "בנושא", text)
     if attribution:
         text = _strip_attribution_tail(text)
+    attributed_subject = _subject_after_attribution_separator(text)
+    if attributed_subject:
+        return None, attributed_subject, attribution
     patterns = [
         (r"^(שאילת[אה]|שאילתה)\s+של\b.{0,120}?\s*בנושא\s+(.+)$", "שאילתה"),
         (r"^(שאילת[אה]|שאילתה)\s+של\b.{0,120}?[\"'׳״]\s*(.{4,220})$", "שאילתה"),
@@ -1921,6 +2330,76 @@ def _split_headline_contract(headline: str) -> tuple[str | None, str, str | None
     if numbered:
         return None, _clean_topic_subject(numbered.group(1)), attribution
     return None, _clean_topic_subject(text), attribution
+
+
+def _subject_after_carrier_attribution_separator(text: str) -> tuple[str, str] | None:
+    compact = _compact(text)
+    if not compact:
+        return None
+    carrier_pattern = r"(?P<carrier>שאילת[אה]|שאילתה|הצעה\s+לסדר(?:\s+היום)?|נושא\s+לדיון)"
+    match = re.search(rf"^{carrier_pattern}\s*[:\-–]?\s*(?P<left>.{{0,180}}?)\s+[-–]\s+(?P<right>.{{4,220}})$", compact)
+    if not match:
+        return None
+    left = _compact(match.group("left"))
+    right = _clean_topic_subject(match.group("right"))
+    if not right or not _is_substantive_topic_subject(right):
+        return None
+    if left and not _looks_like_person_attribution_segment(left):
+        return None
+    return _carrier_label(match.group("carrier")), right
+
+
+def _subject_after_attribution_separator(text: str) -> str | None:
+    compact = _compact(text)
+    if not compact or not re.search(r"\s[-–]\s", compact):
+        return None
+    left, right = re.split(r"\s[-–]\s", compact, maxsplit=1)
+    left = _compact(left)
+    right = _clean_topic_subject(right)
+    if not right or not _is_substantive_topic_subject(right):
+        return None
+    if not _looks_like_person_attribution_segment(left):
+        return None
+    return right
+
+
+def _carrier_label(value: str) -> str:
+    normalized = _norm(value)
+    if "הצעה לסדר" in normalized:
+        return "הצעה לסדר"
+    if "נושא לדיון" in normalized:
+        return "נושא לדיון"
+    return "שאילתה"
+
+
+def _looks_like_person_attribution_segment(value: str) -> bool:
+    text = _compact(value).strip(" :,-–")
+    if not text:
+        return True
+    role_terms = (
+        "חבר מועצה",
+        "חבר המועצה",
+        "חברת מועצה",
+        "חברת המועצה",
+        "חברי מועצה",
+        "חברי המועצה",
+        "ראש העיר",
+        "סגן ראש העיר",
+        "סגנית ראש העיר",
+        "יו\"ר",
+        "יור",
+        "מר ",
+        "גב'",
+        "גברת",
+        "עו\"ד",
+        "ד\"ר",
+        "פרופ",
+    )
+    if any(term in text for term in role_terms):
+        return True
+    tokens = [token for token in _hebrew_tokens(text) if len(token) >= 2]
+    substantive_terms = ("תקציב", "הסכם", "מכרז", "מינוי", "חינוך", "רווחה", "בנייה", "בניה", "תכנון", "תחבורה", "מפונים")
+    return len(tokens) <= 3 and not any(term in text for term in substantive_terms)
 
 
 def _clean_topic_subject(value: str) -> str:
@@ -2609,7 +3088,9 @@ def _candidate_child_topics(
     local_support_text = "\n".join([text, outline_title, "\n".join(explicit_actions)]) if packet_role == "protocol" else "\n".join([evidence_text, outline_title, "\n".join(explicit_actions)])
     if packet_role == "protocol" and _looks_like_protocol_listing(local_support_text):
         return []
-    rows = _tree_child_candidates(topic_tree=topic_tree, text="\n".join([text, outline_title]), referenced_attachment_contexts=referenced_attachment_contexts)
+    child_match_text = "\n".join([text, outline_title])
+    rows = _tree_child_candidates(topic_tree=topic_tree, text=child_match_text, referenced_attachment_contexts=referenced_attachment_contexts)
+    rows.extend(_semantic_child_facet_candidates(topic_tree=topic_tree, text=child_match_text))
     rows.extend(_locally_supported_document_candidates(candidates=document_child_candidates, local_text=local_support_text, document_context=document_context))
     for label, source, quote in _raw_candidate_labels(text="\n".join([text, outline_title]), explicit_actions=explicit_actions, document_context=document_context):
         if packet_role == "protocol" and source not in {"heading", "explicit_action", "subject_heading", "question_subject", "filename_supported"}:
@@ -2651,6 +3132,61 @@ def _tree_child_candidates(*, topic_tree: dict[str, Any], text: str, referenced_
             if candidate:
                 rows.append(candidate)
     return rows
+
+
+def _semantic_child_facet_candidates(*, topic_tree: dict[str, Any], text: str) -> list[dict[str, Any]]:
+    """Return existing child nodes matched by reusable action/object facets.
+
+    These are closed-list candidates: the helper never invents labels, it only
+    selects child nodes already present in the tree when the agenda text carries
+    a generic municipal action signal such as tender, exemption, TBR, or emergency
+    readiness.
+    """
+
+    compact = _compact(text)
+    normalized = _norm(compact)
+    if not normalized:
+        return []
+    rows: list[dict[str, Any]] = []
+    for root_id, labels, required, blocked, confidence in _semantic_child_facet_rules():
+        if any(term in normalized for term in blocked):
+            continue
+        if not all(any(term in normalized for term in group) for group in required):
+            continue
+        for label in labels:
+            candidate = _existing_child_candidate_by_label(topic_tree=topic_tree, root_topic_id=root_id, label=label, evidence_quote=compact[:500], confidence_hint=confidence)
+            if candidate:
+                candidate["evidence_source"] = "existing_tree"
+                candidate["match_reason"] = "semantic_child_facet"
+                rows.append(candidate)
+                break
+    return rows
+
+
+def _semantic_child_facet_rules() -> tuple[tuple[str, tuple[str, ...], tuple[tuple[str, ...], ...], tuple[str, ...], float], ...]:
+    return (
+        ("root_budget_finance", ("הנחות ופטורים",), (("פטור", "פטורים", "הנחה", "הנחות", "לא ישולם", "לא תשולם", "אי גבייה", "אי-גבייה"),), (), 0.88),
+        ("root_budget_finance", ("אגרות והיטלים",), (("אגרה", "אגרות", "היטל", "היטלים", "תעריף", "תעריפים"),), ("פטור", "הנחה", "לא ישולם", "לא תשולם"), 0.82),
+        ("root_budget_finance", ("מימון פרויקטים עירוניים",), (("תב ר", "תבר", "תב\"ר", "קרן", "פרויקט", "פרויקטים"),), (), 0.84),
+        ("root_budget_finance", ("תקצוב שירותים עירוניים",), (("תקציב", "עתודה", "עתודת", "סעיף תקציבי", "העברות תקציב"),), ("תבר", "תב ר", "תב\"ר", "פטור", "הנחה", "היטל", "אגרה"), 0.8),
+        ("root_agreements", ("מכרזים והתקשרויות",), (("מכרז", "מכרזים", "התקשרות", "התקשרויות", "זוכה", "פטור ממכרז"),), (), 0.86),
+        ("root_security_enforcement", ("מוכנות לחירום",), (("מיגון", "חירום", "מקלט", "פיקוד העורף", "מלח", "מל ח", "מל\"ח"),), (), 0.84),
+        ("root_education", ("מוסדות חינוך",), (("גן", "גני ילדים", "בית ספר", "בתי ספר", "מוסד חינוך", "מוסדות חינוך"),), (), 0.86),
+    )
+
+
+def _existing_child_candidate_by_label(*, topic_tree: dict[str, Any], root_topic_id: str, label: str, evidence_quote: str, confidence_hint: float) -> dict[str, Any] | None:
+    label_norm = _norm(label)
+    for root in topic_tree.get("root_topics") or topic_tree.get("roots") or []:
+        if str(root.get("root_topic_id") or "") != root_topic_id:
+            continue
+        root_label = str(root.get("root_label_he") or root_label_for_id(root_topic_id) or "")
+        for child in root.get("children") or []:
+            child_label = _compact(child.get("child_label_he") or child.get("label_he"))
+            if _norm(child_label) != label_norm:
+                continue
+            return _existing_tree_candidate_row(root_topic_id=root_topic_id, root_label=root_label, child=child, label=child_label, evidence_quote=evidence_quote, confidence_hint=confidence_hint)
+    return None
 
 
 def _locally_supported_document_candidates(*, candidates: list[dict[str, Any]], local_text: str, document_context: dict[str, Any]) -> list[dict[str, Any]]:
