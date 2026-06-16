@@ -18,6 +18,7 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 
 ## Solution Principles
 - Prefer generic, reusable solutions over logic tailored to one document, municipality, or text pattern.
+- When planning or implementing, challenge the first non-generic solution instinct and prefer a more generic approach, even if it requires more planning, more execution time, additional model runs, or higher cost; explain the tradeoff clearly to the user.
 - Do not hardcode assumptions about protocol layout, terminology, metadata, or attachment structure.
 - Do not build solutions that depend on semantic-specific keywords or fixed wording; if this seems necessary, clearly notify the user and ask for permission before proceeding.
 - Add helpful comments when writing code, especially where intent, assumptions, or non-obvious behavior need clarification.
