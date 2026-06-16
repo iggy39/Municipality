@@ -269,6 +269,7 @@ def _build_item(*, unit: dict[str, Any], facts: list[dict[str, Any]], max_raw_ch
         "topic_anchor_quote_he": subject_scoped_anchor.get("topic_supporting_quote_he") if subject_scoped_anchor else None,
         "protocol_subject_he": document_context.get("protocol_subject_he"),
         "topic_carrier_mode": document_context.get("topic_carrier_mode"),
+        "unit_raw_text": raw_text,
         "raw_text": evidence_text[: max(250, int(max_raw_chars))],
         "explicit_actions": explicit_actions[:8],
         "accepted_entity_spans": [str(fact.get("canonical_raw_span") or "") for fact in facts[:16] if str(fact.get("canonical_raw_span") or "").strip()],
@@ -1444,6 +1445,8 @@ def _looks_like_policy_dialogue_fragment(normalized: str) -> bool:
 
 def _candidate_review_assignment(*, item: dict[str, Any], reason: str) -> dict[str, Any]:
     decision = item.get("deterministic_topic_decision") if isinstance(item.get("deterministic_topic_decision"), dict) else {}
+    if _unsupported_weak_candidate_decision(item=item, decision=decision):
+        return _non_topic_assignment(item, reason="unsupported_weak_candidate")
     text = str(item.get("raw_text") or "")
     topic_text = _topic_basis_text(item)
     root_topic_id = str(decision.get("root_topic_id") or infer_root_topic_id(topic_text or text))
@@ -1456,6 +1459,21 @@ def _candidate_review_assignment(*, item: dict[str, Any], reason: str) -> dict[s
     return _assignment_payload(item=item, root_topic_id=root_topic_id, root_label=root_label, child_label=None, raw_child_label=None, status="candidate", reject_reason=f"non_blocking_topic_review:{reason}:{decision.get('reason') or 'no_decision'}", aliases=[], confidence=min(0.71, max(0.25, _confidence(decision.get("confidence")))), quote=text[:500], route=f"deterministic_v4_candidate_review:{reason}:{decision.get('reason') or 'no_decision'}", rationale_he="ambiguous topic imported as candidate so protocol ingestion can continue", root_adjudication=_adjudicate_assignment_root(item=item, parsed={}, subject=topic_text or text, dicta_root_topic_id=None, fallback_root_topic_id=root_topic_id))
 
 
+def _unsupported_weak_candidate_decision(*, item: dict[str, Any], decision: dict[str, Any]) -> bool:
+    if str(decision.get("reason") or "") != "weak_candidate":
+        return False
+    if float(decision.get("confidence") or 0.0) >= 0.58:
+        return False
+    root_topic_id = str(decision.get("root_topic_id") or "")
+    candidates = [row for row in item.get("root_topic_candidates") or [] if isinstance(row, dict)]
+    selected = next((row for row in candidates if str(row.get("root_topic_id") or "") == root_topic_id), candidates[0] if candidates else {})
+    if str(selected.get("source") or "") in {"topic_policy", "existing_tree", "referenced_attachment"}:
+        return False
+    if selected.get("child_choice_id"):
+        return False
+    return not [str(term) for term in selected.get("matched_terms") or [] if str(term).strip()]
+
+
 def _skip_model_for_row_type(*, row_type: str, packet_role: str) -> bool:
     if packet_role != "protocol":
         return False
@@ -1466,12 +1484,17 @@ def _non_topic_assignment(item: dict[str, Any], *, reason: str | None = None) ->
     topic_text = _topic_basis_text(item)
     row_type = str(item.get("row_type") or "fragment")
     root_topic_id = infer_root_topic_id(topic_text) if topic_text and row_type == "vote_or_result" else "root_agenda_queries"
+    evidence_root = _strong_body_evidence_root(item, own_text_only=True) if _can_apply_non_topic_evidence_root(item=item, row_type=row_type, reason=reason) else None
+    if evidence_root:
+        root_topic_id = evidence_root
     root_label = root_label_for_id(root_topic_id) or root_label_for_id("root_agenda_queries") or ""
     selected_candidate = None
     child_label = None
     route = f"deterministic_v4_row_type:{row_type}"
     if reason:
         route = f"{route}:{reason}"
+    if evidence_root:
+        route = f"{route}:strong_body_evidence_root"
     return _assignment_payload(
         item=item,
         root_topic_id=root_topic_id,
@@ -1481,12 +1504,34 @@ def _non_topic_assignment(item: dict[str, Any], *, reason: str | None = None) ->
         status="active",
         reject_reason=None,
         aliases=list((selected_candidate or {}).get("aliases_he") or []),
-        confidence=0.5 if row_type == "vote_or_result" else 0.35,
+        confidence=0.55 if evidence_root else (0.5 if row_type == "vote_or_result" else 0.35),
         quote=str(item.get("raw_text") or "")[:500],
         route=route,
-        rationale_he="row type is not a standalone topic-bearing agenda subject",
+        rationale_he="row type is not a standalone topic-bearing agenda subject; strong body evidence supplies root context" if evidence_root else "row type is not a standalone topic-bearing agenda subject",
         parsed_contract={"is_topic_bearing": False, "topic_subject_he": None, "clean_subject_he": None},
     )
+
+
+def _can_apply_non_topic_evidence_root(*, item: dict[str, Any], row_type: str, reason: str | None) -> bool:
+    if not _is_protocol_item(item) or row_type not in {"container", "fragment", "attribution_fragment"}:
+        return False
+    return not _looks_like_long_protocol_transcript_fragment(item=item, reason=reason)
+
+
+def _looks_like_long_protocol_transcript_fragment(*, item: dict[str, Any], reason: str | None) -> bool:
+    text = _compact(item.get("unit_raw_text") or item.get("raw_text") or "")
+    if not text:
+        return False
+    if _looks_like_protocol_listing(text):
+        return True
+    if len(text) < 700 and len(_hebrew_tokens(text)) < 120:
+        return False
+    normalized = _norm(text)
+    speaker_markers = len(_speaker_marker_re().findall(text))
+    has_protocol_header = "פרוטוקול" in normalized and ("מתאריך" in normalized or "ישיבה מן המניין" in normalized or "ישיבות המועצה" in normalized)
+    if speaker_markers >= 2 or has_protocol_header:
+        return True
+    return reason in {"transcript_window_without_bounded_headline", "inherited_context_not_standalone_topic"} and speaker_markers >= 1
 
 
 def _assignment_requires_subject_review(*, item: dict[str, Any], root_topic_id: str, child_label: str | None) -> bool:
@@ -1506,8 +1551,9 @@ def _verified_body_root_override(*, item: dict[str, Any], root_topic_id: str, ro
     return evidence_root
 
 
-def _strong_body_evidence_root(item: dict[str, Any]) -> str | None:
-    text = _join_unique([item.get("topic_subject_he"), item.get("topic_headline_he"), item.get("raw_text")])
+def _strong_body_evidence_root(item: dict[str, Any], *, own_text_only: bool = False) -> str | None:
+    own_text = item.get("unit_raw_text") or item.get("raw_text")
+    text = str(own_text or "") if own_text_only else _join_unique([item.get("topic_subject_he"), item.get("topic_headline_he"), own_text])
     if not text:
         return None
     for match in topic_policy_matches(text, limit=3):
@@ -3213,7 +3259,7 @@ def _looks_like_protocol_listing(text: str) -> bool:
     numbered_items = len(re.findall(r"(?:^|\s)\d+(?:\.\d+)?\s*[.)]", compact))
     page_ref_mentions = len(re.findall(r"\(?\s*עמ", compact))
     dotted_suffix_items = len(re.findall(r"\.\d{1,2}(?=\s|[)'\"׳״]|$)", compact))
-    return bracketed_items >= 2 or (bracketed_items >= 1 and dot_leaders >= 1) or agenda_mentions >= 2 or numbered_items >= 3 or (page_ref_mentions >= 2 and dotted_suffix_items >= 2)
+    return bracketed_items >= 2 or (bracketed_items >= 1 and dot_leaders >= 1) or agenda_mentions >= 2 or numbered_items >= 3 or ("סדר הישיבה" in compact and page_ref_mentions >= 3) or (page_ref_mentions >= 2 and dotted_suffix_items >= 2)
 
 
 def _existing_tree_candidate_row(*, root_topic_id: str, root_label: str, child: dict[str, Any], label: str, evidence_quote: str, confidence_hint: float) -> dict[str, Any] | None:

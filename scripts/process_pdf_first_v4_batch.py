@@ -28,7 +28,7 @@ if str(SCRIPTS_ROOT) not in sys.path:
 from municipality.db import build_engine  # noqa: E402
 from municipality.migrations import apply_all  # noqa: E402
 from municipality.models import ArtifactSemanticLink, Document, DocumentVersion, RetrievalArtifact, SemanticAlias, SemanticNode  # noqa: E402
-from municipality.pdf_first_v4_topic_tree import alias_lines, current_tree_from_db, tree_lines  # noqa: E402
+from municipality.pdf_first_v4_topic_tree import alias_lines, current_tree_from_db, seed_curated_child_nodes, tree_lines  # noqa: E402
 from municipality.storage import RawStorage  # noqa: E402
 from process_pdf_first_batch import _register_pdf, _step1_quality, _text_from_pages, _upsert_extracted_document  # noqa: E402
 
@@ -219,6 +219,7 @@ def _source_site_id_for_docver(*, session: Session, docver_id: int) -> int:
 def _write_existing_tree_snapshot(*, session: Session, run_dir: Path, source_site_id: int) -> Path:
     path = run_dir / "pdf_first_pipeline" / "outputs" / "step4_v4_global_topic_assignment" / "existing_tree_before_step4.json"
     path.parent.mkdir(parents=True, exist_ok=True)
+    seed_curated_child_nodes(session, source_site_id=source_site_id)
     tree = current_tree_from_db(session, source_site_id=source_site_id, include_candidates=True, include_profiles=True)
     path.write_text(json.dumps(tree, ensure_ascii=False, indent=2), encoding="utf-8")
     return path

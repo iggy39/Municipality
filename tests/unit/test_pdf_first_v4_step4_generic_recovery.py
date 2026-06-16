@@ -638,6 +638,248 @@ def test_non_topic_vote_row_does_not_inherit_child_candidate() -> None:
     assert "inherited_candidate" not in row["topic_assignment_route"]
 
 
+def test_fragment_body_with_strong_parking_evidence_gets_transport_root_only() -> None:
+    row = step4._non_topic_assignment(
+        {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "fragment",
+            "structural_role": "body",
+            "topic_identification_context": "יש למנהלת אגף החנייה סמכות לחלוקת תווי חנייה",
+            "topic_headline_he": "",
+            "document_context": {"packet_role": "protocol"},
+            "raw_text": "יש למנהלת אגף החנייה סמכות, אבל זה לא בהתאם לנוהל; חלוקה של תווי חנייה בניגוד לנהלים עירוניים",
+        },
+        reason="body_without_headline_topic_provenance",
+    )
+
+    assert row["is_topic_bearing"] is False
+    assert row["root_topic_id"] == "root_transport_safety"
+    assert row["child_label_he"] is None
+    assert row["topic_assignment_confidence"] == 0.55
+    assert row["topic_assignment_route"].endswith("strong_body_evidence_root")
+
+
+def test_split_header_fragment_ignores_copied_action_evidence_for_root_override() -> None:
+    row = step4._non_topic_assignment(
+        {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "fragment",
+            "structural_role": "continuation",
+            "topic_identification_context": "ישיבת מועצה מספר 75",
+            "topic_headline_he": "",
+            "document_context": {"packet_role": "protocol"},
+            "unit_raw_text": "ישיבת מועצה מספר 75 מתאריך 31.8.2023",
+            "raw_text": "ישיבת מועצה מספר 75\nמאפשר חלוקה של תווי חנייה בניגוד לנהלים עירוניים",
+        },
+        reason="missing_topic_headline_provenance",
+    )
+
+    assert row["root_topic_id"] == "root_agenda_queries"
+    assert row["topic_assignment_confidence"] == 0.35
+    assert not row["topic_assignment_route"].endswith("strong_body_evidence_root")
+
+
+def test_non_topic_tender_report_row_gets_procurement_root_context() -> None:
+    row = step4._non_topic_assignment(
+        {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "fragment",
+            "structural_role": "continuation",
+            "document_context": {"packet_role": "protocol"},
+            "unit_raw_text": "דוח ועדה למסירת עבודות הפטורות ממכרז מישיבה מס 42",
+            "raw_text": "דוח ועדה למסירת עבודות הפטורות ממכרז מישיבה מס 42",
+        },
+        reason="transcript_window_without_bounded_headline",
+    )
+
+    assert row["root_topic_id"] == "root_agreements"
+    assert row["child_label_he"] is None
+    assert "strong_body_evidence_root" in row["topic_assignment_route"]
+
+
+def test_long_transcript_fragment_does_not_get_procurement_root_context() -> None:
+    transcript = " ".join(
+        [
+            "פרוטוקול ישיבות המועצה פרוטוקול ישיבה מן המניין מתאריך יט בחשון",
+            "מר כהן ראש העירייה שאל על בקשה לאישור ניהול משא ומתן עם ספקים פוטנציאליים לצורך התקשרות ללא מכרז",
+            "גב' לוי השיבה שהדיון נמשך והדוברים עברו לנושאים נוספים ללא כותרת עצמאית",
+        ]
+        * 9
+    )
+    row = step4._non_topic_assignment(
+        {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "fragment",
+            "structural_role": "body",
+            "document_context": {"packet_role": "protocol"},
+            "unit_raw_text": transcript,
+            "raw_text": transcript,
+        },
+        reason="body_without_headline_topic_provenance",
+    )
+
+    assert row["root_topic_id"] == "root_agenda_queries"
+    assert row["topic_assignment_confidence"] == 0.35
+    assert "strong_body_evidence_root" not in row["topic_assignment_route"]
+
+
+def test_protocol_agenda_listing_does_not_get_land_allocation_root_context() -> None:
+    listing = (
+        "פרוטוקול ישיבות המועצה העשרים ושתיים פרוטוקול ישיבה מן המניין "
+        "מתאריך ו' באדר תשפ\"ו סדר הישיבה שאילתות עמ 3 הצעות לסדר היום עמ 10 "
+        "פרוטוקול ועדת נכסים עמ 16 פרוטוקול ועדת הקצאת מקרקעין מס 9/26 עמ 17 "
+        "פרוטוקול ועדת כספים עמ 23 פרוטוקול ועדת תמיכות עמ 25 מינויים ושינויים בתאגידים"
+    )
+    row = step4._non_topic_assignment(
+        {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "fragment",
+            "structural_role": "body",
+            "document_context": {"packet_role": "protocol"},
+            "unit_raw_text": listing,
+            "raw_text": listing,
+        },
+        reason="body_without_headline_topic_provenance",
+    )
+
+    assert row["root_topic_id"] == "root_agenda_queries"
+    assert row["topic_assignment_confidence"] == 0.35
+    assert "strong_body_evidence_root" not in row["topic_assignment_route"]
+
+
+def test_non_topic_environmental_report_row_gets_environment_root_context() -> None:
+    row = step4._non_topic_assignment(
+        {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "fragment",
+            "structural_role": "continuation",
+            "document_context": {"packet_role": "protocol"},
+            "unit_raw_text": "דוח ועדת איכות הסביבה מישיבה מס 8",
+            "raw_text": "דוח ועדת איכות הסביבה מישיבה מס 8",
+        },
+        reason="transcript_window_without_bounded_headline",
+    )
+
+    assert row["root_topic_id"] == "root_infrastructure_environment"
+    assert row["child_label_he"] is None
+
+
+def test_non_topic_environmental_bylaw_row_gets_environment_root_context() -> None:
+    row = step4._non_topic_assignment(
+        {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "fragment",
+            "structural_role": "body",
+            "document_context": {"packet_role": "protocol"},
+            "unit_raw_text": "הצעת חוק עזר למניעת רעש והארכת הוראת השעה לפינוי אשפה בהתאם לאישור השרה להגנת הסביבה",
+            "raw_text": "הצעת חוק עזר למניעת רעש והארכת הוראת השעה לפינוי אשפה בהתאם לאישור השרה להגנת הסביבה",
+        },
+        reason="body_without_headline_topic_provenance",
+    )
+
+    assert row["root_topic_id"] == "root_infrastructure_environment"
+    assert row["child_label_he"] is None
+
+
+def test_container_with_strong_environmental_bylaw_evidence_gets_environment_root_context() -> None:
+    row = step4._non_topic_assignment(
+        {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "container",
+            "structural_role": "body",
+            "document_context": {"packet_role": "protocol"},
+            "unit_raw_text": "חוק העזר מובא לידיעה בהתאם לאישור השרה להגנת הסביבה בנושא פינוי אשפה",
+            "raw_text": "חוק העזר מובא לידיעה בהתאם לאישור השרה להגנת הסביבה בנושא פינוי אשפה",
+        },
+        reason="container_heading",
+    )
+
+    assert row["root_topic_id"] == "root_infrastructure_environment"
+    assert row["row_type"] == "container"
+    assert row["child_label_he"] is None
+
+
+def test_non_topic_committee_appointment_continuation_gets_admin_root_context() -> None:
+    row = step4._non_topic_assignment(
+        {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "fragment",
+            "structural_role": "body",
+            "document_context": {"packet_role": "protocol"},
+            "unit_raw_text": "להאריך את מינויה של אדריכלית פלונית כממלאת מקום בוועדה עד סוף השנה",
+            "raw_text": "להאריך את מינויה של אדריכלית פלונית כממלאת מקום בוועדה עד סוף השנה",
+        },
+        reason="body_without_headline_topic_provenance",
+    )
+
+    assert row["root_topic_id"] == "root_administration"
+    assert row["child_label_he"] is None
+
+
+def test_unsupported_weak_candidate_does_not_choose_arbitrary_root_when_dicta_disabled() -> None:
+    row = step4._candidate_review_assignment(
+        item={
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "row_type": "topic_item",
+            "structural_role": "outline_item",
+            "is_topic_bearing": True,
+            "topic_identification_context": "דוחות המובאים לאישור המועצה",
+            "topic_headline_he": "דוחות המובאים לאישור המועצה",
+            "document_context": {"packet_role": "protocol"},
+            "raw_text": "דוחות המובאים לאישור המועצה",
+            "deterministic_topic_decision": {
+                "needs_dicta": True,
+                "root_topic_id": "root_religious_services",
+                "confidence": 0.45,
+                "reason": "weak_candidate",
+            },
+            "root_topic_candidates": [
+                {"root_topic_id": "root_religious_services", "root_label_he": "דת ושירותי דת", "score": 0.45, "matched_terms": []}
+            ],
+        },
+        reason="dicta_disabled",
+    )
+
+    assert row["root_topic_id"] == "root_agenda_queries"
+    assert row["row_type"] == "fragment"
+    assert "unsupported_weak_candidate" in row["topic_assignment_route"]
+
+
+def test_mayor_office_employment_subject_prefers_hr_over_mayor_updates() -> None:
+    tree = step4.global_topic_tree_payload(existing_tree=None, attachment_contexts=[])
+    item = step4._build_item(
+        unit={
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "structural_role": "outline_item",
+            "raw_text": "3.2 אישור מועצת העירייה להעסקת עובד במשרת אמון בלשכת ראש העיר",
+        },
+        facts=[],
+        max_raw_chars=1000,
+        attachment_contexts=[],
+        document_context={"packet_role": "protocol", "topic_carrier_mode": "headline_topics"},
+        topic_context={"topic_identification_text": "3.2 אישור מועצת העירייה להעסקת עובד במשרת אמון בלשכת ראש העיר", "context_source": "unit_heading"},
+        document_child_candidates=[],
+        topic_tree=tree,
+        topic_index=step4.build_topic_profile_index(tree),
+    )
+
+    decision = item["deterministic_topic_decision"]
+    assert decision["action"] == "choose_existing_topic"
+    assert decision["root_topic_id"] == "root_hr_labor"
+    assert decision["policy_id"] == "hr_employment_conditions"
+
+
 def test_model_omission_uses_candidate_review_instead_of_active_guess() -> None:
     row = step4._fallback_assignment(
         {

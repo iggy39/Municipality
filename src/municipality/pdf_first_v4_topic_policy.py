@@ -45,7 +45,7 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         root_topic_id="root_agreements",
         description_he="כאשר פעולת האג'נדה היא מכרז, ביטול מכרז, התקשרות, הרשאה או פטור ממכרז, מסווגים לפי פעולת ההתקשרות גם אם מוזכר תחום שירות כמו חינוך.",
         priority=104,
-        required_any=(("ביטול מכרז", "מכרז פומבי", "פטור ממכרז", "התקשרות", "הרשאה"),),
+        required_any=(("ביטול מכרז", "מכרז פומבי", "פטור ממכרז", "פטורים ממכרז", "פטורות ממכרז", "עבודות הפטורות ממכרז", "התקשרות", "הרשאה"),),
     ),
     TopicPolicy(
         policy_id="resident_messaging_administration",
@@ -164,6 +164,27 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         required_any=(("תאונות דרכים", "אפס תאונות", "תאונות", "בטיחות בדרכים"), ("באמפר", "באמפרים", "פס האטה", "פסי האטה", "מהירות", "תחבורתית", "כביש")),
     ),
     TopicPolicy(
+        policy_id="environmental_bylaw_or_waste_collection",
+        root_topic_id="root_infrastructure_environment",
+        description_he="חוקי עזר, הוראות שעה או החלטות העוסקים במניעת רעש, פינוי אשפה, מפגעים או אישור הגנת הסביבה מסווגים לתשתיות וסביבה.",
+        priority=111,
+        required_any=(("חוק עזר", "הוראת שעה", "למניעת מפגעים"), ("מניעת רעש", "פינוי אשפה", "אשפה", "מפגעים", "הגנת הסביבה", "איכות הסביבה")),
+    ),
+    TopicPolicy(
+        policy_id="environmental_committee_or_report",
+        root_topic_id="root_infrastructure_environment",
+        description_he="דוח או ועדה בנושא איכות/הגנת הסביבה מסווגים לתשתיות וסביבה.",
+        priority=110,
+        required_any=(("ועדת איכות הסביבה", "דוח ועדת איכות הסביבה", "הגנת הסביבה", "איכות הסביבה"),),
+    ),
+    TopicPolicy(
+        policy_id="parking_permits_or_arrangements_transport",
+        root_topic_id="root_transport_safety",
+        description_he="תווי חניה, חנייה, חניונים והסדרי חניה מסווגים לתחבורה ובטיחות.",
+        priority=96,
+        required_any=(("תו חניה", "תווי חניה", "תו חנייה", "תווי חנייה", "הסדרי חניה", "הסדרי חנייה", "חניון", "חניונים"),),
+    ),
+    TopicPolicy(
         policy_id="domestic_violence_default_welfare",
         root_topic_id="root_welfare_social",
         description_he="אלימות במשפחה מסווגת כברירת מחדל לרווחה ושירותים חברתיים; רק ראיות אכיפה מפורשות מעבירות לביטחון ואכיפה.",
@@ -240,7 +261,7 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         root_topic_id="root_security_enforcement",
         description_he="מיגור תופעת האלימות מסווג לביטחון ואכיפה גם כאשר הוא מנוסח כוועדה.",
         priority=111,
-        required_any=(("מיגור תופעת האלימות",),),
+        required_any=(("מיגור תופעת האלימות", "מיגור אלימות", "ועדה למיגור אלימות", "הוועדה למיגור אלימות"),),
     ),
     TopicPolicy(
         policy_id="youth_public_order",
@@ -254,7 +275,14 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         root_topic_id="root_hr_labor",
         description_he="עובדים, כוח אדם, עבודה נוספת, שכר ומועד תחילת עבודה מסווגים לכוח אדם ועובדים.",
         priority=93,
-        required_any=(("עובדים מושאלים", "עובדים זמניים", "כוח אדם", "כח אדם", "עבודה נוספת לעובדי", "שכרו", "תחילת עבודתו", "מועד תחילת עבודתו"),),
+        required_any=(("עובדים מושאלים", "עובדים זמניים", "כוח אדם", "כח אדם", "עבודה נוספת לעובדי", "העסקת עובד", "העסקת עובדים", "משרת אמון", "משרות אמון", "חוזה אישי", "נהג ראש העיר", "שכרו", "תשלום שכרו", "תחילת עבודתו", "מועד תחילת עבודתו"),),
+    ),
+    TopicPolicy(
+        policy_id="committee_appointment_or_membership_administration",
+        root_topic_id="root_administration",
+        description_he="מינוי, הארכת מינוי, כהונה או חברות בוועדה/דירקטוריון מסווגים למנהל עירוני ומינויים.",
+        priority=110,
+        required_any=(("הארכת מינוי", "הארכת המינויים", "להאריך את מינוי", "להאריך את מינויה", "להאריך את מינויו", "מינויו", "מינויה", "כהונה"), ("ועדה", "וועדה", "ועדת", "דירקטוריון")),
     ),
     TopicPolicy(
         policy_id="council_governance_attendance",
