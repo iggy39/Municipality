@@ -10,6 +10,7 @@ All agents working in this repository MUST follow this file.
 - When printing file paths in the session, always use full absolute paths instead of paths relative to the project.
 - Do not print a "Relevant Files" section in the session unless the current action is committing those files.
 - Assume the user is not a software engineer; explain actions, findings, and tradeoffs clearly in plain language.
+- When the user writes `GIT` in uppercase, treat it as an instruction to commit and push the current code changes.
 - Ask targeted follow-up questions whenever requirements, context, or implementation choices are unclear.
 
 ## Project Goal
