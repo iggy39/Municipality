@@ -144,11 +144,61 @@ def test_policy_routes_fiscal_exemption_to_finance() -> None:
     assert matches[0]["root_topic_id"] == "root_budget_finance"
 
 
+def test_policy_routes_numbered_fiscal_clause_to_finance() -> None:
+    matches = topic_policy_matches("קבע מנהל הארנונה כי נכס שנהרס לא ראוי לשימוש ולא ישולם בגין נכס כאמור היטל")
+
+    assert matches[0]["root_topic_id"] == "root_budget_finance"
+    assert matches[0]["policy_id"] == "fiscal_exemption_or_relief_finance"
+
+
+def test_policy_routes_public_space_trees_to_environment() -> None:
+    matches = topic_policy_matches("הפסקת שתילת עצי פיקוס חדשים במרחב הציבורי בעיר")
+
+    assert matches[0]["root_topic_id"] == "root_infrastructure_environment"
+    assert matches[0]["policy_id"] == "urban_greening_public_space_environment"
+
+
 def test_policy_matches_hebrew_construct_form_to_budget_reserve() -> None:
     matches = topic_policy_matches("עתודת חטיבת התפעול")
 
     assert matches[0]["root_topic_id"] == "root_budget_finance"
     assert matches[0]["policy_id"] == "budget_line_or_reserve"
+
+
+def test_policy_routes_scholarship_grants_to_supports() -> None:
+    matches = topic_policy_matches("חברי הוועדה אישרו את ההצעה למתן מלגת מפעל הפיס לסטודנטים תושבי העיר")
+
+    assert matches[0]["root_topic_id"] == "root_supports"
+    assert matches[0]["policy_id"] == "scholarship_grants_supports"
+
+
+def test_policy_routes_emergency_drill_to_security() -> None:
+    matches = topic_policy_matches("ועדת מל\"ח דנה בתרגיל פיקוד העורף ובטיפול באתרי הרס")
+
+    assert matches[0]["root_topic_id"] == "root_security_enforcement"
+    assert matches[0]["policy_id"] == "emergency_committee_drill_security"
+
+
+def test_policy_does_not_route_general_war_context_to_security() -> None:
+    assert not topic_policy_matches("דברי ראש העיר על שגרת חירום בעקבות מלחמת חרבות ברזל")
+
+
+def test_policy_routes_sport_support_criteria_to_supports() -> None:
+    matches = topic_policy_matches("שינוי תבחין תוספת לעקרונות שיטת ניקוד תקציב של רשות הספורט")
+
+    assert matches[0]["root_topic_id"] == "root_supports"
+    assert matches[0]["policy_id"] == "sport_support_criteria"
+
+
+def test_policy_routes_public_transport_deficit_to_transport() -> None:
+    matches = topic_policy_matches("מקור לכיסוי גירעון בפרויקט התחבורה הציבורית וכיכר רמון מול משרד התחבורה")
+
+    assert matches[0]["root_topic_id"] == "root_transport_safety"
+    assert matches[0]["policy_id"] == "public_transport_project_funding"
+
+
+def test_semantic_root_routes_scholarship_child_to_supports() -> None:
+    assert semantic_root_for_child_label("מלגת מפעל הפיס", evidence_text="סטודנטים תושבי העיר") == "root_supports"
 
 
 def test_budget_child_root_is_stable_with_security_context() -> None:

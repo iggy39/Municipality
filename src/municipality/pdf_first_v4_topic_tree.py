@@ -47,17 +47,17 @@ V4_ROOT_TOPICS: tuple[dict[str, Any], ...] = (
     {"root_topic_id": "root_order_proposals", "root_label_he": "הצעות לסדר", "keywords": ["הצעה לסדר", "הצעות לסדר"]},
     {"root_topic_id": "root_allocations", "root_label_he": "הקצאות ושימושים", "keywords": ["הקצאה", "הקצאות", "רשות שימוש", "שימוש", "מקרקעין", "גוש", "חלקה", "מגרש"]},
     {"root_topic_id": "root_agreements", "root_label_he": "הסכמים והתקשרויות", "keywords": ["הסכם", "הסכמים", "התקשרות", "מכרז", "פטור ממכרז", "הרשאה"]},
-    {"root_topic_id": "root_supports", "root_label_he": "תמיכות", "keywords": ["תמיכה", "תמיכות", "ועדת תמיכות"]},
+    {"root_topic_id": "root_supports", "root_label_he": "תמיכות", "keywords": ["תמיכה", "תמיכות", "ועדת תמיכות", "מלגה", "מלגות", "מפעל הפיס", "פר\"ח", "תבחין", "תבחינים", "שיטת ניקוד"]},
     {"root_topic_id": "root_budget_finance", "root_label_he": "תקציב וכספים", "keywords": ["תקציב", "כספים", "תב\"ר", "תבר", "חובות", "דוח כספי", "דוחות כספיים", "הרשאות", "ארנונה", "צו ארנונה", "אגרה", "אגרות", "תעריף", "סיווג", "מיסוי", "מסים", "מיסים", "הנחות במיסים", "הנחות במסים", "הטבות", "מדד חברתי", "חברתי-כלכלי", "היטל השבחה"]},
     {"root_topic_id": "root_planning_building", "root_label_he": "תכנון ובנייה", "keywords": ["תכנון", "בנייה", "בניה", "תוכנית", "תכנית", "היתר", "הסכם הגג", "טופס", "מבנה יביל", "מבני ציבור", "מבנה ציבור", "מתנ\"סים", "מתנסים", "שיפוץ חזיתות", "חזיתות"]},
     {"root_topic_id": "root_transport_safety", "root_label_he": "תחבורה ובטיחות", "keywords": ["תחבורה", "בטיחות", "בטיחות בדרכים", "תמרור", "חניה", "חנייה", "תווי חניה", "תווי חנייה", "כביש", "אוטובוס", "תאונות", "תאונות דרכים", "אפס תאונות", "צומת", "רחוב", "רחובות", "שדרות", "רמזור", "מעבר חציה", "באמפר", "באמפרים", "פס האטה", "פסי האטה", "מהירות", "תחבורתית"]},
     {"root_topic_id": "root_education", "root_label_he": "חינוך", "keywords": ["חינוך", "בית ספר", "בתי ספר", "גן", "גנים", "תלמידים", "צהרון", "צהרונים", "מעונות", "תשלומי הורים", "מדעניות העתיד"]},
     {"root_topic_id": "root_welfare_social", "root_label_he": "רווחה ושירותים חברתיים", "keywords": ["רווחה", "שירותים חברתיים", "נזקקים", "קשישים", "הגיל השלישי", "עריריים", "אלמנים", "אלמנות", "היפוטרמיה", "דרי רחוב", "חסרי בית", "ביטחון תזונתי", "בטחון תזונתי", "חתולי רחוב", "גורי חתולי רחוב"]},
     {"root_topic_id": "root_culture_sport", "root_label_he": "תרבות וספורט", "keywords": ["תרבות", "ספורט", "איצטדיון", "אצטדיון", "כדורסל", "כדורגל", "כדוריד", "ליגה", "אליפות", "גביע", "קבוצת ספורט", "ספורטאי", "משכן", "אומנויות הבמה", "אמנויות הבמה", "אודיטוריום", "אולם", "אולמות", "תיאטרון", "מרכז תרבות", "פסל", "פסל ציבורי"], "profile": {"aliases_he": ["ספורט ופנאי", "קבוצות ספורט", "ספורט עירוני"], "aliases_en": ["sports", "sport", "recreation", "football", "soccer", "handball", "basketball"]}},
-    {"root_topic_id": "root_infrastructure_environment", "root_label_he": "תשתיות וסביבה", "keywords": ["תשתיות", "סביבה", "סביבתי", "סביבתית", "איכות הסביבה", "הגנת הסביבה", "הסברה סביבתית", "מחזור", "מיחזור", "הצפות", "ניקיון", "ביוב", "מים", "פארק", "זיהום", "פינוי אשפה", "מניעת רעש", "מפגעים"]},
+    {"root_topic_id": "root_infrastructure_environment", "root_label_he": "תשתיות וסביבה", "keywords": ["תשתיות", "סביבה", "סביבתי", "סביבתית", "איכות הסביבה", "הגנת הסביבה", "הסברה סביבתית", "מחזור", "מיחזור", "הצפות", "הצפה", "ניקוז", "נגר", "ניקיון", "ביוב", "מים", "פארק", "גינה", "עצים", "שתילת עצים", "נטיעת עצים", "גיזום", "זיהום", "פינוי אשפה", "מניעת רעש", "מפגעים"]},
     {"root_topic_id": "root_religious_services", "root_label_he": "דת ושירותי דת", "keywords": ["דת", "דתית", "שירותי דת", "מועצה דתית", "בית כנסת", "מקווה", "מקווה טהרה", "רב", "הרבצת תורה"]},
     {"root_topic_id": "root_administration", "root_label_he": "מנהל עירוני ומינויים", "keywords": ["מינוי", "מינויים", "מינויו", "מינויה", "הארכת מינוי", "מורשי חתימה", "האצלת סמכויות", "ועדה", "דירקטוריון", "דירקטוריונים", "תאגידים", "ביקורת", "דוח ביקורת", "דו\"ח ביקורת", "החלטות מועצה", "חברי מועצה", "מליאה", "ישיבות מליאה", "היעדרויות", "איחורים", "נוכחות", "חילופי גברי", "קריאת רחוב", "שם רחוב", "שמות רחובות", "מסרונים", "מסרי וידאו", "מאגר מסרונים", "שימוע", "מהנדס העיר"]},
-    {"root_topic_id": "root_security_enforcement", "root_label_he": "ביטחון ואכיפה", "keywords": ["ביטחון", "בטחון", "אכיפה", "אלימות", "אלימות במשפחה", "משטרה", "מיגון", "מקלט", "אבטחת מידע", "סייבר", "הגנת פרטיות", "הגנת הפרטיות", "רעידת אדמה", "מערכת התראה", "מיגור תופעת האלימות", "מיגור אלימות", "אלרגיות מסכנות חיים", "מזרקי אפיפן", "אפיפן"]},
+    {"root_topic_id": "root_security_enforcement", "root_label_he": "ביטחון ואכיפה", "keywords": ["ביטחון", "בטחון", "אכיפה", "אלימות", "אלימות במשפחה", "משטרה", "מיגון", "מקלט", "אבטחת מידע", "סייבר", "הגנת פרטיות", "הגנת הפרטיות", "רעידת אדמה", "מערכת התראה", "מל\"ח", "חירום", "פיקוד העורף", "פקע\"ר", "יקל\"ר", "אתרי הרס", "פח\"ע", "מיגור תופעת האלימות", "מיגור אלימות", "אלרגיות מסכנות חיים", "מזרקי אפיפן", "אפיפן"]},
     {"root_topic_id": "root_travel_approvals", "root_label_he": "אישורי נסיעות", "keywords": ["אישור נסיעה", "נסיעה", "משלחת", "דוח נסיעה"]},
     {"root_topic_id": "root_guard_services", "root_label_he": "שמירה והיטלים", "keywords": ["שמירה", "היטל שמירה", "שירותי שמירה"]},
     {"root_topic_id": "root_commerce_assets", "root_label_he": "נכסים ומרכזים מסחריים", "keywords": ["נכס", "נכסים", "מרכז מסחרי", "מרכזים מסחריים", "קניון", "מבנה"]},
@@ -67,7 +67,7 @@ V4_ROOT_TOPICS: tuple[dict[str, Any], ...] = (
 
 CURATED_V4_CHILD_TOPICS: tuple[dict[str, Any], ...] = (
     {"root_topic_id": "root_travel_approvals", "child_label_he": "משלחות עירוניות בינלאומיות", "aliases_he": ["נסיעת משלחת עירונית", "משלחות לחו\"ל"]},
-    {"root_topic_id": "root_travel_approvals", "child_label_he": "נסיעות עבודה לחו\"ל", "aliases_he": ["נסיעה בתפקיד לחו\"ל"]},
+    {"root_topic_id": "root_travel_approvals", "child_label_he": "נסיעות עבודה לחו\"ל", "aliases_he": ["נסיעה בתפקיד לחו\"ל", "סמינר בחו\"ל", "השתתפות בסמינר בחו\"ל"]},
     {"root_topic_id": "root_security_enforcement", "child_label_he": "אבטחת מידע והגנת פרטיות", "aliases_he": ["סייבר ופרטיות", "הגנת הפרטיות"]},
     {"root_topic_id": "root_security_enforcement", "child_label_he": "ביטחון במרחב הציבורי", "aliases_he": ["סדר ציבורי", "ביטחון ציבורי"]},
     {"root_topic_id": "root_security_enforcement", "child_label_he": "בטיחות ובריאות הציבור", "aliases_he": ["בטיחות ציבורית", "אפיפן במרחב הציבורי"]},
@@ -122,9 +122,9 @@ CURATED_V4_CHILD_TOPICS: tuple[dict[str, Any], ...] = (
     {"root_topic_id": "root_transport_safety", "child_label_he": "תחבורה ציבורית", "aliases_he": ["פרויקט תחבורה ציבורית"]},
     {"root_topic_id": "root_transport_safety", "child_label_he": "בטיחות בדרכים", "aliases_he": ["תאונות דרכים", "ועדת בטיחות בדרכים"]},
     {"root_topic_id": "root_transport_safety", "child_label_he": "הסדרי חניה ותנועה", "aliases_he": ["חניה", "חנייה", "תווי חניה", "תווי חנייה", "תמרור", "רמזור"]},
-    {"root_topic_id": "root_supports", "child_label_he": "תמיכות", "aliases_he": ["נוהל תמיכות", "ועדת תמיכות"]},
-    {"root_topic_id": "root_supports", "child_label_he": "תבחינים", "aliases_he": ["קריטריונים", "תבחיני תמיכה"]},
-    {"root_topic_id": "root_supports", "child_label_he": "תמיכה בספורט", "aliases_he": ["מענקי ספורט", "ניקוד תמיכות ספורט"]},
+    {"root_topic_id": "root_supports", "child_label_he": "תמיכות", "aliases_he": ["נוהל תמיכות", "ועדת תמיכות", "מלגות", "מלגת מפעל הפיס"]},
+    {"root_topic_id": "root_supports", "child_label_he": "תבחינים", "aliases_he": ["קריטריונים", "תבחיני תמיכה", "שיטת ניקוד"]},
+    {"root_topic_id": "root_supports", "child_label_he": "תמיכה בספורט", "aliases_he": ["מענקי ספורט", "ניקוד תמיכות ספורט", "תבחיני ספורט", "רשות הספורט"]},
     {"root_topic_id": "root_supports", "child_label_he": "תמיכה בתרבות ופנאי", "aliases_he": ["תמיכות בתחום תרבות פנאי"]},
     {"root_topic_id": "root_supports", "child_label_he": "תמיכה בקליטת עולים", "aliases_he": ["ועדת קליטה"]},
     {"root_topic_id": "root_budget_finance", "child_label_he": "אגרות והיטלים", "aliases_he": ["אגרה", "היטלים"]},
@@ -603,16 +603,20 @@ def semantic_root_for_child_label(label: str | None, *, evidence_text: str = "",
         return "root_budget_finance"
     if any(term in normalized for term in ["תחבורה ציבורית", "פרויקט תחבורה", "כיכר רמון", "משרד התחבורה"]):
         return "root_transport_safety"
+    if any(term in normalized for term in ["אישור נסיעה", "נסיעה", "נסיעת", "הוצאות נסיעה", "חו ל", "חו\"ל", "ארה ב", "ארה\"ב"]) or ("סמינר" in normalized and any(term in normalized for term in ["חו ל", "חו\"ל", "ארה ב", "ארה\"ב", "נסיעה", "הוצאות נסיעה"])):
+        return "root_travel_approvals"
+    if any(term in normalized for term in ["מלגה", "מלגות", "מלגת", "מפעל הפיס", "פרח", "פר\"ח", "תבחין", "תבחינים", "שיטת ניקוד", "סל הספורט"]):
+        return "root_supports"
+    if any(term in normalized for term in ["הצפות", "הצפה", "ניקוז", "ניהול נגר", "צינורות", "קווי ניקוז"]):
+        return "root_infrastructure_environment"
     if any(term in normalized for term in ["גללי כלבים", "ניקיון העיר", "אכיפה סביבתית", "סכנה תברואתית"]):
         return "root_infrastructure_environment"
-    if any(term in normalized for term in ["מלח", "מל ח", "מל\"ח", "חירום", "פקער", "פיקוד העורף", "מקלטים חכמים", "ביטחון"]):
+    if any(term in normalized for term in ["מל ח", "מל\"ח", "תרגיל חירום", "ועדת חירום", "מוכנות לחירום", "מערך חירום", "פקער", "פיקוד העורף", "יקלר", "יקל\"ר", "מקלטים חכמים", "ביטחון"]):
         return "root_security_enforcement"
     if any(term in normalized for term in ["בית ספר", "חינוך", "למידה חדשנית", "סמינר מקצועי", "מערכת החינוך"]):
         return "root_education"
     if "ועדת ביקורת" in label_norm or "מבקר" in normalized:
         return "root_administration"
-    if "מלגות" in normalized:
-        return "root_education"
     if any(term in normalized for term in ["תמיכות", "ועדת משנה לתמיכות"]):
         return "root_supports"
     if any(term in normalized for term in ["הקצאות", "הקצאת", "קרקע", "שימוש ארעי במגרשים"]):

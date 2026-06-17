@@ -59,6 +59,12 @@ def test_multi_item_agenda_tail_is_protocol_listing() -> None:
     ) == "protocol_listing"
 
 
+def test_numbered_legal_tax_clause_is_not_protocol_listing() -> None:
+    text = "4 )קבע מנהל הארנונה כי בשל נזק מלחמה נהרס נכס. 1( לא ישולם בגין נכס כאמור היטל. 2( נזק מלחמה כהגדרתו בחוק מס רכוש. 197 ', עמ8 ' דיני מדינת ישראל"
+
+    assert step4._looks_like_protocol_listing(text) is False
+
+
 def test_contract_approval_procedure_without_appendix_is_non_topic() -> None:
     assert step4._looks_like_contract_approval_procedure_fragment(
         "יובאו לאישור ועדת התקשרויות עליונה ואישור ההתקשרות בחוזה ללא מכרז"

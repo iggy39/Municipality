@@ -3259,7 +3259,18 @@ def _looks_like_protocol_listing(text: str) -> bool:
     numbered_items = len(re.findall(r"(?:^|\s)\d+(?:\.\d+)?\s*[.)]", compact))
     page_ref_mentions = len(re.findall(r"\(?\s*עמ", compact))
     dotted_suffix_items = len(re.findall(r"\.\d{1,2}(?=\s|[)'\"׳״]|$)", compact))
+    if numbered_items >= 3 and not any([bracketed_items, dot_leaders, agenda_mentions]) and _looks_like_numbered_legal_or_rule_clause(compact):
+        return False
     return bracketed_items >= 2 or (bracketed_items >= 1 and dot_leaders >= 1) or agenda_mentions >= 2 or numbered_items >= 3 or ("סדר הישיבה" in compact and page_ref_mentions >= 3) or (page_ref_mentions >= 2 and dotted_suffix_items >= 2)
+
+
+def _looks_like_numbered_legal_or_rule_clause(text: str) -> bool:
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    legal_cues = ["סעיף", "חוק", "פקודה", "תקנות", "דיני", "נוסח חדש", "כהגדרתו", "קבע מנהל"]
+    rule_cues = ["לא ישולם", "לא תשולם", "פטור", "היטל", "ארנונה", "אגרה", "תשלום", "נכס", "יחול", "זכאי"]
+    return sum(1 for cue in legal_cues if cue in normalized) >= 1 and sum(1 for cue in rule_cues if cue in normalized) >= 2
 
 
 def _existing_tree_candidate_row(*, root_topic_id: str, root_label: str, child: dict[str, Any], label: str, evidence_quote: str, confidence_hint: float) -> dict[str, Any] | None:
