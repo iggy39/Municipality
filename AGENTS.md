@@ -37,6 +37,7 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 - Before implementation, present concise verification options appropriate to the task and ask the user to choose when non-obvious.
 - Verify each stage before proceeding to the next.
 - Tests alone are not enough.
+- When testing new logic or fixes, use the broadest representative set available; prefer coverage across different municipalities, document types, and edge cases over multiple similar examples from one source.
 - UI bug fixes must be accompanied by Playwright verification.
 - After UI or database changes, restart any affected local server yourself; do not wait for the user to ask.
 - Act as a judge: run or demonstrate the feature with representative input and print concise input/output evidence to the console.
