@@ -39,7 +39,7 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 - Tests alone are not enough.
 - When testing new logic or fixes, use the broadest representative set available; prefer coverage across different municipalities, document types, and edge cases over multiple similar examples from one source.
 - UI bug fixes must be accompanied by Playwright verification.
-- After UI or database changes, restart any affected local server yourself; do not wait for the user to ask.
+- After UI or database changes, restart any affected local server yourself, verify the correct port is being used, and do not wait for the user to ask.
 - Act as a judge: run or demonstrate the feature with representative input and print concise input/output evidence to the console.
 - After fixing or refining a document-processing pipeline, once the processed examples are finished, show a concise quality report table focused on problematic or low-confidence predictions. The table must include: full source/text, model prediction, ground truth based on agent judgement, and the reason for the failure or uncertainty.
 - After any build or run that reruns predictions, proactively summarize the main remaining problems and how to fix them generically; do not wait for the user to ask.
