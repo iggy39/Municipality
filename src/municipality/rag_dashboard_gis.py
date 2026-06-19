@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import Any, Mapping
 
@@ -8,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from municipality.govmap_client import build_govmap_dashboard_payload
 from municipality.gis_provenance import source_fragment_from_row
 
 
@@ -89,6 +91,33 @@ MUNICIPAL_CONTEXT_LAYER_LIMITS = {
 
 
 def build_dashboard_gis_map_payload(
+    session: Session,
+    *,
+    gush: str = TEL_AVIV_DEMO_GUSH,
+    helka: str = TEL_AVIV_DEMO_HELKA,
+    radius_m: float = 3000.0,
+    poi_limit: int = 14,
+    example: str = "tel_aviv_parcel",
+    profile: str = "initial",
+    provider: str | None = None,
+    municipality: str | None = None,
+    address: str | None = None,
+    center_x: float | None = None,
+    center_y: float | None = None,
+) -> dict[str, Any]:
+    selected_provider = str(provider or os.environ.get("GIS_DASHBOARD_PROVIDER") or "govmap").strip().lower()
+    if selected_provider not in {"local", "postgis"}:
+        cache_key = ("govmap", round(float(radius_m), 3), str(profile or "initial"), str(municipality or ""), str(address or ""), center_x, center_y)
+        cached_payload = _cached_gis_payload(cache_key)
+        if cached_payload is not None:
+            return cached_payload
+        payload = build_govmap_dashboard_payload(radius_m=radius_m, profile=profile, municipality=municipality, address=address, center_x=center_x, center_y=center_y)
+        _store_gis_payload(cache_key, payload)
+        return payload
+    return _build_local_dashboard_gis_map_payload(session, gush=gush, helka=helka, radius_m=radius_m, poi_limit=poi_limit, example=example, profile=profile)
+
+
+def _build_local_dashboard_gis_map_payload(
     session: Session,
     *,
     gush: str = TEL_AVIV_DEMO_GUSH,

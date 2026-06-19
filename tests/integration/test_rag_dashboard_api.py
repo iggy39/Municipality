@@ -279,12 +279,83 @@ def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None
     assert "/api/ui/rag-dashboard/gis-map" in body
     assert "maplibre-gl" not in body
     assert "id=\"real-gis-map\"" in body
+    assert "id=\"govmap-tile-basemap\"" in body
+    assert "id=\"govmap-iframe\"" in body
     assert "id=\"real-gis-static-map\"" in body
     assert "id=\"map-example-select\"" in body
     assert "create_gis_map_examples" not in body
     assert "window.__municipalSvgGisController" in body
     assert "SVG GIS פעיל" in body
+    assert "GovMap רשמי פעיל" in body
+    assert "govmap.api.js" in body
+    assert "createNativeGovMap" in body
+    assert "APP_PATH_PREFIX" in body
+    assert "appUrl(" in body
+    assert "GOVMAP_IFRAME_CONFIG_ENDPOINT" in body
+    assert "loadGovMapIframeConfig" in body
+    assert "setVisibleLayers" in body
+    assert "displayGeometries" in body
+    assert "clearGeometriesByName" in body
+    assert "data-govmap-layer-toggle" in body
+    assert "default_visible_layers" in body
+    assert "const defaultVisible" in body
+    assert "selectFeaturesOnMap" in body
+    assert "GOVMAP_SELECTED_NEIGHBORHOOD_RADIUS_M" in body
+    assert "selectOnMap: false" in body
+    assert "selectOnMap: true" in body
+    assert "govMapSelectedAreaRing" in body
+    assert "waitForGovMapNativeCommand" in body
+    assert "12000" in body
+    assert "showSelectedArea: false" in body
+    assert "האזור הנבחר יוצג רק כאשר GovMap מאשר פקודות API לדומיין הנוכחי" in body
+    assert "לא מוצג פוליגון דמה בגיבוי" in body
+    assert "renderGovMapOverlay(payload, { showDistrictLabels: false, showMarkers: false })" not in body
+    assert "whereClause" in body
+    assert "clearSelection" in body
+    assert "govmap_selected_neighborhood_failed" in body
+    assert 'aliases.add("neighborhoods_area")' not in body
+    assert "renderGovMapLayerFilters" in body
+    assert "__municipalDashboardMapFiltersChanged" in body
+    assert "updateGovMapFilterAvailability" in body
+    assert "window.__municipalDashboardGisMapFromServer=true" not in body
     assert "מפת GIS אמיתית" in body
+
+
+def test_govmap_iframe_config_allows_prefixed_approved_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_PUBLIC_PATH_PREFIX", "/govmap-local")
+    monkeypatch.setenv("APP_REVERSE_PROXY_SECRET", "test-secret")
+    monkeypatch.setenv("GOVMAP_API_KEY", "test-token")
+    monkeypatch.setenv("GOVMAP_ALLOWED_IFRAME_ORIGINS", "https://horizonscanninglab.org")
+    client = TestClient(app)
+
+    response = client.get(
+        "/govmap-local/api/govmap/iframe-config",
+        headers={
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "horizonscanninglab.org",
+            "X-Govmap-Proxy-Secret": "test-secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    payload = response.json()
+    assert payload["origin"] == "https://horizonscanninglab.org"
+    assert payload["token"] == "test-token"
+
+
+def test_prefixed_reverse_proxy_rejects_missing_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_PUBLIC_PATH_PREFIX", "/govmap-local")
+    monkeypatch.setenv("APP_REVERSE_PROXY_SECRET", "test-secret")
+    client = TestClient(app)
+
+    response = client.get(
+        "/govmap-local/api/govmap/iframe-config",
+        headers={"X-Forwarded-Proto": "https", "X-Forwarded-Host": "horizonscanninglab.org"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"] == "forbidden"
 
 
 def test_rag_dashboard_page_wires_stage_6_point_report_and_coverage_ui() -> None:
@@ -305,6 +376,13 @@ def test_rag_dashboard_page_wires_stage_6_point_report_and_coverage_ui() -> None
     assert "mapExampleCopy" in body
     assert "visualBasemapCollections" in body
     assert "ensurePocBasemap" in body
+    assert "renderGovMapEmbed" in body
+    assert "renderGovMapTileBasemap" in body
+    assert "applyGovMapOverlayFilters" in body
+    assert "שכבות GovMap פעילות" in body
+    assert "מסנן בסיס המפה אינו פעיל במצב GovMap רשמי" in body
+    assert 'loadDashboardGisMap = async (profile = "initial"' in body
+    assert "params.set(\"municipality\", municipality)" in body
     assert "gisMapMarker" in body
     assert "visibleLayers.pois" in body
     assert "dashboard-plans-fill" in body
@@ -313,7 +391,11 @@ def test_rag_dashboard_page_wires_stage_6_point_report_and_coverage_ui() -> None
     assert "חלקת MAPI רשמית" in body
 
 
-def test_rag_dashboard_gis_map_endpoint_returns_real_layers_with_provenance() -> None:
+def test_rag_dashboard_gis_map_endpoint_defaults_to_govmap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOVMAP_DASHBOARD_LIVE", "0")
+    import municipality.rag_dashboard_gis as gis_module
+
+    gis_module._GIS_PAYLOAD_CACHE.clear()
     engine = _seed_gis_dashboard_sqlite()
 
     def override_db():
@@ -324,6 +406,43 @@ def test_rag_dashboard_gis_map_endpoint_returns_real_layers_with_provenance() ->
     try:
         client = TestClient(app)
         response = client.get("/api/ui/rag-dashboard/gis-map")
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        gis_module._GIS_PAYLOAD_CACHE.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "found"
+    assert payload["provider"] == "govmap"
+    assert payload["selected_example"] == "govmap_resident_point"
+    assert payload["real_gis_available"] is True
+    assert payload["govmap"]["iframe_url"].startswith("https://www.govmap.gov.il/")
+    assert payload["visual_context"]["mode"] == "govmap_native"
+    assert payload["basemap"]["display_status"] == "official"
+    assert payload["basemap"]["tile_url"] == "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    assert payload["govmap"]["spatial_status"] == "degraded"
+    assert payload["govmap"]["spatial_error"] == "initial_metadata_only"
+    assert {layer["alias"] for layer in payload["govmap"]["layer_filters"]} >= {"PARCEL_ALL", "bus_stops", "GASSTATIONS"}
+    assert payload["govmap"]["default_visible_layers"] == ["neighborhoods_area"]
+    assert payload["govmap"]["level"] == 8
+    assert payload["query"]["center_x"] == 180428.96
+    assert payload["query"]["center_y"] == 665728.35
+    assert payload["query"]["center_source"] == "fallback_tel_aviv"
+    assert {"address", "street", "settlement"} <= set(payload["query"]["address_search_datatypes"])
+    assert payload["layers"]["address_points"]["source_id"] == "govmap:search"
+
+
+def test_rag_dashboard_gis_map_endpoint_returns_local_layers_with_provenance() -> None:
+    engine = _seed_gis_dashboard_sqlite()
+
+    def override_db():
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_db
+    try:
+        client = TestClient(app)
+        response = client.get("/api/ui/rag-dashboard/gis-map?provider=local")
     finally:
         app.dependency_overrides.pop(get_db, None)
 
@@ -367,7 +486,7 @@ def test_rag_dashboard_gis_map_endpoint_keeps_tel_aviv_parcel_caveat() -> None:
     app.dependency_overrides[get_db] = override_db
     try:
         client = TestClient(app)
-        response = client.get("/api/ui/rag-dashboard/gis-map?example=tel_aviv_parcel")
+        response = client.get("/api/ui/rag-dashboard/gis-map?example=tel_aviv_parcel&provider=local")
     finally:
         app.dependency_overrides.pop(get_db, None)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import hmac
 import json
 import os
 import re
@@ -8,9 +9,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 import httpx
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, inspect, or_, select
@@ -23,6 +25,7 @@ from municipality.gis_api import router as gis_router
 from municipality.gis_map_context import build_map_context
 from municipality.gis_evidence_links import decision_gis_feature_links, link_decisions_to_gis_plans
 from municipality.gis_question_resolver import resolve_geo_intent
+from municipality.govmap_client import DEFAULT_GOVMAP_API_KEY, DEFAULT_GOVMAP_ORIGIN
 from municipality.migrations import apply_all
 from municipality.models import (
     ArtifactSemanticLink,
@@ -89,6 +92,76 @@ engine = build_engine()
 SessionLocal = build_session_factory(engine)
 app = FastAPI(title="Municipality API")
 app.include_router(gis_router)
+
+
+REVERSE_PROXY_SECRET_HEADER = "X-Govmap-Proxy-Secret"
+
+
+def _public_path_prefix() -> str:
+    return os.environ.get("APP_PUBLIC_PATH_PREFIX", "").strip().rstrip("/")
+
+
+def _strip_public_prefix(path: str) -> str:
+    prefix = _public_path_prefix()
+    if not prefix:
+        return path
+    if path == prefix:
+        return "/"
+    if path.startswith(f"{prefix}/"):
+        return path.removeprefix(prefix)
+    return path
+
+
+def _reverse_proxy_secret() -> str:
+    return os.environ.get("APP_REVERSE_PROXY_SECRET", "")
+
+
+def _proxy_secret_matches(request: Request) -> bool:
+    secret = _reverse_proxy_secret()
+    if not secret:
+        return True
+    return hmac.compare_digest(request.headers.get(REVERSE_PROXY_SECRET_HEADER, ""), secret)
+
+
+def _effective_request_origin(request: Request) -> str:
+    origin = request.headers.get("origin")
+    if origin:
+        return origin.rstrip("/")
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host")
+    host = forwarded_host or request.headers.get("host")
+    if forwarded_proto and host:
+        proto = forwarded_proto.split(",")[0].strip()
+        request_host = host.split(",")[0].strip()
+        return f"{proto}://{request_host}".rstrip("/")
+    return ""
+
+
+def _govmap_allowed_iframe_origins() -> tuple[str, ...]:
+    configured = os.environ.get("GOVMAP_ALLOWED_IFRAME_ORIGINS", "")
+    if configured.strip():
+        return tuple(part.strip().rstrip("/") for part in configured.split(",") if part.strip())
+    origin = (os.environ.get("GOVMAP_ORIGIN") or DEFAULT_GOVMAP_ORIGIN).rstrip("/")
+    parsed = urlparse(origin)
+    dev_origin = f"{parsed.scheme}://dev.{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+    return tuple(dict.fromkeys(part for part in (origin, dev_origin) if part))
+
+
+@app.middleware("http")
+async def strip_public_path_prefix_middleware(request: Request, call_next):
+    prefix = _public_path_prefix()
+    if prefix and request.scope.get("path", "").startswith(prefix):
+        stripped_path = _strip_public_prefix(str(request.scope.get("path") or ""))
+        if stripped_path != "/health" and not _proxy_secret_matches(request):
+            return JSONResponse(
+                {"error": "forbidden", "message": "Reverse proxy header is required."},
+                status_code=403,
+                headers={"Cache-Control": "no-store"},
+            )
+        request.scope["root_path"] = prefix
+        request.scope["path"] = stripped_path
+    return await call_next(request)
+
 TOPIC_SEMANTIC_CANONICALIZER = SemanticCanonicalizer()
 PDF_FIRST_ASK_SOURCE_TYPES = ["pdf_first_protocol", "pdf_first_attachment", "pdf_first_v4_protocol", "pdf_first_v4_attachment"]
 PDF_FIRST_PROTOCOL_SOURCE_TYPES = {"pdf_first_protocol", "pdf_first_v4_protocol"}
@@ -3611,6 +3684,32 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/govmap/iframe-config")
+def govmap_iframe_config(request: Request) -> JSONResponse:
+    origin = _effective_request_origin(request)
+    allowed_origins = _govmap_allowed_iframe_origins()
+    if origin not in allowed_origins:
+        return JSONResponse(
+            {
+                "error": "iframe_origin_not_allowed",
+                "message": "Native GovMap iframe API requires an approved HTTPS origin.",
+                "origin": origin,
+                "allowedIframeOrigins": allowed_origins,
+            },
+            status_code=403,
+            headers={"Cache-Control": "no-store"},
+        )
+    return JSONResponse(
+        {
+            "token": os.environ.get("GOVMAP_API_KEY") or DEFAULT_GOVMAP_API_KEY,
+            "scriptUrl": "https://www.govmap.gov.il/govmap/api/govmap.api.js",
+            "allowedIframeOrigins": allowed_origins,
+            "origin": origin,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/api/ui/rag-dashboard/mock")
 def rag_dashboard_mock() -> dict[str, Any]:
     return validate_dashboard_payload(get_mock_rag_dashboard_payload())
@@ -3627,8 +3726,8 @@ def rag_dashboard_evidence(evidence_id: str, db=Depends(get_db)) -> dict[str, An
 
 
 @app.get("/api/ui/rag-dashboard/gis-map")
-def rag_dashboard_gis_map(gush: str = "7103", helka: str = "43", radius_m: float = 3000.0, example: str = "tel_aviv_parcel", profile: str = "initial", db=Depends(get_db)) -> dict[str, Any]:
-    return build_dashboard_gis_map_payload(db, gush=gush, helka=helka, radius_m=radius_m, example=example, profile=profile)
+def rag_dashboard_gis_map(gush: str = "7103", helka: str = "43", radius_m: float = 3000.0, example: str = "tel_aviv_parcel", profile: str = "initial", provider: str | None = None, municipality: str | None = None, address: str | None = None, center_x: float | None = None, center_y: float | None = None, db=Depends(get_db)) -> dict[str, Any]:
+    return build_dashboard_gis_map_payload(db, gush=gush, helka=helka, radius_m=radius_m, example=example, profile=profile, provider=provider, municipality=municipality, address=address, center_x=center_x, center_y=center_y)
 
 
 @app.get("/api/ui/rag-dashboard/gis-buildings")
@@ -4202,15 +4301,9 @@ def _resolve_pipeline_artifact_path(*, run_id: str, artifact: dict[str, Any]) ->
 
 @app.get("/ask", response_class=HTMLResponse)
 @app.get("/ui/ask", response_class=HTMLResponse)
-def ask_playground_page(db=Depends(get_db)) -> HTMLResponse:
-    initial_gis_map_payload = None
-    if hasattr(db, "execute"):
-        try:
-            initial_gis_map_payload = build_dashboard_gis_map_payload(db, profile="overview")
-        except Exception:  # noqa: BLE001 - dashboard must remain available if GIS is unavailable.
-            initial_gis_map_payload = None
+def ask_playground_page() -> HTMLResponse:
     return HTMLResponse(
-        render_rag_dashboard_page(initial_gis_map_payload=initial_gis_map_payload),
+        render_rag_dashboard_page(initial_gis_map_payload=None),
         headers={
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",

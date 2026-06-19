@@ -22,6 +22,13 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-municipality}:${POSTGRES_PASSWORD:-municipality}@db:5432/${POSTGRES_DB:-municipality}
       SOURCE_REGISTRY_SEED: ${SOURCE_REGISTRY_SEED:-config/gis/source_registry.seed.yaml}
+      GIS_DASHBOARD_PROVIDER: ${GIS_DASHBOARD_PROVIDER:-govmap}
+      GOVMAP_API_KEY: ${GOVMAP_API_KEY:-}
+      GOVMAP_ORIGIN: ${GOVMAP_ORIGIN:-https://horizonscanninglab.org}
+      GOVMAP_DASHBOARD_LIVE: ${GOVMAP_DASHBOARD_LIVE:-1}
+      GOVMAP_ALLOWED_IFRAME_ORIGINS: ${GOVMAP_ALLOWED_IFRAME_ORIGINS:-https://horizonscanninglab.org,https://dev.horizonscanninglab.org}
+      APP_PUBLIC_PATH_PREFIX: ${APP_PUBLIC_PATH_PREFIX:-}
+      APP_REVERSE_PROXY_SECRET: ${APP_REVERSE_PROXY_SECRET:-}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
