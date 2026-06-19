@@ -51,6 +51,28 @@ def test_build_govmap_dashboard_payload_degrades_without_live_calls(monkeypatch)
     assert {layer["alias"] for layer in payload["govmap"]["layer_filters"]} == {layer.alias for layer in GOVMAP_DASHBOARD_LAYERS}
     assert {layer["label_he"] for layer in payload["govmap"]["layer_filters"]} >= {"חלקות", "תחבורה ציבורית", "מקלטים"}
     assert payload["govmap"]["default_visible_layers"] == list(GOVMAP_DEFAULT_VISIBLE_LAYER_ALIASES)
+    resident_groups = payload["govmap"]["resident_layer_groups"]
+    assert len(resident_groups) >= 15
+    assert all(group["default_visible"] is False for group in resident_groups)
+    assert all(group["layers"] for group in resident_groups)
+    assert all("local_layers" not in group for group in resident_groups)
+    assert any(
+        group["layer_key"] == "parcels_cadaster" and any(layer["alias"] == "PARCEL_ALL" and layer["kind"] == "map_layer" for layer in group["layers"])
+        for group in resident_groups
+    )
+    resident_location = next(group for group in resident_groups if group["layer_key"] == "resident_location")
+    assert {layer["alias"] for layer in resident_location["layers"]} == {"address", "street", "settlement"}
+    assert {layer["kind"] for layer in resident_location["layers"]} == {"search_datatype"}
+    assert all(layer["selectable"] is False for layer in resident_location["layers"])
+    public_buildings = next(group for group in resident_groups if group["layer_key"] == "public_buildings_assets")
+    assert {layer["alias"] for layer in public_buildings["layers"]} == {"public_institutions_survey"}
+    assert all(layer["kind"] == "map_layer" for layer in public_buildings["layers"])
+    assert all(layer["selectable"] is True for layer in public_buildings["layers"])
+    assert "layer_210692" not in {layer["alias"] for group in resident_groups for layer in group["layers"]}
+    assert "layer_210697" not in {layer["alias"] for group in resident_groups for layer in group["layers"]}
+    assert all(group["layer_key"] != "playgrounds_youth_space" for group in resident_groups)
+    assert "PARCEL_ALL" in payload["govmap"]["visible_layers"]
+    assert "address" not in payload["govmap"]["visible_layers"]
     assert payload["govmap"]["level"] == DEFAULT_GOVMAP_LEVEL
     assert "z=8" in payload["govmap"]["iframe_url"]
     assert payload["visual_context"]["mode"] == "govmap_native"
@@ -104,6 +126,8 @@ def test_initial_govmap_payload_is_metadata_only(monkeypatch) -> None:
     assert payload["layers"]["address_points"]["error"] == "initial_metadata_only"
     assert payload["govmap"]["default_visible_layers"] == list(GOVMAP_DEFAULT_VISIBLE_LAYER_ALIASES)
     assert {layer["alias"] for layer in payload["govmap"]["layer_filters"]} == {layer.alias for layer in GOVMAP_DASHBOARD_LAYERS}
+    assert all(group["default_visible"] is False for group in payload["govmap"]["resident_layer_groups"])
+    assert all(layer["default_visible"] is False for group in payload["govmap"]["resident_layer_groups"] for layer in group["layers"])
 
 
 def test_selected_govmap_neighborhood_includes_itm_display_wkt(monkeypatch) -> None:

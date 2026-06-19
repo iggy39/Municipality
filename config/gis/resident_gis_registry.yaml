@@ -90,7 +90,7 @@ layer_groups:
   - layer_key: public_buildings_assets
     display_name_he: "מבני ציבור ונכסים עירוניים"
     govmap_category_he: "מוסדות ציבור ומשרדי ממשל"
-    govmap_aliases: [layer_210692, layer_210697]
+    govmap_aliases: [public_institutions_survey]
     local_layer_keys: [buildings, context_pois]
     geometry: point_or_polygon
     tags: [public_building, municipal_asset, facility, accessibility, maintenance, agreement]
@@ -110,7 +110,7 @@ layer_groups:
   - layer_key: playgrounds_youth_space
     display_name_he: "גני משחקים, פארקים ומרחבי נוער"
     govmap_category_he: "חינוך ודת / תיירות, טבע, פנאי וספורט"
-    govmap_aliases: [layer_212138, res_parks_meforat, res_parks_tama, shvilim_allr]
+    govmap_aliases: []
     local_layer_keys: [municipal_parks]
     geometry: point_or_polygon
     tags: [park, playground, youth, public_space, night_activity, safety, leisure]

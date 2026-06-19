@@ -179,6 +179,13 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
     .headerButton.filterButton { min-width: 138px; }
 
+    .headerButton.subjectButton {
+      min-width: 146px;
+      border-color: #83b7a0;
+      color: #126547;
+      background: #f5fffa;
+    }
+
     .filterCountBadge {
       min-width: 20px;
       height: 20px;
@@ -527,6 +534,18 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       background: #eef4f7;
     }
 
+    .mapPanel.isMapFullscreen {
+      position: fixed;
+      inset: 10px;
+      z-index: 9000;
+      border-radius: 14px;
+      box-shadow: 0 22px 70px rgba(15, 23, 42, 0.36);
+    }
+
+    body.mapFullscreenActive {
+      overflow: hidden;
+    }
+
     .mapZoomControls {
       position: absolute;
       top: 12px;
@@ -576,7 +595,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
     .mapLayerPopover {
       position: absolute;
       left: 12px;
-      top: 150px;
+      top: 12px;
       z-index: 3200;
       width: min(310px, calc(100% - 28px));
       max-height: min(78%, 520px);
@@ -593,6 +612,17 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
     #map-view-layers.mapZoomButton {
       width: auto;
       min-width: 96px;
+      gap: 7px;
+      padding-inline: 10px;
+      direction: rtl;
+      font-size: 12px;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+
+    #map-view-fullscreen.mapZoomButton {
+      width: auto;
+      min-width: 102px;
       gap: 7px;
       padding-inline: 10px;
       direction: rtl;
@@ -714,6 +744,22 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
     .mapLayerToolButton:hover { background: #f1f5f9; }
 
+    .residentGovMapHelp {
+      margin: -1px 0 8px;
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 760;
+      line-height: 1.45;
+    }
+
+    .residentGovMapResultCount {
+      min-height: 16px;
+      margin: -3px 0 8px;
+      color: #475569;
+      font-size: 10px;
+      font-weight: 850;
+    }
+
     .mapLayerLegendList.compact {
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 6px 8px;
@@ -725,6 +771,16 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       margin: 0;
       padding: 0;
       list-style: none;
+    }
+
+    .mapLayerLegendList[hidden],
+    .mapLayerLegendList li[hidden],
+    .mapLayerPopoverSectionTitle[hidden],
+    .residentGovMapChildList[hidden],
+    .residentGovMapHelp[hidden],
+    .residentGovMapResultCount[hidden],
+    .mapIconSizeControl[hidden] {
+      display: none !important;
     }
 
     .mapLayerLegendList li {
@@ -768,6 +824,132 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
     .mapLayerLegendSwatch.beach { color: #0ea5e9; background: rgba(14,165,233,0.24); }
     .mapLayerLegendSwatch.bike { color: #06b6d4; background: rgba(6,182,212,0.18); }
     .mapLayerLegendSwatch.road { color: #94a3b8; background: rgba(148,163,184,0.18); }
+
+    .residentGovMapLayerList {
+      max-height: none;
+      overflow: visible;
+      padding-inline-end: 2px;
+    }
+
+    .residentGovMapSearch {
+      width: 100%;
+      min-height: 34px;
+      margin: 0 0 8px;
+      border: 1px solid #d8e1ec;
+      border-radius: 8px;
+      background: #fff;
+      color: #172033;
+      padding-inline: 10px;
+      direction: rtl;
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .residentGovMapGroupItem {
+      display: grid;
+      gap: 6px;
+    }
+
+    .residentGovMapGroupHeader {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: stretch;
+      gap: 6px;
+    }
+
+    .residentGovMapLayerList label {
+      align-items: flex-start;
+      gap: 9px;
+      padding: 7px 8px;
+      border: 1px solid rgba(226, 232, 240, 0.95);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .residentGovMapGroupHeader label {
+      min-width: 0;
+    }
+
+    .residentGovMapExpandButton {
+      min-width: 38px;
+      border: 1px solid rgba(203, 213, 225, 0.95);
+      border-radius: 8px;
+      background: #f8fafc;
+      color: #0f172a;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 950;
+    }
+
+    .residentGovMapExpandButton:hover {
+      background: #eef6ff;
+    }
+
+    .residentGovMapExpandButton[aria-expanded="true"] {
+      background: #eaf3ff;
+      color: #0b68d1;
+    }
+
+    .residentGovMapLayerList input { margin-block-start: 3px; }
+
+    .residentGovMapLayerList input:indeterminate { accent-color: #f59e0b; }
+
+    .residentGovMapLayerText {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .residentGovMapLayerName {
+      color: #172033;
+      font-size: 12px;
+      font-weight: 900;
+      line-height: 1.35;
+    }
+
+    .residentGovMapLayerMeta {
+      color: #64748b;
+      font-size: 10px;
+      font-weight: 760;
+      line-height: 1.35;
+    }
+
+    .residentGovMapChildList {
+      display: grid;
+      gap: 4px;
+      margin: 0;
+      padding: 0 18px 0 0;
+      list-style: none;
+    }
+
+    .residentGovMapChildList label {
+      min-height: 30px;
+      padding: 5px 7px;
+      border-style: dashed;
+      background: #fbfdff;
+    }
+
+    .residentGovMapChildList label.isDisabled {
+      opacity: 0.58;
+      cursor: not-allowed;
+    }
+
+    .residentGovMapLayerKind {
+      color: #7c4a03;
+      font-size: 9px;
+      font-weight: 850;
+    }
+
+    .residentGovMapEmpty {
+      margin: 0;
+      padding: 8px;
+      border: 1px dashed #cbd5e1;
+      border-radius: 8px;
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 800;
+      text-align: center;
+    }
 
     .mapFrame {
       position: relative;
@@ -2058,6 +2240,8 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       .timelineRail { display: none; }
       .timelineArrow { display: none; }
       .timelineBody { padding-inline: 0; }
+      .mapPanel.isMapFullscreen { inset: 0; border-radius: 0; }
+      .mapLayerPopover { width: min(360px, calc(100% - 20px)); max-height: min(82%, 620px); }
     }
   </style>
 </head>
@@ -2103,6 +2287,14 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         <span>מסננים</span>
         <b class="filterCountBadge" aria-label="מספר מסננים פעילים"></b>
       </button>
+
+      <a class="headerButton subjectButton" href="/ui/subjects" aria-label="Open Subject Browser">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+          <path d="M5 5h14M5 12h14M5 19h14" stroke-linecap="round" />
+          <path d="M9 3v18" stroke-linecap="round" />
+        </svg>
+        <span>Subject Browser</span>
+      </a>
 
       <button class="headerButton adminButton" type="button" aria-label="מנהל">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
@@ -2256,6 +2448,12 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
                 <span>סינון מפה</span>
               </button>
             </div>
+            <div class="mapZoomControlGroup">
+              <button id="map-view-fullscreen" class="mapZoomButton" type="button" aria-label="הגדלת המפה למסך מלא" aria-pressed="false">
+                <svg class="mapZoomIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span>מסך מלא</span>
+              </button>
+            </div>
           </div>
           <aside id="map-layer-popover" class="mapLayerPopover" aria-label="מקרא שכבות מפה" hidden>
             <div class="mapLayerPopoverTop">
@@ -2273,14 +2471,14 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
               </label>
               <button id="map-toggle-all-filters" class="mapLayerToolButton" type="button">כיבוי כל המסננים</button>
             </div>
-            <p class="mapLayerPopoverSectionTitle">בסיס המפה</p>
+            <p class="mapLayerPopoverSectionTitle">אזור נבחר</p>
             <ul class="mapLayerLegendList">
-              <li><label><input type="checkbox" data-map-layer-toggle="basemap" autocomplete="off" /><span class="mapLayerLegendSwatch road"></span><span>רקע עירוני מפורט (Raster לא מסונן)</span></label></li>
+              <li hidden><label><input type="checkbox" data-map-layer-toggle="basemap" autocomplete="off" /><span class="mapLayerLegendSwatch road"></span><span>רקע עירוני מפורט (Raster לא מסונן)</span></label></li>
               <li><label><input type="checkbox" data-map-layer-toggle="parcel" checked /><span class="mapLayerLegendSwatch parcel"></span><span>אזור נבחר</span></label></li>
-              <li><label><input type="checkbox" data-map-layer-toggle="nearby_parcels" autocomplete="off" /><span class="mapLayerLegendSwatch nearby"></span><span>חלקות בעיר</span></label></li>
+              <li hidden><label><input type="checkbox" data-map-layer-toggle="nearby_parcels" autocomplete="off" /><span class="mapLayerLegendSwatch nearby"></span><span>חלקות בעיר</span></label></li>
             </ul>
-            <p class="mapLayerPopoverSectionTitle">סינון אובייקטים</p>
-            <ul class="mapLayerLegendList compact">
+            <p class="mapLayerPopoverSectionTitle" hidden>סינון אובייקטים</p>
+            <ul class="mapLayerLegendList compact" hidden>
               <li><label><input type="checkbox" data-map-object-toggle="parcels" autocomplete="off" /><span class="mapLayerLegendSwatch parcel"></span><span>חלקות בעיר</span></label></li>
               <li><label><input type="checkbox" data-map-object-toggle="buildings" autocomplete="off" /><span class="mapLayerLegendSwatch osm"></span><span>מבנים עירוניים</span></label></li>
               <li><label><input type="checkbox" data-map-object-toggle="osm_roads" checked /><span class="mapLayerLegendSwatch road"></span><span>OSM דרכים</span></label></li>
@@ -2297,8 +2495,11 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
               <li><label><input type="checkbox" data-map-object-toggle="municipal_bike_paths" checked /><span class="mapLayerLegendSwatch bike"></span><span>שבילי אופניים</span></label></li>
               <li><label><input type="checkbox" data-map-object-toggle="osm_interest" checked /><span class="mapLayerLegendSwatch osm"></span><span>OSM מוקדי עניין</span></label></li>
             </ul>
-            <p id="govmap-layer-filter-title" class="mapLayerPopoverSectionTitle" hidden>שכבות GovMap פעילות</p>
-            <ul id="govmap-layer-filter-list" class="mapLayerLegendList compact" hidden></ul>
+            <p id="resident-govmap-layer-group-title" class="mapLayerPopoverSectionTitle" hidden>קבוצות GIS לתושב</p>
+            <p id="resident-govmap-layer-help" class="residentGovMapHelp" hidden>אלו קבוצות של שכבות GovMap שרלוונטיות לתושב, למשל מבני ציבור, גנים, חניה ותשתיות. חפשו לפי נושא או שם שכבה, ואז פתחו קבוצה כדי לבחור שכבות מפה.</p>
+            <input id="resident-govmap-layer-search" class="residentGovMapSearch" type="search" placeholder="חיפוש שכבה או קבוצה" autocomplete="off" hidden />
+            <p id="resident-govmap-layer-result-count" class="residentGovMapResultCount" hidden></p>
+            <ul id="resident-govmap-layer-group-list" class="mapLayerLegendList residentGovMapLayerList" hidden></ul>
           </aside>
           <div id="map-renderer-status" class="mapRendererStatus">SVG GIS פעיל</div>
           <div class="mapFrame">
@@ -4195,6 +4396,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           }
         }
       };
+      window.__applyMapLibreLabelScale = applyMapLibreLabelScale;
 
       const ensurePocBasemap = (map, center) => {
         const basemap = visualBasemapCollections(center);
@@ -4281,7 +4483,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
       const govMapCurrentAliases = (payload) => {
         const groups = payload?.govmap?.layer_groups || {};
-        const aliases = new Set(payload?.govmap?.visible_layers || []);
+        const aliases = new Set(payload?.govmap?.default_visible_layers || []);
         const remove = (names = []) => names.forEach((name) => aliases.delete(name));
         const layerChecked = (key) => {
           const input = document.querySelector(`[data-map-layer-toggle="${key}"]`);
@@ -4293,17 +4495,18 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         };
         const explicitLayerInputs = Array.from(document.querySelectorAll("[data-govmap-layer-toggle]"));
         if (explicitLayerInputs.length) {
-          aliases.clear();
           for (const input of explicitLayerInputs) {
             if (input.checked) aliases.add(input.dataset.govmapLayerToggle);
           }
         }
-        if (!layerChecked("nearby_parcels") || !objectChecked("parcels")) remove([...(groups.parcel || []), ...(groups.nearby_parcels || [])]);
-        if (!objectChecked("transport")) remove(["bus_stops"]);
-        if (!objectChecked("education")) remove(["school", "kids_g"]);
-        if (!objectChecked("neighborhoods")) remove(["neighborhoods_area", "regional_authorities"]);
-        if (!objectChecked("municipal_pois")) remove(["clinics", "pharmacies", "post_israel", "mikve", "bombshelters", "GASSTATIONS"]);
-        if (!objectChecked("municipal_parks") && !objectChecked("osm_parks")) remove(["aq_realtime", "cell_active"]);
+        for (const input of document.querySelectorAll("[data-resident-govmap-layer-toggle]")) {
+          if (!input.checked) continue;
+          if (input.dataset.residentGovmapLayerKind !== "map_layer") continue;
+          const alias = String(input.dataset.residentGovmapLayerToggle || "").trim();
+          if (alias) {
+            aliases.add(alias);
+          }
+        }
         return Array.from(aliases);
       };
 
@@ -4322,6 +4525,9 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const nativeReason = "GovMap הרשמי קובע את גודל האייקונים והשמות בתוך המפה.";
         setControlDisabled(document.getElementById("map-icon-size"), active, nativeReason);
         setControlDisabled(document.getElementById("map-label-size"), active, nativeReason);
+        document.querySelectorAll(".mapIconSizeControl").forEach((control) => {
+          control.hidden = active;
+        });
         const disabledLayerReason = "מסנן בסיס המפה אינו פעיל במצב GovMap רשמי.";
         for (const input of document.querySelectorAll("[data-map-layer-toggle]")) {
           const selectedAreaUnavailable = input.dataset.mapLayerToggle === "parcel" && (govMapSelectedAreaNativeStatus === "failed" || govMapSelectedAreaNativeStatus === "unavailable");
@@ -4334,40 +4540,176 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         }
       };
 
-      const renderGovMapLayerFilters = (payload) => {
-        const title = document.getElementById("govmap-layer-filter-title");
-        const list = document.getElementById("govmap-layer-filter-list");
+      const renderResidentGovMapLayerGroups = (payload) => {
+        const title = document.getElementById("resident-govmap-layer-group-title");
+        const help = document.getElementById("resident-govmap-layer-help");
+        const search = document.getElementById("resident-govmap-layer-search");
+        const resultCount = document.getElementById("resident-govmap-layer-result-count");
+        const list = document.getElementById("resident-govmap-layer-group-list");
         if (!title || !list) return false;
-        const layers = Array.isArray(payload?.govmap?.layer_filters) ? payload.govmap.layer_filters : [];
-        const defaultVisible = new Set(payload?.govmap?.default_visible_layers || payload?.govmap?.visible_layers || []);
-        title.hidden = layers.length === 0;
-        list.hidden = layers.length === 0;
+        const groups = Array.isArray(payload?.govmap?.resident_layer_groups) ? payload.govmap.resident_layer_groups : [];
+        title.hidden = groups.length === 0;
+        if (help) help.hidden = groups.length === 0;
+        if (search) search.hidden = groups.length === 0;
+        if (resultCount) resultCount.hidden = groups.length === 0;
+        list.hidden = groups.length === 0;
         list.replaceChildren();
-        for (const layer of layers) {
-          const alias = String(layer.alias || "").trim();
-          if (!alias) continue;
+        const emptyMessage = document.createElement("p");
+        emptyMessage.className = "residentGovMapEmpty";
+        emptyMessage.textContent = "לא נמצאו שכבות תואמות לחיפוש.";
+        emptyMessage.hidden = true;
+        const setGroupExpanded = (item, expanded) => {
+          const button = item.querySelector("[data-resident-govmap-expand]");
+          const childList = item.querySelector(".residentGovMapChildList");
+          if (!button || !childList) return;
+          childList.hidden = !expanded;
+          button.setAttribute("aria-expanded", String(expanded));
+          button.textContent = expanded ? "סגור" : "פתח";
+          button.setAttribute("aria-label", `${expanded ? "סגירת" : "פתיחת"} קבוצת שכבות ${item.dataset.groupName || "GovMap"}`);
+        };
+        const updateSearchVisibility = () => {
+          const query = String(search?.value || "").trim().toLowerCase();
+          let visibleCount = 0;
+          for (const groupItem of list.querySelectorAll(".residentGovMapGroupItem")) {
+            const haystack = String(groupItem.dataset.searchText || "").toLowerCase();
+            const visible = !query || haystack.includes(query);
+            groupItem.hidden = !visible;
+            if (visible) {
+              visibleCount += 1;
+              setGroupExpanded(groupItem, Boolean(query) || groupItem.dataset.userExpanded === "true");
+            }
+          }
+          if (resultCount) {
+            resultCount.textContent = query ? `${visibleCount} קבוצות נמצאו` : `${visibleCount} קבוצות זמינות`;
+          }
+          emptyMessage.hidden = visibleCount > 0;
+        };
+        if (search) search.oninput = updateSearchVisibility;
+        const syncGroupState = (item) => {
+          const groupInput = item.querySelector("[data-resident-govmap-layer-group-toggle]");
+          const childInputs = Array.from(item.querySelectorAll("[data-resident-govmap-layer-toggle]")).filter((input) => !input.disabled);
+          const checkedCount = childInputs.filter((input) => input.checked).length;
+          const disabled = childInputs.length === 0;
+          groupInput.disabled = disabled;
+          groupInput.indeterminate = !disabled && checkedCount > 0 && checkedCount < childInputs.length;
+          groupInput.checked = !disabled && checkedCount === childInputs.length;
+          const reason = disabled ? "בקבוצה זו יש כלי חיפוש/איתור, לא שכבות מפה שניתן להדליק." : "";
+          const label = groupInput.closest("label");
+          label?.classList.toggle("isDisabled", disabled);
+          label.title = disabled ? reason : (label.dataset.groupTitle || "");
+        };
+        window.__syncResidentGovMapLayerGroups = () => {
+          for (const groupItem of list.querySelectorAll(".residentGovMapGroupItem")) {
+            syncGroupState(groupItem);
+          }
+          return true;
+        };
+        for (const group of groups) {
+          const key = String(group.layer_key || "").trim();
+          const layers = Array.isArray(group.layers) ? group.layers : [];
+          const selectableLayers = layers.filter((layer) => layer.selectable !== false && layer.kind === "map_layer");
+          if (!key || layers.length === 0 || selectableLayers.length === 0) continue;
           const item = document.createElement("li");
+          item.className = "residentGovMapGroupItem";
+          item.dataset.groupName = group.display_name_he || key;
+          item.dataset.searchText = [
+            group.display_name_he,
+            group.layer_key,
+            group.govmap_category_he,
+            ...layers.flatMap((layer) => [layer.alias, layer.label_he, layer.kind]),
+          ].filter(Boolean).join(" ");
+          const header = document.createElement("div");
+          header.className = "residentGovMapGroupHeader";
           const label = document.createElement("label");
+          label.dataset.groupTitle = group.caveats_he || group.resident_synergy_he || "";
           const input = document.createElement("input");
           input.type = "checkbox";
-          input.checked = defaultVisible.has(alias);
-          input.dataset.govmapLayerToggle = alias;
+          input.checked = group.default_visible === true;
+          input.dataset.residentGovmapLayerGroupToggle = key;
           input.autocomplete = "off";
-          input.addEventListener("change", (event) => {
-            if (event.__municipalDashboardFilterHandled) return;
-            event.__municipalDashboardFilterHandled = true;
-            if (!window.__municipalDashboardMapFiltersChanged?.(input)) {
-              window.__updateGovMapIframeUrl?.();
+          input.addEventListener("change", () => {
+            for (const childInput of item.querySelectorAll("[data-resident-govmap-layer-toggle]")) {
+              if (!childInput.disabled) {
+                childInput.checked = input.checked;
+              }
             }
+            syncGroupState(item);
+            window.__updateGovMapIframeUrl?.();
           });
-          const swatch = document.createElement("span");
-          swatch.className = `mapLayerLegendSwatch ${layer.category || "municipal"}`;
-          const text = document.createElement("span");
-          text.textContent = layer.label_he || alias;
-          label.append(input, swatch, text);
-          item.appendChild(label);
+          const textWrap = document.createElement("span");
+          textWrap.className = "residentGovMapLayerText";
+          const name = document.createElement("span");
+          name.className = "residentGovMapLayerName";
+          name.textContent = group.display_name_he || key;
+          const meta = document.createElement("span");
+          meta.className = "residentGovMapLayerMeta";
+          const selectableCount = selectableLayers.length;
+          meta.textContent = `${group.govmap_category_he || "GovMap"} · ${selectableCount}/${layers.length} שכבות`;
+          textWrap.append(name, meta);
+          label.title = label.dataset.groupTitle;
+          label.append(input, textWrap);
+          const expandButton = document.createElement("button");
+          expandButton.type = "button";
+          expandButton.className = "residentGovMapExpandButton";
+          expandButton.dataset.residentGovmapExpand = key;
+          expandButton.setAttribute("aria-expanded", "false");
+          expandButton.addEventListener("click", () => {
+            const nextExpanded = expandButton.getAttribute("aria-expanded") !== "true";
+            item.dataset.userExpanded = String(nextExpanded);
+            setGroupExpanded(item, nextExpanded);
+          });
+          header.append(label, expandButton);
+          item.appendChild(header);
+          const childList = document.createElement("ul");
+          childList.className = "residentGovMapChildList";
+          childList.id = `resident-govmap-children-${key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+          childList.hidden = true;
+          expandButton.setAttribute("aria-controls", childList.id);
+          let childIndex = 0;
+          for (const layer of layers) {
+            const alias = String(layer.alias || "").trim();
+            if (!alias) continue;
+            childIndex += 1;
+            const childItem = document.createElement("li");
+            const childLabel = document.createElement("label");
+            const childInput = document.createElement("input");
+            const selectable = layer.selectable !== false && layer.kind === "map_layer";
+            childInput.type = "checkbox";
+            childInput.checked = layer.default_visible === true;
+            childInput.disabled = !selectable;
+            childInput.dataset.residentGovmapLayerToggle = alias;
+            childInput.dataset.residentGovmapLayerKind = layer.kind || "map_layer";
+            childInput.autocomplete = "off";
+            childInput.addEventListener("change", () => {
+              syncGroupState(item);
+              window.__updateGovMapIframeUrl?.();
+            });
+            const childText = document.createElement("span");
+            childText.className = "residentGovMapLayerText";
+            const childName = document.createElement("span");
+            childName.className = "residentGovMapLayerName";
+            const rawLabel = String(layer.label_he || "").trim();
+            childName.textContent = rawLabel && rawLabel !== alias ? rawLabel : `${group.display_name_he || "שכבת GovMap"} ${childIndex}`;
+            const childMeta = document.createElement("span");
+            childMeta.className = "residentGovMapLayerMeta";
+            const kindLabel = layer.kind === "search_datatype" ? "כלי חיפוש" : "שכבת מפה";
+            childMeta.textContent = `${alias} · ${kindLabel}`;
+            childText.append(childName, childMeta);
+            if (!selectable) {
+              childLabel.classList.add("isDisabled");
+              childLabel.title = layer.reason_he || "לא ניתן להציג כשכבת מפה.";
+            }
+            childLabel.append(childInput, childText);
+            childItem.appendChild(childLabel);
+            childList.appendChild(childItem);
+          }
+          item.appendChild(childList);
+          setGroupExpanded(item, false);
+          syncGroupState(item);
           list.appendChild(item);
         }
+        list.appendChild(emptyMessage);
+        updateSearchVisibility();
         return true;
       };
 
@@ -4799,12 +5141,17 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           overlay.replaceChildren();
         }
         window.__municipalDashboardGisMap = payload;
-        renderGovMapLayerFilters(payload);
+        renderResidentGovMapLayerGroups(payload);
         updateGovMapFilterAvailability(true);
         const renderGovMapFallback = (error = null) => {
           if (error) console.warn("govmap_native_render_failed", error);
           if (nativeMap) nativeMap.hidden = true;
           if (tileBasemap) tileBasemap.hidden = false;
+          document.querySelectorAll(".mapIconSizeControl").forEach((control) => {
+            control.hidden = false;
+          });
+          setControlDisabled(document.getElementById("map-icon-size"), false);
+          setControlDisabled(document.getElementById("map-label-size"), false);
           renderGovMapTileBasemap(payload);
           updateGovMapIframeUrl(payload);
           setGovMapSelectedAreaNativeStatus("unavailable", "האזור הנבחר דורש אובייקט GovMap אמיתי; לא מוצג פוליגון דמה בגיבוי.");
@@ -6440,12 +6787,14 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       const frame = document.querySelector(".mapFrame");
       const staticMap = document.getElementById("real-gis-static-map");
       const realMap = document.getElementById("real-gis-map");
+      const mapPanel = frame?.closest(".mapPanel");
       const status = document.getElementById("map-renderer-status");
       const controls = {
         reset: document.getElementById("map-view-reset"),
         zoomIn: document.getElementById("map-view-zoom-in"),
         zoomOut: document.getElementById("map-view-zoom-out"),
         layers: document.getElementById("map-view-layers"),
+        fullscreen: document.getElementById("map-view-fullscreen"),
         popover: document.getElementById("map-layer-popover"),
         iconSize: document.getElementById("map-icon-size"),
         iconSizeLabel: document.getElementById("map-icon-size-label"),
@@ -6552,12 +6901,38 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         controls.popover.hidden = true;
         controls.layers?.setAttribute("aria-expanded", "false");
       };
+      const setMapFullscreen = (active) => {
+        if (!mapPanel || !controls.fullscreen) {
+          return;
+        }
+        mapPanel.classList.toggle("isMapFullscreen", active);
+        document.body.classList.toggle("mapFullscreenActive", active);
+        controls.fullscreen.setAttribute("aria-pressed", String(active));
+        controls.fullscreen.setAttribute("aria-label", active ? "כיווץ המפה" : "הגדלת המפה למסך מלא");
+        const label = controls.fullscreen.querySelector("span");
+        if (label) {
+          label.textContent = active ? "כווץ" : "מסך מלא";
+        }
+        window.dispatchEvent(new Event("resize"));
+        window.setTimeout(() => window.dispatchEvent(new Event("resize")), 120);
+      };
+      const isMapFullscreen = () => Boolean(mapPanel?.classList.contains("isMapFullscreen"));
+      controls.fullscreen?.addEventListener("click", (event) => {
+        stop(event);
+        setMapFullscreen(!isMapFullscreen());
+      }, true);
       controls.popover?.querySelector("[data-map-layer-close]")?.addEventListener("click", (event) => {
         stop(event);
         closeLayerPopover();
         controls.layers?.focus();
       }, true);
       document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && isMapFullscreen()) {
+          closeLayerPopover();
+          setMapFullscreen(false);
+          controls.fullscreen?.focus();
+          return;
+        }
         if (event.key === "Escape" && controls.popover && !controls.popover.hidden) {
           closeLayerPopover();
           controls.layers?.focus();
@@ -6577,7 +6952,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const input = document.querySelector(`${selector}="${value}"]`);
         return !input || input.checked;
       };
-      const mapFilterInputs = () => Array.from(document.querySelectorAll("[data-map-layer-toggle], [data-map-object-toggle], [data-govmap-layer-toggle]")).filter((input) => !input.disabled);
+      const mapFilterInputs = () => Array.from(document.querySelectorAll('[data-resident-govmap-layer-toggle][data-resident-govmap-layer-kind="map_layer"]')).filter((input) => !input.disabled);
       const updateToggleAllFiltersLabel = () => {
         if (!controls.toggleAll) {
           return;
@@ -6620,7 +6995,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           label.setAttribute("font-size", String(fontSize));
           label.style.fontSize = `${fontSize}px`;
         }
-        applyMapLibreLabelScale();
+        window.__applyMapLibreLabelScale?.();
         window.__applyGovMapOverlayScale?.();
       };
       window.__applyGovMapOverlayScale = () => {
@@ -6703,6 +7078,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         for (const input of inputs) {
           input.checked = shouldCheck;
         }
+        window.__syncResidentGovMapLayerGroups?.();
         handleMapFilterChange();
       }, true);
       controls.iconSize?.addEventListener("input", (event) => {

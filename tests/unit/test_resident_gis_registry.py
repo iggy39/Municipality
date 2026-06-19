@@ -17,6 +17,18 @@ def test_default_resident_gis_registry_loads_and_cross_references_layers() -> No
     assert "flooding_damage_and_drainage" in registry.question_by_id
 
 
+def test_resident_registry_uses_only_verified_public_building_map_aliases() -> None:
+    registry = load_resident_gis_registry()
+
+    public_buildings = registry.layer_by_key["public_buildings_assets"]
+    playgrounds = registry.layer_by_key["playgrounds_youth_space"]
+
+    assert public_buildings.govmap_aliases == ("public_institutions_survey",)
+    assert "layer_210692" not in public_buildings.govmap_aliases
+    assert "layer_210697" not in public_buildings.govmap_aliases
+    assert playgrounds.govmap_aliases == ()
+
+
 def test_flooding_question_prioritizes_drainage_and_roads() -> None:
     registry = load_resident_gis_registry()
     recommendations = recommend_layers_for_question("flooding_damage_and_drainage", registry, limit=4)

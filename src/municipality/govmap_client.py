@@ -5,11 +5,13 @@ import json
 import math
 import os
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 from urllib.parse import urlencode
 
 import httpx
 from pyproj import Transformer
+
+from municipality.resident_gis_registry import load_resident_gis_registry
 
 
 DEFAULT_GOVMAP_API_KEY = "cb6f6d3f-758c-4d05-8308-1a09f8da9d70"
@@ -61,6 +63,11 @@ GOVMAP_DEFAULT_VISIBLE_LAYER_ALIASES = (
 )
 
 GOVMAP_ADDRESS_DATATYPES = ("address", "street", "settlement")
+GOVMAP_SEARCH_DATATYPE_LABELS_HE = {
+    "address": "כתובת",
+    "street": "רחוב",
+    "settlement": "יישוב",
+}
 
 
 class GovMapClient:
@@ -158,6 +165,8 @@ def build_govmap_dashboard_payload(
     center_y = float(center_y if center_y is not None else DEFAULT_GOVMAP_CENTER_Y)
     center = itm_to_wgs84(center_x, center_y)
     govmap_layers = GOVMAP_DASHBOARD_LAYERS
+    resident_layer_groups = _resident_govmap_layer_groups()
+    resident_map_layer_aliases = _resident_govmap_aliases(resident_layer_groups, kind="map_layer")
     default_visible_layers = [layer.alias for layer in govmap_layers if layer.alias in GOVMAP_DEFAULT_VISIBLE_LAYER_ALIASES]
     initial_profile = str(profile or "").strip().lower() == "initial"
     spatial_payload: dict[str, Any] = {"layers": {}}
@@ -242,9 +251,10 @@ def build_govmap_dashboard_payload(
             "level": DEFAULT_GOVMAP_LEVEL,
             "background": 0,
             "radius_m": radius_m,
-            "visible_layers": [layer.alias for layer in govmap_layers],
+            "visible_layers": _unique_texts([layer.alias for layer in govmap_layers] + resident_map_layer_aliases),
             "default_visible_layers": default_visible_layers,
             "layer_filters": _govmap_layer_filters(govmap_layers),
+            "resident_layer_groups": resident_layer_groups,
             "layer_groups": _govmap_layer_groups(),
             "spatial_status": "available" if spatial_error is None else "degraded",
             "spatial_error": spatial_error,
@@ -653,6 +663,74 @@ def _govmap_layer_filters(layers: tuple[GovMapLayerSpec, ...]) -> list[dict[str,
         }
         for layer in layers
     ]
+
+
+def _resident_govmap_layer_groups() -> list[dict[str, Any]]:
+    registry = load_resident_gis_registry()
+    dashboard_layer_labels = {layer.alias: layer.label_he for layer in GOVMAP_DASHBOARD_LAYERS}
+    groups: list[dict[str, Any]] = []
+    for layer in registry.layer_groups:
+        child_layers = [
+            _resident_child_layer_payload(alias, dashboard_layer_labels)
+            for alias in _unique_texts(layer.govmap_aliases)
+        ]
+        child_layers = [child for child in child_layers if child["alias"]]
+        if not child_layers:
+            continue
+        groups.append(
+            {
+                "layer_key": layer.layer_key,
+                "display_name_he": layer.display_name_he,
+                "govmap_category_he": layer.govmap_category_he,
+                "govmap_aliases": [child["alias"] for child in child_layers],
+                "layers": child_layers,
+                "geometry": layer.geometry,
+                "tags": list(layer.tags),
+                "protocol_signal_types": list(layer.protocol_signal_types),
+                "resident_synergy_he": layer.resident_synergy_he,
+                "caveats_he": layer.caveats_he,
+                "default_visible": False,
+            }
+        )
+    return groups
+
+
+def _resident_child_layer_payload(alias: str, dashboard_layer_labels: Mapping[str, str]) -> dict[str, Any]:
+    text = str(alias or "").strip()
+    kind = "search_datatype" if text in GOVMAP_ADDRESS_DATATYPES else "map_layer"
+    selectable = kind == "map_layer"
+    return {
+        "alias": text,
+        "label_he": GOVMAP_SEARCH_DATATYPE_LABELS_HE.get(text) or dashboard_layer_labels.get(text) or text,
+        "kind": kind,
+        "selectable": selectable,
+        "default_visible": False,
+        "reason_he": "משמש לחיפוש כתובת/רחוב/יישוב, לא כשכבת מפה להצגה." if not selectable else None,
+    }
+
+
+def _resident_govmap_aliases(groups: list[dict[str, Any]], *, kind: str | None = None) -> list[str]:
+    aliases: list[str] = []
+    for group in groups:
+        for layer in group.get("layers") or []:
+            if not isinstance(layer, Mapping):
+                continue
+            if kind is not None and layer.get("kind") != kind:
+                continue
+            aliases.append(str(layer.get("alias") or ""))
+    return _unique_texts(aliases)
+
+
+def _unique_texts(values: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
 
 
 def _govmap_legend() -> list[dict[str, str]]:
