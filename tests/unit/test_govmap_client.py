@@ -60,6 +60,10 @@ def test_build_govmap_dashboard_payload_degrades_without_live_calls(monkeypatch)
         group["layer_key"] == "parcels_cadaster" and any(layer["alias"] == "PARCEL_ALL" and layer["kind"] == "map_layer" for layer in group["layers"])
         for group in resident_groups
     )
+    parcels_cadaster = next(group for group in resident_groups if group["layer_key"] == "parcels_cadaster")
+    assert {layer["alias"] for layer in parcels_cadaster["layers"]} >= {"PARCEL_ALL", "SUB_GUSH_ALL"}
+    assert "parcel_all" not in {layer["alias"] for layer in parcels_cadaster["layers"]}
+    assert "sub_gush_all" not in {layer["alias"] for layer in parcels_cadaster["layers"]}
     resident_location = next(group for group in resident_groups if group["layer_key"] == "resident_location")
     assert {layer["alias"] for layer in resident_location["layers"]} == {"address", "street", "settlement"}
     assert {layer["kind"] for layer in resident_location["layers"]} == {"search_datatype"}
@@ -71,6 +75,12 @@ def test_build_govmap_dashboard_payload_degrades_without_live_calls(monkeypatch)
     assert "layer_210692" not in {layer["alias"] for group in resident_groups for layer in group["layers"]}
     assert "layer_210697" not in {layer["alias"] for group in resident_groups for layer in group["layers"]}
     assert all(group["layer_key"] != "playgrounds_youth_space" for group in resident_groups)
+    catalog_groups = payload["govmap"]["catalog_layer_groups"]
+    assert {group["display_name_he"] for group in catalog_groups} == {"שכבות נוספות", "חלקיות"}
+    assert {group["status"] for group in catalog_groups} == {"additional", "partial"}
+    catalog_aliases = {layer["alias"] for group in catalog_groups for layer in group["layers"]}
+    assert {"sport", "situr_ironi", "ravkav", "mehoziot_app_taba"} <= catalog_aliases
+    assert {"sport", "situr_ironi", "ravkav"} <= set(payload["govmap"]["visible_layers"])
     assert "PARCEL_ALL" in payload["govmap"]["visible_layers"]
     assert "address" not in payload["govmap"]["visible_layers"]
     assert payload["govmap"]["level"] == DEFAULT_GOVMAP_LEVEL

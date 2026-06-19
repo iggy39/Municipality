@@ -38,6 +38,15 @@ class GovMapLayerSpec:
     geometry_kind: str = "point"
 
 
+@dataclass(frozen=True)
+class GovMapCatalogLayerSpec:
+    alias: str
+    label_he: str
+    category_he: str
+    status: str
+    evidence_he: str
+
+
 GOVMAP_DASHBOARD_LAYERS: tuple[GovMapLayerSpec, ...] = (
     GovMapLayerSpec("PARCEL_ALL", "nearby_parcels", "חלקות", "parcel", ("objectid", "GUSH_NUM", "PARCEL"), "#7c4dce", "polygon"),
     GovMapLayerSpec("SUB_GUSH_ALL", "nearby_parcels", "גושים", "parcel", ("objectid", "GUSH_NUM"), "#7c4dce", "polygon"),
@@ -58,6 +67,47 @@ GOVMAP_DASHBOARD_LAYERS: tuple[GovMapLayerSpec, ...] = (
     GovMapLayerSpec("GASSTATIONS", "infrastructure", "תחנות דלק", "public_building", ("objectid", "name", "company", "address"), "#f97316"),
 )
 
+GOVMAP_CATALOG_LAYER_GROUPS: tuple[dict[str, Any], ...] = (
+    {
+        "group_key": "additional_catalog_layers",
+        "display_name_he": "שכבות נוספות",
+        "status": "additional",
+        "help_he": "שכבות רשמיות נוספות מקטלוג GovMap שנוספו כמסננים נפרדים, בלי לערבב אותן בקבוצות התושב המקוריות.",
+        "layers": (
+            GovMapCatalogLayerSpec("sport", "מתקני ספורט", "תיירות, טבע, פנאי וספורט", "additional", "נמצאה כיסוי בכל 8 הערים הקטנות שנבדקו."),
+            GovMapCatalogLayerSpec("situr_ironi", "שיטור עירוני וכפרי", "שירותים", "additional", "נמצאה כיסוי בכל 8 הערים הקטנות שנבדקו."),
+            GovMapCatalogLayerSpec("ravkav", "עמדות טעינה רב קו", "תחבורה", "additional", "נמצאה כיסוי בכל 8 הערים הקטנות שנבדקו."),
+        ),
+    },
+    {
+        "group_key": "partial_catalog_layers",
+        "display_name_he": "חלקיות",
+        "status": "partial",
+        "help_he": "שכבות רשמיות בעלות ערך תושבי, אך הכיסוי במדגם היה חלקי, חופי, אזורי או דורש בדיקה ידנית נוספת.",
+        "layers": (
+            GovMapCatalogLayerSpec("teva_ironi", "אתרי טבע עירוני", "תיירות, טבע, פנאי וספורט", "partial", "כיסוי חלקי בערים קטנות; מועיל להקשר טבע/מרחב ציבורי."),
+            GovMapCatalogLayerSpec("teva_ironi_nek", "טבע עירוני - ממצאים נקודתיים", "תיירות, טבע, פנאי וספורט", "partial", "כיסוי חלקי בערים קטנות; מועיל להקשר טבע/מרחב ציבורי."),
+            GovMapCatalogLayerSpec("tipat_halav", "תחנות טיפות חלב", "בריאות ורפואה ורווחה", "partial", "שכבה לאומית, אך כיסוי המדגם בערים קטנות היה חלקי."),
+            GovMapCatalogLayerSpec("young_ctr", "מרכזי צעירים", "מוסדות ציבור ומשרדי ממשל", "partial", "שכבה לאומית, אך לא בכל עיר יש מרכז."),
+            GovMapCatalogLayerSpec("shil", "תחנות שי\"ל", "בריאות ורפואה ורווחה", "partial", "שכבה לאומית, אך לא בכל עיר יש תחנה."),
+            GovMapCatalogLayerSpec("train_statoins", "תחנות רכבת", "תחבורה", "partial", "רלוונטית רק ליד מסילות/תחנות רכבת."),
+            GovMapCatalogLayerSpec("orange_trash", "פח כתום במרחב ציבורי", "סביבה, חקלאות ומיחזור", "partial", "כיסוי טוב בחלק מהערים, אך חסר באחרות."),
+            GovMapCatalogLayerSpec("michrazim", "מכרזי מקרקעין - גבולות - רמ\"י", "קדסטר, מקרקעין ותכנון", "partial", "ערך תכנוני גבוה, אך הכיסוי תלוי במכרזים פעילים/היסטוריים."),
+            GovMapCatalogLayerSpec("michrazim_haluka", "מכרזי מקרקעין - מגרשים - רמ\"י", "קדסטר, מקרקעין ותכנון", "partial", "משלים את גבולות המכרזים; הכיסוי תלוי במכרזים."),
+            GovMapCatalogLayerSpec("urbanrenewal_settlment", "התחדשות עירונית - ישובים", "קדסטר, מקרקעין ותכנון", "partial", "שכבת יישובים; לא כל עיר במדגם כלולה."),
+            GovMapCatalogLayerSpec("add_projects_ur_muchraz", "מתחמי התחדשות עירונית", "קדסטר, מקרקעין ותכנון", "partial", "ערך גבוה אך כיסוי מדגם קטן היה דליל."),
+            GovMapCatalogLayerSpec("hof_polygon", "חופי רחצה", "מיפוי, מתחמים וגבולות", "partial", "רלוונטי בעיקר לרשויות חוף."),
+            GovMapCatalogLayerSpec("layer_227988", "איכות המים בנחלים", "סביבה, חקלאות ומיחזור", "partial", "שכבה סביבתית רשמית, אך כיסוי נקודתי/נחלי."),
+            GovMapCatalogLayerSpec("layer_227909", "איכות המים בנחלים - נקודתי", "סביבה, חקלאות ומיחזור", "partial", "שכבה סביבתית רשמית, אך כיסוי נקודתי/נחלי."),
+            GovMapCatalogLayerSpec("svivanoiseday", "מפלס רעש תחבורה - יממה", "סביבה, חקלאות ומיחזור", "partial", "כיסוי המדגם נראה אזורי; דורש בדיקה לפני הסתמכות."),
+            GovMapCatalogLayerSpec("svivanoisenight", "מפלס רעש תחבורה - לילה", "סביבה, חקלאות ומיחזור", "partial", "כיסוי המדגם נראה אזורי; דורש בדיקה לפני הסתמכות."),
+            GovMapCatalogLayerSpec("kartoniot", "קרטוניות", "סביבה, חקלאות ומיחזור", "partial", "נמצא בקטלוג, אך מדגם המרכזים החזיר אפס."),
+            GovMapCatalogLayerSpec("layer_230865", "פתרונות קצה לטיפול וסילוק פסולת", "סביבה, חקלאות ומיחזור", "partial", "נמצא בקטלוג, אך מדגם המרכזים החזיר אפס."),
+            GovMapCatalogLayerSpec("mehoziot_app_taba", "קווים כחולים - מבא\"ת", "קדסטר, מקרקעין ותכנון", "partial", "ערך תכנוני גבוה, אך חופף חלקית לשכבות תכנון קיימות."),
+        ),
+    },
+)
+
 GOVMAP_DEFAULT_VISIBLE_LAYER_ALIASES = (
     "neighborhoods_area",
 )
@@ -68,6 +118,101 @@ GOVMAP_SEARCH_DATATYPE_LABELS_HE = {
     "street": "רחוב",
     "settlement": "יישוב",
 }
+GOVMAP_CATALOG_LAYER_LABELS_HE = {
+    "Neighborhood": "שכונות - נקודתי",
+    "neighborhood": "שכונות - נקודתי",
+    "neighborhoods_area": "שכונות",
+    "stat_area_2022": "אזורים סטטיסטיים 2022",
+    "STATISTIC_AREAS_2011": "אזורים סטטיסטיים",
+    "statistic_areas_2011": "אזורים סטטיסטיים",
+    "soec": "אשכול חברתי כלכלי מפקד 2008",
+    "regional_authorities": "רשויות מקומיות",
+    "local_committees": "ועדים מקומיים",
+    "geographic_committee_border": "גבול ועדה גאוגרפית",
+    "clusterregion": "אשכולות רשויות מקומיות",
+    "PARCEL_ALL": "חלקות",
+    "parcel_all": "חלקות",
+    "SUB_GUSH_ALL": "גושים",
+    "sub_gush_all": "גושים",
+    "parcel_ownership_new": "סוג בעלות בחלקות רשומות",
+    "tazar": "תצ\"ר",
+    "cadaster_notes": "הערות קדסטריות",
+    "retzefmigrashim": "רצף מגרשי תב\"ע - רמ\"י",
+    "migrashim_msbs": "מגרשים - משרד הבינוי",
+    "mehoziot_app_yk": "יעודי קרקע - מבא\"ת",
+    "talar_prep": "תוכניות בהכנה",
+    "tama70": "תמ\"א 70 - מטרו - גבול תכנית",
+    "tabaot": "תב\"עות - נתיבי ישראל",
+    "public_institutions_survey": "מוסדות ציבור",
+    "school": "בתי ספר",
+    "kids_g": "גני ילדים",
+    "layer_210691": "בתי ספר",
+    "layer_210693": "אשכול גני ילדים",
+    "edu_setl_schools": "בתי ספר המינהל לחינוך התיישבותי",
+    "edu_setl_board_schools": "פנימיות המינהל לחינוך התיישבותי",
+    "clinics": "מוסדות ומרפאות",
+    "pharmacies": "בתי מרקחת",
+    "mosdot_griatric": "מוסדות גריאטריים",
+    "yad_sarah": "סניפי יד שרה",
+    "btl": "סניפי ביטוח לאומי",
+    "mechozotrevacha": "מחוזות רווחה",
+    "defi": "דפיברילטורים",
+    "defi_new": "מיקומי דפיברילטורים",
+    "emergancy_hospitals": "בתי חולים",
+    "clinicinsurance": "מרפאות בריאות הנפש",
+    "bombshelters": "מקלטים",
+    "layer_210766": "מקלטים",
+    "fire_stations": "תחנות כיבוי אש",
+    "police_yehida_location": "תחנות ונקודות משטרה",
+    "mada_stations": "תחנות מד\"א",
+    "emergencyfuelstations": "תחנות דלק לשעת חירום",
+    "maagalbldg": "מעג\"ל מבנים",
+    "maagalroads": "מעג\"ל כבישים",
+    "bus_stops": "תחנות אוטובוס",
+    "neta_lines": "קווי מערכת הסעת המונים בגוש דן",
+    "red_line_sta": "תחנות מערכת הסעת המונים בגוש דן",
+    "nta_metro_lines": "קווי מטרו",
+    "nta_metro_stations": "תחנות קווי מטרו",
+    "zchut_derech": "זכות דרך",
+    "layer_211867": "דרכים באר שבע",
+    "layer_211883": "מתחמי חנייה כחול לבן באר שבע",
+    "layer_156547": "שכבת תחבורה מקומית",
+    "neta_segment": "מקטעי עבודה - נת\"ע",
+    "districts_new": "מרחבי אחזקה",
+    "ezorim": "אזורי אחזקה",
+    "water_flow": "נחלים",
+    "pipelines": "צינורות",
+    "igudan_pipex": "איגודן צנרת",
+    "purified_drainage_pipes": "קווי קולחין ראשיים",
+    "purified_drainage_ponds": "מאגרי קולחין",
+    "layer_210700": "קו ביוב ג'סר א-זרקא",
+    "layer_210763": "צינורות מים",
+    "sviva_nitur_air": "תחנות ניטור אוויר",
+    "aq_realtime": "מדד זיהום אוויר בזמן אמת",
+    "divuchim2021": "מפל\"ס - מרשם פליטות לסביבה 2021",
+    "contaminated_soils": "קרקעות מזוהמות",
+    "hof_naki_update": "מדד חוף נקי",
+    "layer_211888": "ימי הוצאה גזם ופסולת גושית באר שבע",
+    "CELL_ACTIVE": "אנטנות סלולריות פעילות",
+    "cell_active": "אנטנות סלולריות פעילות",
+    "antena_hakama": "אנטנות סלולריות בהקמה",
+    "atractions": "אטרקציות",
+    "fieldschool": "בתי ספר שדה",
+    "mikve": "מקוואות",
+    "moatzot": "מועצות דתיות",
+    "bateydin": "בתי דין רבניים",
+    "layer_210695": "עסקים",
+    "banks": "סניפי בנקים",
+    "atm": "כספומטים",
+    "industries": "ענפי תעסוקה - מפקד 2008",
+    "occupations": "משלחי יד - מפקד 2008",
+    "sex_age_religion": "אוכלוסייה - מפקד 2008",
+    "workinghours_transport": "שעות עבודה ותחבורה - מפקד 2008",
+    "post_israel": "סניפי דואר ישראל",
+    "GASSTATIONS": "תחנות דלק",
+    "gasstations": "תחנות דלק",
+}
+GOVMAP_CATALOG_LAYER_LABELS_HE_LOWER = {key.lower(): value for key, value in GOVMAP_CATALOG_LAYER_LABELS_HE.items()}
 
 
 class GovMapClient:
@@ -167,6 +312,8 @@ def build_govmap_dashboard_payload(
     govmap_layers = GOVMAP_DASHBOARD_LAYERS
     resident_layer_groups = _resident_govmap_layer_groups()
     resident_map_layer_aliases = _resident_govmap_aliases(resident_layer_groups, kind="map_layer")
+    catalog_layer_groups = _catalog_layer_groups()
+    catalog_map_layer_aliases = _catalog_layer_aliases(catalog_layer_groups)
     default_visible_layers = [layer.alias for layer in govmap_layers if layer.alias in GOVMAP_DEFAULT_VISIBLE_LAYER_ALIASES]
     initial_profile = str(profile or "").strip().lower() == "initial"
     spatial_payload: dict[str, Any] = {"layers": {}}
@@ -251,10 +398,11 @@ def build_govmap_dashboard_payload(
             "level": DEFAULT_GOVMAP_LEVEL,
             "background": 0,
             "radius_m": radius_m,
-            "visible_layers": _unique_texts([layer.alias for layer in govmap_layers] + resident_map_layer_aliases),
+            "visible_layers": _unique_govmap_aliases([layer.alias for layer in govmap_layers] + resident_map_layer_aliases + catalog_map_layer_aliases),
             "default_visible_layers": default_visible_layers,
             "layer_filters": _govmap_layer_filters(govmap_layers),
             "resident_layer_groups": resident_layer_groups,
+            "catalog_layer_groups": catalog_layer_groups,
             "layer_groups": _govmap_layer_groups(),
             "spatial_status": "available" if spatial_error is None else "degraded",
             "spatial_error": spatial_error,
@@ -665,14 +813,56 @@ def _govmap_layer_filters(layers: tuple[GovMapLayerSpec, ...]) -> list[dict[str,
     ]
 
 
+def _catalog_layer_groups() -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    for group in GOVMAP_CATALOG_LAYER_GROUPS:
+        layers = [
+            {
+                "alias": layer.alias,
+                "label_he": layer.label_he,
+                "category_he": layer.category_he,
+                "status": layer.status,
+                "evidence_he": layer.evidence_he,
+                "kind": "map_layer",
+                "selectable": True,
+                "default_visible": False,
+            }
+            for layer in group["layers"]
+        ]
+        groups.append(
+            {
+                "group_key": group["group_key"],
+                "display_name_he": group["display_name_he"],
+                "status": group["status"],
+                "help_he": group["help_he"],
+                "layers": layers,
+                "default_visible": False,
+            }
+        )
+    return groups
+
+
+def _catalog_layer_aliases(groups: list[dict[str, Any]]) -> list[str]:
+    aliases: list[str] = []
+    for group in groups:
+        for layer in group.get("layers") or []:
+            if not isinstance(layer, Mapping):
+                continue
+            if layer.get("selectable") is False:
+                continue
+            aliases.append(str(layer.get("alias") or ""))
+    return _unique_govmap_aliases(aliases)
+
+
 def _resident_govmap_layer_groups() -> list[dict[str, Any]]:
     registry = load_resident_gis_registry()
     dashboard_layer_labels = {layer.alias: layer.label_he for layer in GOVMAP_DASHBOARD_LAYERS}
+    dashboard_aliases_by_lower = {layer.alias.lower(): layer.alias for layer in GOVMAP_DASHBOARD_LAYERS}
     groups: list[dict[str, Any]] = []
     for layer in registry.layer_groups:
         child_layers = [
             _resident_child_layer_payload(alias, dashboard_layer_labels)
-            for alias in _unique_texts(layer.govmap_aliases)
+            for alias in _unique_govmap_aliases(layer.govmap_aliases, preferred_aliases_by_lower=dashboard_aliases_by_lower)
         ]
         child_layers = [child for child in child_layers if child["alias"]]
         if not child_layers:
@@ -699,9 +889,10 @@ def _resident_child_layer_payload(alias: str, dashboard_layer_labels: Mapping[st
     text = str(alias or "").strip()
     kind = "search_datatype" if text in GOVMAP_ADDRESS_DATATYPES else "map_layer"
     selectable = kind == "map_layer"
+    label_he = GOVMAP_SEARCH_DATATYPE_LABELS_HE.get(text) or dashboard_layer_labels.get(text) or GOVMAP_CATALOG_LAYER_LABELS_HE.get(text) or GOVMAP_CATALOG_LAYER_LABELS_HE_LOWER.get(text.lower()) or text
     return {
         "alias": text,
-        "label_he": GOVMAP_SEARCH_DATATYPE_LABELS_HE.get(text) or dashboard_layer_labels.get(text) or text,
+        "label_he": label_he,
         "kind": kind,
         "selectable": selectable,
         "default_visible": False,
@@ -718,7 +909,23 @@ def _resident_govmap_aliases(groups: list[dict[str, Any]], *, kind: str | None =
             if kind is not None and layer.get("kind") != kind:
                 continue
             aliases.append(str(layer.get("alias") or ""))
-    return _unique_texts(aliases)
+    return _unique_govmap_aliases(aliases)
+
+
+def _unique_govmap_aliases(values: Iterable[str], *, preferred_aliases_by_lower: Mapping[str, str] | None = None) -> list[str]:
+    preferred = preferred_aliases_by_lower or {}
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(preferred.get(key, text))
+    return out
 
 
 def _unique_texts(values: Iterable[str]) -> list[str]:
