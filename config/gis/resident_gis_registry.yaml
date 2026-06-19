@@ -1,0 +1,439 @@
+version: 1
+purpose_he: "Registry for conceptual Resident GIS RAG: match protocol evidence needs to compatible GIS context layers."
+
+linking_modes:
+  - id: resident_address_buffer
+    label_he: "כתובת תושב + רדיוס"
+    confidence: medium
+    description_he: "כאשר התושב נותן כתובת או נקודה, מצרפים שכבות סביב מיקום התושב גם אם הפרוטוקול עצמו עירוני כללי."
+  - id: explicit_cadaster_reference
+    label_he: "גוש/חלקה/מגרש מפורשים"
+    confidence: high
+    description_he: "כאשר בפרוטוקול מופיע מזהה קדסטרלי, מקשרים לחלקה/גוש/תכנית ללא תלות בנושא."
+  - id: named_facility_geocoding
+    label_he: "שם מוסד או מתקן"
+    confidence: medium
+    description_he: "כאשר מופיע שם מקום, מוסד, מרכז מסחרי, בית ספר או פארק, מנסים התאמה בגזטיר/POI/כתובת."
+  - id: neighborhood_or_statistical_area
+    label_he: "רובע/שכונה/אזור סטטיסטי"
+    confidence: medium
+    description_he: "כאשר השאלה או המסמך מדברים על רובע, שכונה או אוכלוסייה, מוסיפים גבולות ושכבות דמוגרפיות."
+  - id: citywide_context
+    label_he: "הקשר עירוני כללי"
+    confidence: low
+    description_he: "כאשר אין מקום מדויק, מציגים מפת עיר/שכונות והקשר סטטיסטי בלבד, עם סימון אי-ודאות."
+
+protocol_signal_types:
+  - id: resident_address
+    label_he: "כתובת או נקודת תושב"
+  - id: named_place
+    label_he: "שם מקום, מוסד, מתקן או רחוב"
+  - id: cadastral_reference
+    label_he: "גוש, חלקה, מגרש או תכנית"
+  - id: service_population
+    label_he: "קבוצת אוכלוסייה או שירות עירוני"
+  - id: risk_or_hazard
+    label_he: "סיכון, מפגע, בטיחות או חירום"
+  - id: municipal_action
+    label_he: "החלטה, בקשה, שאילתה, הצעה או הנחיה"
+  - id: budget_or_support
+    label_he: "תקצוב, תמיכה, מלגה או מימון"
+  - id: agreement_or_allocation
+    label_he: "הסכם, הקצאה, שימוש או פיתוח נכס"
+
+layer_groups:
+  - layer_key: resident_location
+    display_name_he: "כתובות ונקודת תושב"
+    govmap_category_he: "מיפוי, מתחמים וגבולות"
+    govmap_aliases: [address, street, settlement]
+    geometry: point
+    tags: [resident_location, address_resolution, proximity, geocoding]
+    protocol_signal_types: [resident_address, named_place]
+    resident_synergy_he: "ממיר שאלה אישית כמו 'ליד הבית שלי' למוקד מרחבי שממנו אפשר להביא החלטות ושכבות."
+    caveats_he: "דורש כתובת/נקודה מהתושב; אין להסיק כתובת מהפרוטוקול בלבד."
+  - layer_key: neighborhoods_and_statistics
+    display_name_he: "שכונות, רובעים ואזורים סטטיסטיים"
+    govmap_category_he: "מיפוי, מתחמים וגבולות / נתונים סטטיסטיים"
+    govmap_aliases: [neighborhoods_area, Neighborhood, stat_area_2022, STATISTIC_AREAS_2011, soec]
+    geometry: polygon
+    tags: [neighborhood, quarter, statistical_area, equity, demographic_context, citywide_context]
+    protocol_signal_types: [resident_address, named_place, service_population, municipal_action]
+    resident_synergy_he: "מראה אם החלטה עירונית פוגעת או מועילה במיוחד לשכונה של התושב, ולא רק לעיר כולה."
+    caveats_he: "אזור סטטיסטי אינו תמיד זהה לשכונה שבה תושב משתמש בשפה יומיומית."
+  - layer_key: municipal_boundaries
+    display_name_he: "גבולות רשות ותחומי אחריות"
+    govmap_category_he: "שירותים / מיפוי, מתחמים וגבולות"
+    govmap_aliases: [regional_authorities, local_committees, geographic_committee_border, clusterregion]
+    geometry: polygon
+    tags: [municipality_boundary, jurisdiction, local_committee, responsibility]
+    protocol_signal_types: [resident_address, municipal_action]
+    resident_synergy_he: "מבדיל בין אחריות העירייה, ועד מקומי, אשכול רשויות או גוף ממשלתי אחר."
+    caveats_he: "גבול מנהלי אינו מוכיח מי אחראי לביצוע בפועל; צריך לקרוא גם את הפרוטוקול."
+  - layer_key: parcels_cadaster
+    display_name_he: "גושים, חלקות ובעלות"
+    govmap_category_he: "קדסטר, מקרקעין ותכנון"
+    govmap_aliases: [PARCEL_ALL, SUB_GUSH_ALL, parcel_all, sub_gush_all, parcel_ownership_new, tazar, cadaster_notes]
+    geometry: polygon
+    tags: [parcel, block, cadaster, ownership, land_allocation, property, agreement]
+    protocol_signal_types: [cadastral_reference, agreement_or_allocation, named_place]
+    resident_synergy_he: "מחבר החלטות הקצאה/הסכם/מקווה/אנטנה לחלקה אמיתית ולבעלות/סטטוס הקרקע."
+    caveats_he: "בעלות וגבולות חייבים להישאר מקור רשמי/קונטקסטואלי לפי תנאי המקור."
+  - layer_key: planning_land_use
+    display_name_he: "תכניות, ייעודי קרקע ומגרשי תב\"ע"
+    govmap_category_he: "קדסטר, מקרקעין ותכנון"
+    govmap_aliases: [retzefmigrashim, mehoziot_app_yk, talar_prep, tama70, tabaot]
+    geometry: polygon
+    tags: [planning, land_use, plan_status, public_participation, development, objection]
+    protocol_signal_types: [cadastral_reference, municipal_action, agreement_or_allocation]
+    resident_synergy_he: "מסביר האם פרוטוקול על פיתוח, הקצאה או התנגדות יושב על תכנית קיימת/בהכנה."
+    caveats_he: "סטטוס תכנית דורש מקור תכנוני רשמי ועדכני, לא רק שכבת תצוגה."
+  - layer_key: public_buildings_assets
+    display_name_he: "מבני ציבור ונכסים עירוניים"
+    govmap_category_he: "מוסדות ציבור ומשרדי ממשל"
+    govmap_aliases: [layer_210692, layer_210697]
+    local_layer_keys: [buildings, context_pois]
+    geometry: point_or_polygon
+    tags: [public_building, municipal_asset, facility, accessibility, maintenance, agreement]
+    protocol_signal_types: [named_place, agreement_or_allocation, risk_or_hazard, municipal_action]
+    resident_synergy_he: "מוסיף מיקום ונגישות לשאלות על מעלית, שיפוץ, שימוש במתקן ציבורי או נכס עירוני."
+    caveats_he: "שכבת מבני ציבור עשויה לא לכלול כל נכס עירוני או שם מסחרי עדכני."
+  - layer_key: education_facilities
+    display_name_he: "בתי ספר וגני ילדים"
+    govmap_category_he: "מוסדות ציבור ומשרדי ממשל / חינוך ודת"
+    govmap_aliases: [school, kids_g, layer_210691, layer_210693, edu_setl_schools, edu_setl_board_schools]
+    local_layer_keys: [poi_school, poi_kindergarten]
+    geometry: point
+    tags: [education, school, kindergarten, youth, catchment, bullying_prevention, community]
+    protocol_signal_types: [named_place, service_population, municipal_action, budget_or_support]
+    resident_synergy_he: "מחבר החלטות חינוך לבית ספר/גן קרוב, אזור שירות, ומרחק מהתושב."
+    caveats_he: "אזורי רישום אינם תמיד בשכבה; צריך להפריד בין מיקום מוסד לבין זכאות."
+  - layer_key: playgrounds_youth_space
+    display_name_he: "גני משחקים, פארקים ומרחבי נוער"
+    govmap_category_he: "חינוך ודת / תיירות, טבע, פנאי וספורט"
+    govmap_aliases: [layer_212138, res_parks_meforat, res_parks_tama, shvilim_allr]
+    local_layer_keys: [municipal_parks]
+    geometry: point_or_polygon
+    tags: [park, playground, youth, public_space, night_activity, safety, leisure]
+    protocol_signal_types: [named_place, service_population, risk_or_hazard, municipal_action]
+    resident_synergy_he: "נותן הקשר לשאלות על בני נוער בפארקים, בטיחות, תאורה, ניקיון ופעילות קהילתית."
+    caveats_he: "פארק רשמי ושם מקומי של גינה לא תמיד זהים."
+  - layer_key: welfare_health_services
+    display_name_he: "רווחה, בריאות ושירותים לאוכלוסיות"
+    govmap_category_he: "בריאות ורפואה ורווחה"
+    govmap_aliases: [clinics, pharmacies, mosdot_griatric, yad_sarah, btl, mechozotrevacha, defi, emergancy_hospitals, clinicinsurance]
+    geometry: point_or_polygon
+    tags: [welfare, health, elderly, family_support, social_services, accessibility, vulnerability]
+    protocol_signal_types: [service_population, named_place, risk_or_hazard, budget_or_support]
+    resident_synergy_he: "מראה האם החלטות רווחה/קשישים/משפחות יושבות ליד שירותים קיימים או באזור עם מחסור."
+    caveats_he: "שכבות בריאות/רווחה אינן מחליפות זכאות פרטנית או מידע אישי."
+  - layer_key: emergency_security_services
+    display_name_he: "חירום, ביטחון והצלה"
+    govmap_category_he: "חירום, ביטחון והצלה"
+    govmap_aliases: [bombshelters, layer_210766, fire_stations, police_yehida_location, mada_stations, emergencyfuelstations, maagalbldg, maagalroads]
+    geometry: point_or_polygon
+    tags: [emergency, shelter, police, fire, ambulance, public_safety, preparedness, hazard]
+    protocol_signal_types: [risk_or_hazard, service_population, municipal_action, named_place]
+    resident_synergy_he: "מחבר דיוני מל\"ח, ביטחון, אלימות ותרגילים למתקני חירום ולפערי כיסוי סביב התושב."
+    caveats_he: "זמינות בזמן אמת דורשת מקור תפעולי; השכבה היא הקשר תכנוני/מרחבי."
+  - layer_key: public_transport_access
+    display_name_he: "תחבורה ציבורית ונגישות"
+    govmap_category_he: "תחבורה"
+    govmap_aliases: [bus_stops, neta_lines, red_line_sta, nta_metro_lines, nta_metro_stations]
+    local_layer_keys: [mot_gtfs_stops]
+    geometry: point_or_line
+    tags: [public_transport, bus_stop, transit, accessibility, mobility, budget]
+    protocol_signal_types: [resident_address, named_place, municipal_action, budget_or_support]
+    resident_synergy_he: "מוסיף מרחק לתחנה, קו/מסילה סמוכה והקשר לשאלות על תקציבי תחבורה או שינויים."
+    caveats_he: "מידע תפעולי על קווים וזמנים דורש GTFS/משרד התחבורה, לא רק שכבת תצוגה."
+  - layer_key: roads_parking_public_works
+    display_name_he: "כבישים, חניה ועבודות בעיר"
+    govmap_category_he: "תחבורה / שירותים"
+    govmap_aliases: [zchut_derech, layer_211867, layer_211883, layer_156547, neta_segment, districts_new, ezorim]
+    local_layer_keys: [context_roads, municipal_bike_paths]
+    geometry: line_or_polygon
+    tags: [road, parking, roadwork, bike_path, right_of_way, traffic_safety, maintenance]
+    protocol_signal_types: [resident_address, named_place, risk_or_hazard, municipal_action]
+    resident_synergy_he: "מסביר האם החלטה על בטיחות/חניה/עבודות משפיעה על נתיב ההגעה היומי של התושב."
+    caveats_he: "שכבות עבודות עירוניות יכולות להיות מקומיות ולא זמינות בכל רשות."
+  - layer_key: drainage_water_sewer
+    display_name_he: "ניקוז, מים וביוב"
+    govmap_category_he: "משאבים, תשתיות ואנרגיה / מיפוי"
+    govmap_aliases: [water_flow, pipelines, igudan_pipex, purified_drainage_pipes, purified_drainage_ponds, layer_210700, layer_210763]
+    geometry: line_or_polygon
+    tags: [drainage, water, sewer, flooding, climate_resilience, infrastructure, pipe]
+    protocol_signal_types: [risk_or_hazard, named_place, municipal_action, budget_or_support]
+    resident_synergy_he: "מוסיף הקשר טכני לשאלות על הצפות, החלפת צינורות, קולטנים ותשתיות מים/ביוב."
+    caveats_he: "רוב שכבות הניקוז העירוניות אינן מלאות ברמה ארצית; יש לסמן פערי מקור."
+  - layer_key: environment_sanitation
+    display_name_he: "סביבה, פסולת, אוויר וניקיון"
+    govmap_category_he: "סביבה, חקלאות ומיחזור"
+    govmap_aliases: [sviva_nitur_air, aq_realtime, divuchim2021, contaminated_soils, hof_naki_update, layer_211888]
+    geometry: point_or_polygon
+    tags: [environment, sanitation, waste, air_quality, pollution, beach, cleanliness, dog_waste]
+    protocol_signal_types: [risk_or_hazard, named_place, municipal_action, service_population]
+    resident_synergy_he: "מחבר שאילתות ניקיון, גללי כלבים, חופים וזיהום למדדים ולמוקדי שירות סביב התושב."
+    caveats_he: "לא כל מפגע ניקיון מופיע כשכבה רשמית; לעיתים צריך נתוני מוקד/פניות."
+  - layer_key: cellular_and_radiation_context
+    display_name_he: "אנטנות סלולר ותשתיות תקשורת"
+    govmap_category_he: "סביבה, חקלאות ומיחזור"
+    govmap_aliases: [cell_active, antena_hakama]
+    geometry: point
+    tags: [cellular, antenna, radiation_context, public_concern, agreement, facility]
+    protocol_signal_types: [named_place, agreement_or_allocation, risk_or_hazard, municipal_action]
+    resident_synergy_he: "נותן שכבת הקשר לשאלות על הסכמי שימוש להפעלת מתקן שידור ועל קרבה לבתים/מוסדות."
+    caveats_he: "לא מסיק חריגה בריאותית; צריך מקור מדידות מוסמך אם השאלה על חשיפה."
+  - layer_key: culture_sport_leisure
+    display_name_he: "תרבות, ספורט ופנאי"
+    govmap_category_he: "תיירות, טבע, פנאי וספורט / מוסדות ציבור"
+    govmap_aliases: [atractions, fieldschool]
+    local_layer_keys: [poi_culture, municipal_parks]
+    geometry: point_or_polygon
+    tags: [culture, sport, leisure, public_facility, subsidy, accessibility, community]
+    protocol_signal_types: [named_place, budget_or_support, service_population, municipal_action]
+    resident_synergy_he: "מחבר החלטות תמיכה, ספורט, תרבות ונגישות למתקנים ולמרחק מהתושב."
+    caveats_he: "שכבות מתקני ספורט ותרבות הן לרוב עירוניות ולא אחידות בין רשויות."
+  - layer_key: religious_services
+    display_name_he: "שירותי דת"
+    govmap_category_he: "חינוך ודת"
+    govmap_aliases: [mikve, moatzot, bateydin]
+    geometry: point_or_polygon
+    tags: [religion, mikveh, religious_council, public_facility, allocation, agreement]
+    protocol_signal_types: [named_place, cadastral_reference, agreement_or_allocation, municipal_action]
+    resident_synergy_he: "ממקם החלטות על מקווה, מועצה דתית ושימוש בקרקע ביחס לשכונות ולחלקות."
+    caveats_he: "שירותי דת מושפעים גם מגוף מפעיל ולא רק מהמיקום."
+  - layer_key: commerce_employment
+    display_name_he: "עסקים, מסחר ותעסוקה"
+    govmap_category_he: "שירותים / נתונים סטטיסטיים"
+    govmap_aliases: [layer_210695, banks, atm, industries, occupations]
+    geometry: point_or_polygon
+    tags: [commerce, business, commercial_center, employment, local_economy, safety, renovation]
+    protocol_signal_types: [named_place, risk_or_hazard, municipal_action, budget_or_support]
+    resident_synergy_he: "עוזר להבין החלטות על מרכז מסחרי, עסקים ותעסוקה לפי מיקום, מבנה וסביבה כלכלית."
+    caveats_he: "עסק מסחרי ספציפי עשוי לא להופיע בשם הנוכחי; נדרש גזטיר עדכני."
+  - layer_key: demographic_equity
+    display_name_he: "דמוגרפיה, חברה ושוויון שירותים"
+    govmap_category_he: "נתונים סטטיסטיים"
+    govmap_aliases: [stat_area_2022, STATISTIC_AREAS_2011, sex_age_religion, soec, workinghours_transport]
+    geometry: polygon
+    tags: [demographics, equity, age_groups, socio_economic, vulnerability, service_gap]
+    protocol_signal_types: [service_population, budget_or_support, municipal_action]
+    resident_synergy_he: "נותן שכבת 'מי גר כאן' כדי לבדוק אם החלטות עירוניות עונות על צורכי אוכלוסייה."
+    caveats_he: "נתונים סטטיסטיים הם אגרגטיביים; אין להשתמש בהם להסיק על אדם יחיד."
+
+question_archetypes:
+  - question_id: near_me_recent_decisions
+    resident_question_he: "מה הוחלט לאחרונה על אזור המגורים שלי, ומה מתוך זה באמת קרוב אליי?"
+    user_context_needed: [resident_address_or_neighborhood]
+    protocol_evidence_needs: [municipal_action, decision, agenda_item, action_status]
+    gis_need_tags: [resident_location, proximity, neighborhood, public_building, roadwork, public_space]
+    layer_keys: [resident_location, neighborhoods_and_statistics, public_buildings_assets, roads_parking_public_works, playgrounds_youth_space]
+    synergy_he: "הפרוטוקולים נותנים 'מה נאמר/הוחלט'; GIS מסנן למה שרלוונטי סביב הבית."
+    answer_shape_he: "רשימת החלטות קרובות, מרחק/שכונה, שכבות שנפגעות, ורמת ודאות של הקישור."
+    topic_affinity_examples_he: ["סדר יום ושאילתות", "תכנון ובנייה", "תשתיות וסביבה"]
+  - question_id: parcel_allocation_watch
+    resident_question_he: "האם יש הקצאות קרקע, הסכמי שימוש או פיתוח בגוש/חלקה ליד הבית שלי?"
+    user_context_needed: [address_or_cadastral_id]
+    protocol_evidence_needs: [agreement_or_allocation, decision, committee_protocol]
+    gis_need_tags: [parcel, cadaster, land_allocation, ownership, planning, agreement]
+    layer_keys: [parcels_cadaster, planning_land_use, public_buildings_assets, religious_services]
+    synergy_he: "החלטות הקצאה הופכות למובנות רק כשהן מוצמדות לחלקה, ייעוד ובעלות."
+    answer_shape_he: "חלקות/תכניות רלוונטיות, החלטות מקושרות, גוף מקבל, שימוש מתוכנן, וסייגי מקור."
+    topic_affinity_examples_he: ["הקצאות ושימושים", "הסכמי רשות ופיתוח", "הקצאת מקרקעין למוסדות ציבור"]
+  - question_id: school_future_near_child
+    resident_question_he: "מה קורה עם בתי הספר והגנים באזור של הילדים שלי, והאם יש שינוי שיכול להשפיע על הליכה/רישום/קהילה?"
+    user_context_needed: [resident_address_or_school_name]
+    protocol_evidence_needs: [education_decision, proposal, committee_discussion]
+    gis_need_tags: [education, school, kindergarten, proximity, neighborhood, demographic_context]
+    layer_keys: [education_facilities, neighborhoods_and_statistics, demographic_equity, public_transport_access, playgrounds_youth_space]
+    synergy_he: "הפרוטוקול מספר על מדיניות או מוסד; GIS מראה מרחק, שכונה וסביבת ילדים."
+    answer_shape_he: "מוסדות קרובים, החלטות לפי מוסד/שכונה, השפעת נגישות, ודברים שלא ידועים עדיין."
+    topic_affinity_examples_he: ["מוסדות חינוך", "מאבק בתופעות חברתיות בבתי ספר", "חינוך"]
+  - question_id: youth_parks_night_safety
+    resident_question_he: "איפה בעיר דיברו על מפגשי בני נוער בפארקים בלילה, ומה מצב הביטחון/תאורה/שירותים סביב הפארקים שלי?"
+    user_context_needed: [resident_address_or_park_name]
+    protocol_evidence_needs: [inquiry, mayor_response, safety_action]
+    gis_need_tags: [park, youth, night_activity, public_safety, emergency, lighting, public_space]
+    layer_keys: [playgrounds_youth_space, emergency_security_services, roads_parking_public_works, neighborhoods_and_statistics]
+    synergy_he: "פרוטוקול על בני נוער מקבל ממד תושבי דרך פארקים, דרכי גישה ומוקדי ביטחון סמוכים."
+    answer_shape_he: "פארקים קרובים, החלטות/שאילתות, שירותי חירום סמוכים, וסימוני פער נתונים."
+    topic_affinity_examples_he: ["ביטחון במרחב הציבורי", "ילדים ונוער"]
+  - question_id: elderly_winter_vulnerability
+    resident_question_he: "בשכונה שלי יש הרבה קשישים? האם העירייה דיברה על מוות מקור/בדידות ומה השירותים הקרובים?"
+    user_context_needed: [resident_address_or_neighborhood]
+    protocol_evidence_needs: [inquiry, welfare_response, service_plan]
+    gis_need_tags: [elderly, vulnerability, welfare, health, demographics, proximity]
+    layer_keys: [demographic_equity, welfare_health_services, neighborhoods_and_statistics, public_transport_access]
+    synergy_he: "פרוטוקול רווחה הופך לשאלה מרחבית על סיכון ושירותים זמינים."
+    answer_shape_he: "אזור סטטיסטי/שכונה, שכבות גיל/רווחה אם קיימות, שירותים קרובים, החלטות וקישורים."
+    topic_affinity_examples_he: ["אזרחים ותיקים", "רווחה ושירותים חברתיים"]
+  - question_id: flooding_damage_and_drainage
+    resident_question_he: "האם הרחוב שלי נמצא באזור שהוזכר בהצפות, ומה ידוע על ניקוז/צינורות/פיצוי?"
+    user_context_needed: [resident_address_or_street]
+    protocol_evidence_needs: [proposal, maintenance_action, compensation_request]
+    gis_need_tags: [flooding, drainage, water, sewer, road, infrastructure, risk_or_hazard]
+    layer_keys: [drainage_water_sewer, roads_parking_public_works, neighborhoods_and_statistics, parcels_cadaster]
+    synergy_he: "הפרוטוקול מתאר תלונה או הצעה; GIS מוסיף תוואי ניקוז, רחובות, שיפוע/נחלים כשיש מקור."
+    answer_shape_he: "מוקדי הצפה שהוזכרו, שכבות תשתית זמינות, פעולות מוצעות, ופערים במקור הניקוז."
+    topic_affinity_examples_he: ["תכנון ובנייה", "תשתיות וסביבה", "מים וביוב"]
+  - question_id: commercial_center_safety
+    resident_question_he: "האם המרכז המסחרי ליד הבית שלי הוזכר כסיכון או כמועמד לשיפוץ, ומה ההקשר הבנייני/תכנוני שלו?"
+    user_context_needed: [resident_address_or_facility_name]
+    protocol_evidence_needs: [proposal, safety_claim, maintenance_action]
+    gis_need_tags: [commercial_center, building, safety, renovation, parcel, public_space]
+    layer_keys: [commerce_employment, public_buildings_assets, parcels_cadaster, planning_land_use, emergency_security_services]
+    synergy_he: "טקסט על מרכז מסחרי מתחבר למבנה, חלקה, דרכי גישה ומוקדי חירום."
+    answer_shape_he: "מיקום משוער, החלטות, תשתיות/מבנים קשורים, והאם הקישור ודאי או לפי שם בלבד."
+    topic_affinity_examples_he: ["מרכזים מסחריים", "נכסים ומרכזים מסחריים"]
+  - question_id: antenna_agreement_near_home
+    resident_question_he: "האם אושרו אנטנות או מתקני שידור ליד הבית/בית הספר, ובאיזו חלקה או מבנה?"
+    user_context_needed: [resident_address_or_facility_name]
+    protocol_evidence_needs: [agreement, land_use, decision]
+    gis_need_tags: [cellular, antenna, public_concern, parcel, public_building, school]
+    layer_keys: [cellular_and_radiation_context, parcels_cadaster, public_buildings_assets, education_facilities, neighborhoods_and_statistics]
+    synergy_he: "החלטת הסכם שימוש מקבלת משמעות דרך קרבה לבתים, מוסדות ציבור וחלקות."
+    answer_shape_he: "מתקני שידור קרובים, החלטות הסכם, חלקה/מבנה, מרחקים וסייג שאין זו מדידת קרינה."
+    topic_affinity_examples_he: ["הסכמי שימוש במתקנים ציבוריים", "מערכות מידע ותקשורת ציבורית"]
+  - question_id: public_transport_budget_gap
+    resident_question_he: "האם יש החלטות על תחבורה ציבורית שמשפיעות על התחנות והמסלולים שאני משתמש בהם?"
+    user_context_needed: [resident_address_or_route_area]
+    protocol_evidence_needs: [budget_question, project_status, ministry_funding]
+    gis_need_tags: [public_transport, bus_stop, transit, budget, accessibility, road]
+    layer_keys: [public_transport_access, roads_parking_public_works, neighborhoods_and_statistics, demographic_equity]
+    synergy_he: "תקציב/גרעון תחבורה בפרוטוקול מקבל הקשר של תחנות, שכונות ונגישות."
+    answer_shape_he: "תחנות/קווים באזור, החלטות תקציב או סטטוס, שכונות מושפעות, מקור המימון אם צוין."
+    topic_affinity_examples_he: ["תחבורה ציבורית", "תחבורה ובטיחות"]
+  - question_id: parking_and_roadwork_disruption
+    resident_question_he: "אילו עבודות, חניה או שינויי דרך צפויים סביבי, והאם הם עלו במועצה?"
+    user_context_needed: [resident_address_or_neighborhood]
+    protocol_evidence_needs: [work_plan, inquiry, approval]
+    gis_need_tags: [roadwork, parking, right_of_way, proximity, traffic_safety]
+    layer_keys: [roads_parking_public_works, public_transport_access, neighborhoods_and_statistics]
+    synergy_he: "שכבות עבודות וחניה מסבירות השפעה יומיומית של סעיפים שנשמעים טכניים."
+    answer_shape_he: "עבודות/חניה במפה, פרוטוקולים קשורים, תאריכים אם קיימים, ורמת ודאות."
+    topic_affinity_examples_he: ["הסדרי חניה ותנועה", "בטיחות בדרכים"]
+  - question_id: sanitation_dogs_waste
+    resident_question_he: "האם יש החלטות או תשובות על ניקיון, גללי כלבים או פינוי פסולת באזור שלי?"
+    user_context_needed: [resident_address_or_neighborhood]
+    protocol_evidence_needs: [inquiry_response, work_plan, service_frequency]
+    gis_need_tags: [sanitation, waste, dog_waste, cleanliness, park, neighborhood]
+    layer_keys: [environment_sanitation, playgrounds_youth_space, neighborhoods_and_statistics, roads_parking_public_works]
+    synergy_he: "מחבר תלונות ניקיון למרחבים ציבוריים, ימי פינוי ושכונות."
+    answer_shape_he: "שכונות/פארקים רלוונטיים, תשובת העירייה, שכבות פינוי/ניקיון אם קיימות, ומה חסר."
+    topic_affinity_examples_he: ["מיחזור ותברואה", "ניקיון ותברואה"]
+  - question_id: emergency_readiness_near_me
+    resident_question_he: "במקרה חירום, אילו מקלטים/תחנות חירום קרובים אליי ומה הוחלט על מוכנות העיר?"
+    user_context_needed: [resident_address]
+    protocol_evidence_needs: [emergency_committee, drill_summary, preparedness_action]
+    gis_need_tags: [emergency, shelter, fire, police, ambulance, preparedness, proximity]
+    layer_keys: [emergency_security_services, neighborhoods_and_statistics, public_buildings_assets, roads_parking_public_works]
+    synergy_he: "דיון מל\"ח או ביטחון הופך למפת מוכנות אישית סביב הבית."
+    answer_shape_he: "שירותי חירום קרובים, החלטות מוכנות, תרגילים, וסייגים על זמינות בזמן אמת."
+    topic_affinity_examples_he: ["מוכנות לחירום", "ביטחון ואכיפה"]
+  - question_id: family_support_services
+    resident_question_he: "האם למשפחות במצב דומה לשלי יש מענים עירוניים קרובים, ומה הוחלט עליהם?"
+    user_context_needed: [resident_neighborhood_optional]
+    protocol_evidence_needs: [welfare_program, directive, meeting_task]
+    gis_need_tags: [family_support, welfare, accessibility, public_transport, community]
+    layer_keys: [welfare_health_services, public_transport_access, neighborhoods_and_statistics, demographic_equity]
+    synergy_he: "החלטה חברתית מקבלת שכבת שירותים ונגישות במקום להישאר הצהרה כללית."
+    answer_shape_he: "תוכניות/משימות מהפרוטוקול, שירותים קרובים, נגישות תחבורתית, וקבוצת יעד."
+    topic_affinity_examples_he: ["סיוע למשפחות", "תוכניות רווחה קהילתיות"]
+  - question_id: sport_support_distribution
+    resident_question_he: "מי מקבל תמיכות ספורט בעיר, והאם יש קשר למתקנים או שכונות מסוימות?"
+    user_context_needed: [city_or_neighborhood]
+    protocol_evidence_needs: [support_criteria, committee_decision, budget_amount]
+    gis_need_tags: [sport, subsidy, public_facility, equity, demographic_context]
+    layer_keys: [culture_sport_leisure, neighborhoods_and_statistics, demographic_equity, public_transport_access]
+    synergy_he: "תבחיני תמיכות הופכים לשאלה על פיזור מתקנים ושוויון שכונתי."
+    answer_shape_he: "עמותות/קריטריונים מהפרוטוקול, מתקנים קשורים אם קיימים, שכונות, וסייגי קישור."
+    topic_affinity_examples_he: ["תמיכה בספורט", "תרבות וספורט", "תמיכות"]
+  - question_id: culture_accessibility_issue
+    resident_question_he: "האם נידונו בעיות נגישות במוסדות תרבות/פנאי שאני משתמש בהם?"
+    user_context_needed: [facility_name_or_address]
+    protocol_evidence_needs: [inquiry, maintenance_status, response]
+    gis_need_tags: [culture, public_facility, accessibility, maintenance, proximity]
+    layer_keys: [culture_sport_leisure, public_buildings_assets, public_transport_access, emergency_security_services]
+    synergy_he: "שאלת מעלית/נגישות מקבלת מיקום, דרכי הגעה ושירותי חירום/תחבורה סמוכים."
+    answer_shape_he: "מוסד מזוהה, החלטות/שאילתות, שכבות נגישות אם זמינות, ומה לא ידוע."
+    topic_affinity_examples_he: ["מבני ציבור", "מוסדות תרבות"]
+  - question_id: environmental_exposure_near_school
+    resident_question_he: "האם ליד בית הספר/הבית שלי יש מקורות זיהום או אנטנות שהוזכרו בדיוני העירייה?"
+    user_context_needed: [resident_address_or_school_name]
+    protocol_evidence_needs: [environment_inquiry, agreement, hazard_discussion]
+    gis_need_tags: [environment, air_quality, pollution, cellular, school, proximity]
+    layer_keys: [environment_sanitation, cellular_and_radiation_context, education_facilities, neighborhoods_and_statistics]
+    synergy_he: "משלב חשש תושב, מוסד חינוך, שכבות סביבה ודיונים עירוניים."
+    answer_shape_he: "מקורות סביבתיים קרובים, פרוטוקולים קשורים, מרחקים וסייגים על מדידה/חשיפה."
+    topic_affinity_examples_he: ["אנטנות סלולריות", "בטיחות ובריאות הציבור"]
+  - question_id: local_economy_employment_shift
+    resident_question_he: "האם העירייה דנה באובדן מקומות עבודה או מעבר מפעלים, ואילו אזורי תעסוקה/מסחר מושפעים?"
+    user_context_needed: [city_or_workplace_area]
+    protocol_evidence_needs: [inquiry, economic_impact, mayor_response]
+    gis_need_tags: [employment, local_economy, commerce, demographic_context, public_transport]
+    layer_keys: [commerce_employment, demographic_equity, public_transport_access, neighborhoods_and_statistics]
+    synergy_he: "שאלה כלכלית מקבלת הקשר מרחבי של אזורי תעסוקה ונגישות עובדים."
+    answer_shape_he: "נושאים/מפעלים שהוזכרו, אזורים קשורים, תחבורה, והשפעה משוערת בלבד."
+    topic_affinity_examples_he: ["מפעלים ותעסוקה מקומית", "כלכלה ותעסוקה מקומית"]
+  - question_id: planning_objection_window
+    resident_question_he: "יש תכנית ליד הבית שלי; מה נאמר עליה בפרוטוקולים ומתי/איך אפשר להתנגד?"
+    user_context_needed: [plan_number_or_address]
+    protocol_evidence_needs: [plan_status, public_participation, decision]
+    gis_need_tags: [planning, plan_status, public_participation, parcel, resident_location]
+    layer_keys: [planning_land_use, parcels_cadaster, resident_location, neighborhoods_and_statistics]
+    synergy_he: "משלב סטטוס תכנון, מסמכי מועצה ומיקום התושב כדי להסביר זכויות השתתפות."
+    answer_shape_he: "תכנית/חלקות, החלטות קשורות, סטטוס, שלבי התנגדות אם מקור מוסמך מספק."
+    topic_affinity_examples_he: ["תכנון ובנייה", "הסכם הגג"]
+  - question_id: neighborhood_budget_equity
+    resident_question_he: "האם השכונה שלי מקבלת פחות/יותר שירותים או תקציבים לפי הפרוטוקולים והשכבות?"
+    user_context_needed: [resident_neighborhood]
+    protocol_evidence_needs: [budget_or_support, service_plan, committee_decision]
+    gis_need_tags: [equity, demographics, service_gap, public_facility, welfare, education]
+    layer_keys: [demographic_equity, neighborhoods_and_statistics, education_facilities, welfare_health_services, public_buildings_assets]
+    synergy_he: "מאפשר בדיקת פיזור שירותים מול אוכלוסייה והחלטות תקציביות."
+    answer_shape_he: "השכונה, פרוטוקולים תקציביים, שכבות שירות, השוואה לשכונות אחרות וסייגי נתונים."
+    topic_affinity_examples_he: ["תקציב וכספים", "תקצוב שירותים עירוניים"]
+  - question_id: street_naming_memorialization
+    resident_question_he: "האם יש הצעות לקריאת רחובות או הנצחה באזור שלי, ומה הסטטוס שלהן?"
+    user_context_needed: [resident_neighborhood_or_street]
+    protocol_evidence_needs: [proposal, committee_referral, naming_decision]
+    gis_need_tags: [road, neighborhood, public_participation, named_place]
+    layer_keys: [roads_parking_public_works, neighborhoods_and_statistics, resident_location]
+    synergy_he: "ממפה הצעות הנצחה לשכונה/רחוב ומבדיל בין הצעה, ועדת שמות והחלטה."
+    answer_shape_he: "הצעות והחלטות, רחוב/שכונה אם זוהו, סטטוס ועדה וקישורים לפרוטוקול."
+    topic_affinity_examples_he: ["שמות והנצחה"]
+  - question_id: municipal_asset_contracts
+    resident_question_he: "אילו הסכמים עם מתקנים ציבוריים או חברות עירוניות קיימים סביבי ומה אושר בהם?"
+    user_context_needed: [resident_address_or_facility_name]
+    protocol_evidence_needs: [agreement, approval, operator]
+    gis_need_tags: [municipal_asset, public_building, agreement, parcel, facility]
+    layer_keys: [public_buildings_assets, parcels_cadaster, planning_land_use, commerce_employment]
+    synergy_he: "מחבר הסכמים משפטיים לנכסים ומבנים שהתושב יכול לזהות במפה."
+    answer_shape_he: "מתקן/חלקה, ההסכם שאושר, מפעיל, טווח השפעה וסייגי מקור."
+    topic_affinity_examples_he: ["הסכמים עם חברות עירוניות", "הסכמי שימוש במתקנים ציבוריים"]
+  - question_id: religious_service_access
+    resident_question_he: "האם מתוכנן או אושר מקווה/שירות דת ליד השכונה שלי, ועל איזו קרקע?"
+    user_context_needed: [resident_neighborhood_or_cadastral_id]
+    protocol_evidence_needs: [agreement_or_allocation, religious_service_decision]
+    gis_need_tags: [religion, mikveh, parcel, public_facility, neighborhood]
+    layer_keys: [religious_services, parcels_cadaster, planning_land_use, neighborhoods_and_statistics]
+    synergy_he: "החלטת שירות דת מקבלת הקשר של חלקה, רובע ונגישות."
+    answer_shape_he: "שירות/מתקן, חלקה/שכונה, החלטות אישור, גוף מפעיל וסייגי מקור."
+    topic_affinity_examples_he: ["מקוואות", "דת ושירותי דת"]
+  - question_id: citywide_risk_hotspots
+    resident_question_he: "איפה בעיר חוזרות שאילתות על סיכונים: הצפות, מבנים מסוכנים, אלימות, בטיחות או זיהום?"
+    user_context_needed: [city]
+    protocol_evidence_needs: [inquiry, proposal, audit, safety_decision]
+    gis_need_tags: [risk_or_hazard, flooding, public_safety, environment, building, neighborhood]
+    layer_keys: [neighborhoods_and_statistics, drainage_water_sewer, emergency_security_services, environment_sanitation, public_buildings_assets]
+    synergy_he: "יוצר מפת מוקדי סיכון מתוך פרוטוקולים ושכבות הקשר, גם כשאין החלטה אחת ברורה."
+    answer_shape_he: "אשכולות לפי שכונה/סיכון, פרוטוקולים מצוטטים, שכבות תומכות ורמת ודאות."
+    topic_affinity_examples_he: ["בטיחות ובריאות הציבור", "מבנים מסוכנים", "אלימות במשפחה"]
+  - question_id: service_gap_for_children
+    resident_question_he: "האם באזור שלי יש מספיק מענים לילדים ונוער ביחס למה שהמועצה דנה בו?"
+    user_context_needed: [resident_neighborhood]
+    protocol_evidence_needs: [children_committee, education_program, welfare_program]
+    gis_need_tags: [youth, education, playground, welfare, demographics, service_gap]
+    layer_keys: [education_facilities, playgrounds_youth_space, welfare_health_services, demographic_equity, neighborhoods_and_statistics]
+    synergy_he: "משווה בין דיבור עירוני על ילדים ונוער לבין מפת מוסדות, פארקים ואוכלוסייה."
+    answer_shape_he: "שירותים באזור, החלטות/ועדות קשורות, פערי שירות אפשריים וסייגי נתונים."
+    topic_affinity_examples_he: ["ילדים ונוער", "מאבק בתופעות חברתיות בבתי ספר"]
