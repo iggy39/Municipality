@@ -24,6 +24,7 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 - Do not optimize for saving tokens, tool calls, model runs, or execution time at the expense of solution quality; use the effort needed for high-quality planning and generic, research-based solutions that deliver the highest-quality practical result.
 - Do not hardcode assumptions about protocol layout, terminology, metadata, or attachment structure.
 - Do not build solutions that depend on semantic-specific keywords or fixed wording; if this seems necessary, clearly notify the user and ask for permission before proceeding.
+- When working on UI maps, render selected polygons such as neighborhoods through GovMap `displayGeometries` instead of dashboard HTML/SVG overlays above the map.
 - Add helpful comments when writing code, especially where intent, assumptions, or non-obvious behavior need clarification.
 - If unsure, pause and ask the user. If documentation or best practices are needed, research them before proceeding.
 
