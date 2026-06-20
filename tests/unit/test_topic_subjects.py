@@ -1,6 +1,34 @@
 from __future__ import annotations
 
-from municipality.topic_subjects import apply_event_grouping, preclassify_trivial_subject_payload, process_topic_subject_payload, topic_subject_prompt_payload
+import json
+
+import httpx
+
+from municipality import topic_subjects as topic_subjects_module
+from municipality.topic_subjects import (
+    OllamaTopicSubjectClient,
+    MockTopicSubjectV3Client,
+    TopicSubjectResearchConfig,
+    apply_event_block_links,
+    apply_event_grouping,
+    build_topic_subject_v3_event_contexts,
+    build_topic_subject_event_blocks,
+    corrected_hebrew_text,
+    extract_subjects_from_event_blocks,
+    is_countable_subject_event,
+    is_dependent_detail_candidate,
+    normalize_topic_subject_v3_event_payload,
+    preclassify_trivial_subject_payload,
+    process_topic_subject_v3_context,
+    process_topic_subject_payload,
+    quality_report_markdown,
+    topic_subject_prompt_payload,
+    topic_subject_v3_extraction_payload,
+    topic_subject_v3_event_to_dict,
+    topic_subject_v3_normalization_payload,
+    topic_subject_v3_row_quality_from_payloads,
+    validate_topic_subject_v3_event_payload,
+)
 from municipality.topic_decisions import TopicDecisionArtifact
 
 
@@ -19,8 +47,9 @@ def test_topic_subject_prompt_includes_topic_aware_non_closed_examples() -> None
     assert "topic_aware_examples_not_a_codelist" in payload
     assert any(example["known_topic"] == "חינוך" for example in payload["topic_aware_examples_not_a_codelist"])
     assert any("not closed lists" in requirement or "not a closed list" in requirement for requirement in payload["requirements"])
-    assert any("exactly one primary subject" in requirement for requirement in payload["requirements"])
+    assert any("exactly one primary action" in requirement for requirement in payload["requirements"])
     assert all(not example["subject_root_label_he"].startswith("חינוך") for example in payload["topic_aware_examples_not_a_codelist"])
+    assert payload["corrected_evidence_text"]
 
 
 def test_process_topic_subject_payload_accepts_open_request_subject_without_decision() -> None:
@@ -126,7 +155,8 @@ def test_process_topic_subject_payload_accepts_open_decision_label_when_grounded
 
     assert len(subjects) == 1
     assert subjects[0].validation_status == "accepted"
-    assert subjects[0].subject_payload["subject_root_label_he"] == "אישור"
+    assert subjects[0].subject_payload["subject_root_label_he"] == "אישור החלטה"
+    assert subjects[0].subject_payload["subject_child_label_he"] == ""
     assert subjects[0].subject_payload["decision"]["decision_label_he"] == "אישור מימון נסיעה מקצועית"
     assert quality.my_judgment == "decision_candidate"
     assert "אישור מימון נסיעה מקצועית" in quality.decision_by_dicta
@@ -273,6 +303,25 @@ def test_preclassify_contact_info_as_non_subject() -> None:
     assert payload is not None
     assert payload["subjects"] == []
     assert payload["artifact_role"] == "contact_info"
+
+
+def test_preclassify_attachment_references_and_agenda_markers_as_non_subject() -> None:
+    attachment_payload = preclassify_trivial_subject_payload(_artifact_dataclass(real_text='25 ) - מצ"ל 1.', topic_label_he="סדר יום ושאילתות"))
+    named_attachment_payload = preclassify_trivial_subject_payload(_artifact_dataclass(real_text='28 )(ביטון- מצ"ל', topic_label_he="סדר יום ושאילתות"))
+    agenda_payload = preclassify_trivial_subject_payload(_artifact_dataclass(real_text="2. :הצעות לסדר 2.", topic_label_he="סדר יום ושאילתות"))
+    topics_payload = preclassify_trivial_subject_payload(_artifact_dataclass(real_text="25 ) - מצ\"ל :הנושאים לדיון", topic_label_he="סדר יום ושאילתות"))
+    ocr_agenda_payload = preclassify_trivial_subject_payload(_artifact_dataclass(real_text="ע:ל סדר היום", topic_label_he="סדר יום ושאילתות"))
+
+    assert attachment_payload is not None
+    assert attachment_payload["artifact_role"] == "attachment_reference"
+    assert named_attachment_payload is not None
+    assert named_attachment_payload["artifact_role"] == "attachment_reference"
+    assert agenda_payload is not None
+    assert agenda_payload["artifact_role"] == "agenda_marker"
+    assert topics_payload is not None
+    assert topics_payload["artifact_role"] in {"agenda_marker", "attachment_reference"}
+    assert ocr_agenda_payload is not None
+    assert ocr_agenda_payload["artifact_role"] == "agenda_marker"
 
 
 def test_preclassify_does_not_hide_substantive_text_with_footer_suffix() -> None:
@@ -511,6 +560,249 @@ def test_event_grouping_links_split_amount_and_vote_continuations_to_validated_a
     assert vote_quality.linked_event_id == decision_quality.event_id
 
 
+def test_event_grouping_does_not_link_cross_topic_detail_without_shared_context() -> None:
+    anchor_artifact = _artifact_dataclass(
+        artifact_id="artifact-approved-school-program",
+        real_text="חברי המועצה מאשרים את ההצעה להקמת תוכנית למניעת חרמות בבתי הספר",
+        topic_label_he="מאבק בתופעות חברתיות בבתי ספר",
+        source_ordinal=3,
+    )
+    unrelated_vote_artifact = _artifact_dataclass(
+        artifact_id="artifact-unrelated-vote-fragment",
+        real_text="בעד מר יניב קקון נגד מר מאיר אברז'ל נמנע חבר אחד בברכה",
+        topic_label_he="שמות והנצחה",
+        source_ordinal=4,
+    )
+    anchor_subjects, anchor_quality = process_topic_subject_payload(
+        artifact=anchor_artifact,
+        model_payload={
+            "subjects": [
+                _subject_payload(
+                    root="אישור",
+                    child="אישור השתתפות",
+                    object_text="תוכנית למניעת חרמות בבתי הספר",
+                    details="חברי המועצה מאשרים את ההצעה",
+                    evidence="חברי המועצה מאשרים את ההצעה",
+                    is_decision=True,
+                    decision={
+                        "decision_label_he": "אישור",
+                        "decision_summary_he": "אישור תוכנית למניעת חרמות בבתי הספר",
+                        "source_quote_he": "חברי המועצה מאשרים את ההצעה להקמת תוכנית למניעת חרמות בבתי הספר",
+                        "confidence": 0.9,
+                        "limitations": [],
+                    },
+                )
+            ]
+        },
+    )
+    vote_subjects, vote_quality = process_topic_subject_payload(
+        artifact=unrelated_vote_artifact,
+        model_payload={"subjects": [_subject_payload(root="אישור", child="אישור השתתפות", object_text="הצבעת חברים", details="בעד נגד נמנע", evidence="בעד")]},
+    )
+
+    apply_event_grouping(
+        artifacts=[anchor_artifact, unrelated_vote_artifact],
+        extracted=anchor_subjects + vote_subjects,
+        quality_rows=[anchor_quality, vote_quality],
+    )
+
+    assert anchor_quality.anchor_status == "validated_anchor"
+    assert vote_quality.row_role == "orphan_detail"
+    assert vote_quality.anchor_status == "not_anchor"
+    assert vote_quality.linked_event_id == ""
+    assert "different_topic_without_shared_context" in vote_quality.link_reason
+
+
+def test_event_grouping_does_not_link_protocol_header_to_previous_approval() -> None:
+    approval_artifact = _artifact_dataclass(
+        artifact_id="artifact-approved-protocol",
+        real_text="חברי המועצה מאשרים פה אחד את הפרוטוקול 156023 05/03/2025",
+        topic_label_he="סדר יום ושאילתות",
+        source_ordinal=3,
+    )
+    next_protocol_header = _artifact_dataclass(
+        artifact_id="artifact-next-protocol-header",
+        real_text="סעיף19 : מתאריך 2.25 פרוטוקול ועדה מקצועית לתמיכות מס 20.02.25 החלטות פרוטוקול ועדה מקצועית לתמיכות מס 2.25",
+        topic_label_he="סדר יום ושאילתות",
+        source_ordinal=4,
+    )
+    approval_subjects, approval_quality = process_topic_subject_payload(
+        artifact=approval_artifact,
+        model_payload={
+            "subjects": [
+                _subject_payload(
+                    root="אישור",
+                    child="אישור פרוטוקול",
+                    object_text="פרוטוקול 156023",
+                    details="מאשרים פה אחד את הפרוטוקול",
+                    evidence="מאשרים פה אחד את הפרוטוקול",
+                    is_decision=True,
+                    decision={
+                        "decision_label_he": "אישור פרוטוקול",
+                        "decision_summary_he": "אישור פרוטוקול 156023",
+                        "source_quote_he": "חברי המועצה מאשרים פה אחד את הפרוטוקול 156023",
+                        "confidence": 0.9,
+                        "limitations": [],
+                    },
+                )
+            ]
+        },
+    )
+    header_subjects, header_quality = process_topic_subject_payload(
+        artifact=next_protocol_header,
+        model_payload={"subjects": [_subject_payload(root="אישור", child="אישור פרוטוקול", object_text="פרוטוקול ועדה מקצועית לתמיכות", details="החלטות פרוטוקול ועדה מקצועית", evidence="פרוטוקול ועדה מקצועית")]},
+    )
+
+    apply_event_grouping(
+        artifacts=[approval_artifact, next_protocol_header],
+        extracted=approval_subjects + header_subjects,
+        quality_rows=[approval_quality, header_quality],
+    )
+
+    assert approval_quality.anchor_status == "validated_anchor"
+    assert header_quality.row_role == "suspect_anchor"
+    assert header_quality.anchor_status == "suspect_anchor"
+    assert header_quality.linked_event_id == ""
+
+
+def test_protocol_header_shape_is_not_dependent_detail_candidate() -> None:
+    artifact = _artifact_dataclass(
+        real_text="סעיף21 : )(ביטון 19.02.25 מתאריך 1.25 '. פרוטוקול ועדת פינויים מס10 החלטות פרוטוקול ועדת 'פינויים מס 1.25 מתאריך 19.02.",
+        topic_label_he="סדר יום ושאילתות",
+    )
+    subjects, _quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="אישור", child="קביעת היקף", object_text="פרוטוקול ועדת פינויים", details="החלטה על אישור הפרוטוקול", evidence="פרוטוקול ועדת פינויים")]},
+    )
+
+    assert subjects
+    assert not is_dependent_detail_candidate(artifact=artifact, item=subjects[0])
+
+
+def test_preclassify_protocol_header_shape_without_action_as_non_subject() -> None:
+    payload = preclassify_trivial_subject_payload(
+        _artifact_dataclass(
+            real_text="סעיף21 : )(ביטון 19.02.25 מתאריך 1.25 '. פרוטוקול ועדת פינויים מס10 החלטות פרוטוקול ועדת 'פינויים מס 1.25 מתאריך 19.02.",
+            topic_label_he="סדר יום ושאילתות",
+        )
+    )
+
+    assert payload is not None
+    assert payload["subjects"] == []
+    assert payload["non_subject"] is True
+    assert payload["artifact_role"] == "protocol_header"
+
+
+def test_event_grouping_excludes_naked_context_root_from_subject_tree() -> None:
+    artifact = _artifact_dataclass(
+        artifact_id="artifact-context-only",
+        real_text="עדכוני ראש העיר",
+        topic_label_he="עדכוני ראש העיר",
+    )
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="הגדרה", child="הגדרת הקשר", object_text="עדכוני ראש העיר", details="כותרת הקשר", evidence="עדכוני ראש העיר")]},
+    )
+
+    apply_event_grouping(artifacts=[artifact], extracted=subjects, quality_rows=[quality])
+
+    assert quality.row_role == "context_detail"
+    assert quality.status == "context_detail"
+    assert not is_countable_subject_event(subjects[0])
+
+
+def test_event_grouping_excludes_vote_metadata_from_subject_tree() -> None:
+    artifact = _artifact_dataclass(
+        artifact_id="artifact-vote-metadata",
+        real_text="סעיף3 :הצביעו נמנע 156022 05/03/2025",
+        topic_label_he="סדר יום ושאילתות",
+    )
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="נמנע", child="נמנע מהצבעה", object_text="סדר יום ושאילתות", details="הצביעו נמנע", evidence="הצביעו נמנע")]},
+    )
+
+    apply_event_grouping(artifacts=[artifact], extracted=subjects, quality_rows=[quality])
+
+    assert quality.row_role == "vote_metadata"
+    assert quality.artifact_role == "vote_metadata"
+    assert not is_countable_subject_event(subjects[0])
+
+
+def test_event_grouping_excludes_participant_registration_from_subject_tree() -> None:
+    artifact = _artifact_dataclass(
+        artifact_id="artifact-participants",
+        real_text="יוסי עטר- מנכ\"ל; סימונה מורלי- מנכ\"ל; תמיר בראנץ- מבקר העירייה; מירב ביטון- מנהלת מחלקה",
+        topic_label_he="סדר יום ושאילתות",
+    )
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="רישום", child="רישום משתתפים", object_text="סדר יום ושאילתות", details="רשימת משתתפים", evidence="יוסי עטר")]},
+    )
+
+    apply_event_grouping(artifacts=[artifact], extracted=subjects, quality_rows=[quality])
+
+    assert quality.row_role == "context_detail"
+    assert quality.artifact_role == "background_context"
+    assert not is_countable_subject_event(subjects[0])
+
+
+def test_generic_action_normalizes_to_municipal_directive_action() -> None:
+    artifact = _artifact_dataclass(
+        artifact_id="artifact-execution-action",
+        real_text="לפעול מידית בבעיית התפוררות המרצפות, לשלוח מהנדס ולטפל בבעיית נפילת חלקי הבטון",
+        topic_label_he="נכסים ומרכזים מסחריים",
+    )
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="פעולה", child="פעולה מיידית", object_text="נכסים ומרכזים מסחריים", details="שליחת מהנדס וטיפול במפגע", evidence="לפעול מידית")]},
+    )
+
+    apply_event_grouping(artifacts=[artifact], extracted=subjects, quality_rows=[quality])
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "הנחיה"
+    assert subjects[0].subject_payload["subject_child_label_he"] == "הנחיה לפעול"
+    assert quality.row_role == "action_anchor"
+    assert is_countable_subject_event(subjects[0])
+
+
+def test_specific_exercise_without_dialogue_action_is_context_detail() -> None:
+    artifact = _artifact_dataclass(
+        artifact_id="artifact-exercise-action",
+        real_text="התרגיל יתכלל אתר הרס כבד לרשות ותרגול אירועי פח\"ע בשיתוף משטרת אשדוד",
+        topic_label_he="ביטחון ואכיפה",
+    )
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="תרגיל", child="תרגול אירועי פח\"ע", object_text="תרגיל משטרה ואכיפה", details="אתר הרס כבד ותרגול אירועי פחע", evidence="התרגיל יתכלל")]},
+    )
+
+    apply_event_grouping(artifacts=[artifact], extracted=subjects, quality_rows=[quality])
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "תרגיל"
+    assert quality.row_role == "context_detail"
+    assert not is_countable_subject_event(subjects[0])
+
+
+def test_coordination_meeting_formal_instruction_becomes_directive() -> None:
+    artifact = _artifact_dataclass(
+        artifact_id="artifact-coordination",
+        real_text="יש לתאם מפגש בין הגב' רונית צור לנציגי המשפחות למציאת מענים",
+        topic_label_he="רווחה ושירותים חברתיים",
+    )
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="תיאום", child="תיאום מפגש", object_text="מפגש עם נציגי המשפחות", details="לתאם מפגש למציאת מענים", evidence="לתאם מפגש")]},
+    )
+
+    apply_event_grouping(artifacts=[artifact], extracted=subjects, quality_rows=[quality])
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "הנחיה"
+    assert subjects[0].subject_payload["subject_child_label_he"] == "הנחיה לתיאום מפגש"
+    assert quality.row_role == "action_anchor"
+    assert is_countable_subject_event(subjects[0])
+
+
 def test_event_grouping_links_split_question_rows_to_inquiry_anchor() -> None:
     inquiry_artifact = _artifact_dataclass(
         artifact_id="artifact-inquiry-anchor",
@@ -540,9 +832,135 @@ def test_event_grouping_links_split_question_rows_to_inquiry_anchor() -> None:
     )
 
     assert inquiry_quality.anchor_status == "validated_anchor"
-    assert inquiry_quality.subject_child_by_dicta == "בקשת מידע"
+    assert inquiry_quality.subject_root_by_dicta == "שאילתה"
+    assert inquiry_quality.subject_child_by_dicta == ""
     assert question_quality.row_role == "dependent_detail"
     assert question_quality.anchor_status == "linked_to_validated_anchor"
+
+
+def test_inquiry_title_normalizes_to_inquiry_action_not_generic_request() -> None:
+    artifact = _artifact_dataclass(
+        artifact_id="artifact-inquiry-title",
+        real_text="הנדון שאילתה– מקור לכיסוי גרעון בסך 71 מיליון לפרויקט התחבורה הציבורית באשדוד",
+        topic_label_he="סדר יום ושאילתות",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="בקשה", child="בקשת מידע", object_text="מקור לכיסוי גרעון בסך 71 מיליון", details="שאילתה בנושא מקור המימון", evidence="שאילתה")]},
+    )
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "שאילתה"
+    assert subjects[0].subject_payload["subject_child_label_he"] == ""
+    assert subjects[0].subject_payload["subject_object_he"] == "מקור לכיסוי גרעון בסך 71 מיליון"
+    apply_event_grouping(artifacts=[artifact], extracted=subjects, quality_rows=[quality])
+    assert quality.row_role == "action_anchor"
+
+
+def test_response_to_inquiry_normalizes_action_and_repairs_subject_matter_from_context() -> None:
+    response_artifact = _artifact_dataclass(
+        artifact_id="artifact-inquiry-response",
+        real_text="71 מלשח: במענה לשאילתא של גב' הלן גלבר להלן התייחסותי ראשית אבקש לציין כי אין מדובר בגרעון אלא בדיוק להפך. משרד התחבורה והאוצר הסכימו לתוספת תקציבית בסך 71 מלשח.",
+        topic_label_he="תחבורה ובטיחות",
+        source_ordinal=3,
+    )
+    response_artifact.neighbor_contexts = [
+        {
+            "relation": "previous_protocol_row",
+            "artifact_id": "artifact-inquiry-title",
+            "raw_text": "לכבוד ראש העיר הנדון שאילתא– מקור לכיסוי גרעון בסך 71 מיליון שח לפרויקט התחבורה הציבורית באשדוד",
+            "page_span": {"start": 1, "end": 1},
+            "header_path": [],
+        }
+    ]
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=response_artifact,
+        model_payload={"subjects": [_subject_payload(root="בקשה", child="בקשת מידע", object_text="תחבורה ובטיחות", details="מענה בנושא תוספת תקציבית", evidence="במענה לשאילתא")]},
+    )
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "מענה לשאילתה"
+    assert subjects[0].subject_payload["subject_child_label_he"] == ""
+    assert subjects[0].subject_payload["subject_object_he"] == "מקור לכיסוי גרעון בסך 71 מיליון שח לפרויקט התחבורה הציבורית באשדוד"
+    assert subjects[0].subject_payload["action_root_label_he"] == "מענה לשאילתה"
+    assert subjects[0].subject_payload["action_child_label_he"] == ""
+    assert subjects[0].subject_payload["subject_matter_he"] == "מקור לכיסוי גרעון בסך 71 מיליון שח לפרויקט התחבורה הציבורית באשדוד"
+    assert quality.subject_root_by_dicta == "מענה לשאילתה"
+    assert quality.subject_object_by_dicta == "מקור לכיסוי גרעון בסך 71 מיליון שח לפרויקט התחבורה הציבורית באשדוד"
+    assert quality.action_root_by_dicta == "מענה לשאילתה"
+    assert quality.subject_matter_by_dicta == "מקור לכיסוי גרעון בסך 71 מיליון שח לפרויקט התחבורה הציבורית באשדוד"
+    apply_event_grouping(artifacts=[response_artifact], extracted=subjects, quality_rows=[quality])
+    assert quality.row_role == "action_anchor"
+
+
+def test_ocr_spaced_response_to_inquiry_stays_response_action() -> None:
+    artifact = _artifact_dataclass(
+        artifact_id="artifact-ocr-spaced-inquiry-response",
+        real_text="הנדון ניקיון העיר במענה לשאילת א של מר מאיר אברז'ל להלן התייחסות: הפקחים העירוניים הונחו לבצע פיקוח קפדני.",
+        topic_label_he="מיחזור ותברואה",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={
+            "subjects": [
+                {
+                    "action_root_label_he": "מענה לשאילתה",
+                    "action_child_label_he": "",
+                    "subject_matter_he": "ניקיון העיר וטיפול בגללי כלבים",
+                    "action_details_he": "הפקחים העירוניים הונחו לבצע פיקוח קפדני",
+                    "action_type_evidence_he": "במענה לשאילת א",
+                    "what_text_is_about_he": "מענה לשאילתה בנושא ניקיון העיר.",
+                    "is_decision": False,
+                    "decision": None,
+                    "confidence": 0.9,
+                    "rationale_he": "test",
+                }
+            ]
+        },
+    )
+
+    assert subjects[0].subject_payload["action_root_label_he"] == "מענה לשאילתה"
+    assert subjects[0].subject_payload["subject_root_label_he"] == "מענה לשאילתה"
+    assert quality.action_root_by_dicta == "מענה לשאילתה"
+
+
+def test_v2_action_subject_matter_fields_populate_legacy_compatibility_fields() -> None:
+    artifact = _artifact_dataclass(
+        real_text="במענה לשאילתה בנושא תקצוב פרויקט התחבורה הציבורית, להלן התייחסותי.",
+        topic_label_he="תחבורה ובטיחות",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={
+            "subjects": [
+                {
+                    "action_root_label_he": "מענה לשאילתה",
+                    "action_child_label_he": "",
+                    "subject_matter_he": "תקצוב פרויקט התחבורה הציבורית",
+                    "action_details_he": "התייחסות לשאילתה בנושא התקצוב",
+                    "action_type_evidence_he": "במענה לשאילתה",
+                    "action_summary_he": "מענה לשאילתה בנושא תקצוב פרויקט התחבורה הציבורית",
+                    "what_text_is_about_he": "הטקסט הוא מענה לשאילתה בנושא תקצוב הפרויקט.",
+                    "is_decision": False,
+                    "decision": None,
+                    "confidence": 0.9,
+                    "rationale_he": "test",
+                }
+            ]
+        },
+    )
+
+    payload = subjects[0].subject_payload
+    assert payload["action_root_label_he"] == "מענה לשאילתה"
+    assert payload["subject_matter_he"] == "תקצוב פרויקט התחבורה הציבורית"
+    assert payload["subject_root_label_he"] == "מענה לשאילתה"
+    assert payload["subject_object_he"] == "תקצוב פרויקט התחבורה הציבורית"
+    assert quality.action_root_by_dicta == "מענה לשאילתה"
+    assert quality.subject_matter_by_dicta == "תקצוב פרויקט התחבורה הציבורית"
+    assert quality.subject_root_by_dicta == "מענה לשאילתה"
+    assert quality.subject_object_by_dicta == "תקצוב פרויקט התחבורה הציבורית"
 
 
 def test_approval_request_stays_approval_request_not_information_request() -> None:
@@ -570,7 +988,255 @@ def test_approval_request_stays_approval_request_not_information_request() -> No
     assert quality.subject_child_by_dicta == "בקשת אישור"
 
 
-def test_process_topic_subject_payload_keeps_agenda_proposal_subject() -> None:
+def test_generic_approval_decision_uses_specific_decision_root() -> None:
+    artifact = _artifact_dataclass(
+        real_text="חברי המועצה מאשרים פה אחד את הנסיעה המקצועית ואת מימון העלויות.",
+        topic_label_he="חינוך",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="אישור", child="אישור נסיעה מקצועית", object_text="נסיעה מקצועית", details="אישור הנסיעה", evidence="מאשרים פה אחד", is_decision=True)]},
+    )
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "אישור החלטה"
+    assert subjects[0].subject_payload["subject_child_label_he"] == ""
+    assert quality.subject_root_by_dicta == "אישור החלטה"
+
+
+def test_protocol_approval_uses_specific_protocol_root() -> None:
+    artifact = _artifact_dataclass(
+        real_text="חברי המועצה מאשרים פה אחד את הפרוטוקול 156023 05/03/2025",
+        topic_label_he="הקצאות ושימושים",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="אישור", child="אישור פרוטוקול", object_text="פרוטוקול 156023", details="אישור הפרוטוקול", evidence="מאשרים פה אחד את הפרוטוקול", is_decision=True)]},
+    )
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "אישור פרוטוקול"
+    assert subjects[0].subject_payload["subject_child_label_he"] == ""
+    assert quality.subject_root_by_dicta == "אישור פרוטוקול"
+
+
+def test_attachment_title_with_matzal_is_non_subject() -> None:
+    payload = preclassify_trivial_subject_payload(
+        _artifact_dataclass(
+            real_text="15 . הודעה בדבר הפעלת שירותי שמירהוגביית היטל שמירה ( )עודד לוי- מצ\"ל",
+            topic_label_he="שירותי שמירה והיטל שמירה",
+        )
+    )
+
+    assert payload is not None
+    assert payload["subjects"] == []
+    assert payload["artifact_role"] == "attachment_reference"
+
+
+def test_notification_root_normalizes_to_report_taxonomy() -> None:
+    artifact = _artifact_dataclass(
+        real_text="הודעה על הפעלת שירותי שמירה וגביית היטל שמירה",
+        topic_label_he="שירותי שמירה והיטל שמירה",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="הודעה", child="הודעת הפעלה", object_text="שירותי שמירה", details="הפעלת שירותים וגביית היטל", evidence="הודעה על הפעלת שירותי שמירה")]},
+    )
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "דיווח"
+    assert subjects[0].subject_payload["subject_child_label_he"] == ""
+    assert quality.subject_root_by_dicta == "דיווח"
+
+
+def test_unsupported_subject_type_evidence_is_repaired_from_raw_action_cue() -> None:
+    artifact = _artifact_dataclass(
+        real_text="החלטות הודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה חברי המועצה מאשרים ברוב קולות את .ההודעה",
+        topic_label_he="שירותי שמירה והיטל שמירה",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={
+            "subjects": [
+                _subject_payload(
+                    root="אישור",
+                    child="",
+                    object_text="שירותי שמירה והיטל שמירה",
+                    details="אישור הודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה",
+                    evidence="המועצה מאשרת את ההודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה",
+                    is_decision=True,
+                    decision={
+                        "decision_label_he": "אישור",
+                        "decision_summary_he": "אישור הודעה בדבר הפעלת שירותי שמירה",
+                        "source_quote_he": "חברי המועצה מאשרים ברוב קולות את .ההודעה",
+                        "confidence": 0.9,
+                        "limitations": [],
+                    },
+                )
+            ]
+        },
+    )
+
+    apply_event_grouping(artifacts=[artifact], extracted=subjects, quality_rows=[quality])
+
+    assert subjects[0].subject_payload["subject_type_evidence_he"] == "מאשרים"
+    assert quality.anchor_status == "validated_anchor"
+    assert quality.status == "decision_candidate"
+
+
+def test_event_grouping_links_weak_title_action_anchor_to_following_approval_anchor() -> None:
+    title_artifact = _artifact_dataclass(
+        artifact_id="artifact-service-watch-title",
+        real_text="סעיף26 : . הודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה",
+        topic_label_he="שירותי שמירה והיטל שמירה",
+        source_ordinal=1,
+    )
+    approval_artifact = _artifact_dataclass(
+        artifact_id="artifact-service-watch-approval",
+        real_text="15 )(עודד לוי החלטות הודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה חברי המועצה מאשרים ברוב קולות את .ההודעה הצביעו בעד: 19 חברים",
+        topic_label_he="שירותי שמירה והיטל שמירה",
+        source_ordinal=2,
+    )
+    title_subjects, title_quality = process_topic_subject_payload(
+        artifact=title_artifact,
+        model_payload={"subjects": [_subject_payload(root="הודעה", child="הודעת הפעלה", object_text="שירותי שמירה והיטל שמירה", details="כותרת הודעה", evidence="הודעה בדבר")]},
+    )
+    approval_subjects, approval_quality = process_topic_subject_payload(
+        artifact=approval_artifact,
+        model_payload={
+            "subjects": [
+                _subject_payload(
+                    root="אישור",
+                    child="",
+                    object_text="שירותי שמירה והיטל שמירה",
+                    details="אישור ההודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה",
+                    evidence="מאשרים ברוב קולות",
+                    is_decision=True,
+                    decision={
+                        "decision_label_he": "אישור",
+                        "decision_summary_he": "אישור הודעה בדבר הפעלת שירותי שמירה",
+                        "source_quote_he": "חברי המועצה מאשרים ברוב קולות את .ההודעה",
+                        "confidence": 0.9,
+                        "limitations": [],
+                    },
+                )
+            ]
+        },
+    )
+
+    apply_event_grouping(
+        artifacts=[title_artifact, approval_artifact],
+        extracted=title_subjects + approval_subjects,
+        quality_rows=[title_quality, approval_quality],
+    )
+
+    assert approval_quality.row_role == "action_anchor"
+    assert approval_quality.anchor_status == "validated_anchor"
+    assert title_quality.row_role == "dependent_detail"
+    assert title_quality.anchor_status == "linked_to_validated_anchor"
+    assert title_quality.linked_event_id == approval_quality.event_id
+    assert not is_countable_subject_event(title_subjects[0])
+
+
+def test_event_grouping_links_suspect_title_fragment_to_following_approval_anchor() -> None:
+    title_artifact = _artifact_dataclass(
+        artifact_id="artifact-suspect-approval-title",
+        real_text="סעיף26 : . הודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה",
+        topic_label_he="שירותי שמירה והיטל שמירה",
+        source_ordinal=1,
+    )
+    approval_artifact = _artifact_dataclass(
+        artifact_id="artifact-grounded-approval",
+        real_text="החלטות הודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה חברי המועצה מאשרים ברוב קולות את .ההודעה",
+        topic_label_he="שירותי שמירה והיטל שמירה",
+        source_ordinal=2,
+    )
+    title_subjects, title_quality = process_topic_subject_payload(
+        artifact=title_artifact,
+        model_payload={
+            "subjects": [
+                _subject_payload(
+                    root="אישור",
+                    child="",
+                    object_text="שירותי שמירה והיטל שמירה",
+                    details="המועצה מאשרת את ההודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה",
+                    evidence="המועצה מאשרת את ההודעה",
+                )
+            ]
+        },
+    )
+    approval_subjects, approval_quality = process_topic_subject_payload(
+        artifact=approval_artifact,
+        model_payload={
+            "subjects": [
+                _subject_payload(
+                    root="אישור",
+                    child="",
+                    object_text="שירותי שמירה והיטל שמירה",
+                    details="אישור ההודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה",
+                    evidence="מאשרים ברוב קולות",
+                    is_decision=True,
+                    decision={
+                        "decision_label_he": "אישור",
+                        "decision_summary_he": "אישור הודעה בדבר הפעלת שירותי שמירה",
+                        "source_quote_he": "חברי המועצה מאשרים ברוב קולות את .ההודעה",
+                        "confidence": 0.9,
+                        "limitations": [],
+                    },
+                )
+            ]
+        },
+    )
+
+    apply_event_grouping(
+        artifacts=[title_artifact, approval_artifact],
+        extracted=title_subjects + approval_subjects,
+        quality_rows=[title_quality, approval_quality],
+    )
+
+    assert approval_quality.row_role == "action_anchor"
+    assert title_quality.row_role == "dependent_detail"
+    assert title_quality.subject_root_by_dicta == "אישור החלטה"
+    assert title_quality.linked_event_id == approval_quality.event_id
+
+
+def test_ollama_subject_client_retries_once_after_timeout(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"message": {"content": "{}"}}
+
+    class FakeHttpClient:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def post(self, *args, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise httpx.ReadTimeout("timed out")
+            return FakeResponse()
+
+    monkeypatch.setattr(topic_subjects_module.httpx, "Client", FakeHttpClient)
+
+    payload, error = OllamaTopicSubjectClient()._post_chat_with_timeout_retry(body={}, config=TopicSubjectResearchConfig(timeout_seconds=1.0))
+
+    assert error is None
+    assert payload == {"message": {"content": "{}"}}
+    assert calls["count"] == 2
+
+
+def test_process_topic_subject_payload_keeps_agenda_proposal_as_specific_root() -> None:
     artifact = _artifact_dataclass(real_text="הנדון הצעה לסדר יום - הצפות חוזרות ברחבי העיר וטיפול בתשתיות", topic_label_he="תכנון ובנייה")
 
     subjects, quality = process_topic_subject_payload(
@@ -594,10 +1260,1206 @@ def test_process_topic_subject_payload_keeps_agenda_proposal_subject() -> None:
     )
 
     assert len(subjects) == 1
-    assert subjects[0].subject_payload["subject_root_label_he"] == "הצעה"
-    assert subjects[0].subject_payload["subject_child_label_he"] == "הצעה לסדר יום"
-    assert quality.subject_root_by_dicta == "הצעה"
-    assert quality.subject_child_by_dicta == "הצעה לסדר יום"
+    assert subjects[0].subject_payload["subject_root_label_he"] == "הצעה לסדר יום"
+    assert subjects[0].subject_payload["subject_child_label_he"] == ""
+    assert quality.subject_root_by_dicta == "הצעה לסדר יום"
+    assert quality.subject_child_by_dicta == ""
+
+
+def test_corrected_text_repairs_common_hebrew_ocr_spacing_and_report_shows_it() -> None:
+    artifact = _artifact_dataclass(
+        real_text="עלויות השתתפות בסמינר והוצא .ות הנסיעה על חשבון העירייה. אודה לאישור מועצת העיר לנסיעה הנל.",
+        topic_label_he="חינוך",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="בקשה", child="בקשת אישור", object_text="נסיעה לסמינר", details="עלויות השתתפות ונסיעה", evidence="אודה לאישור מועצת העיר")]},
+    )
+    report = quality_report_markdown([quality])
+
+    assert subjects
+    assert "הוצאות" in corrected_hebrew_text(artifact.real_text)
+    assert "Corrected Text" in report
+    assert "הוצאות" in quality.corrected_text
+
+
+def test_committee_recommendation_is_subject_not_decision_without_approval() -> None:
+    artifact = _artifact_dataclass(
+        real_text="הוועדה ממליצה לשנות את התבחין בתחום רשות הספורט ומצרפת את התבחין המעודכן",
+        topic_label_he="תרבות וספורט",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={
+            "subjects": [
+                _subject_payload(
+                    root="עדכון",
+                    child="עדכון תבחין",
+                    object_text="שינוי תבחין רשות הספורט",
+                    details="הוועדה ממליצה לשנות את התבחין",
+                    evidence="הוועדה ממליצה לשנות",
+                    is_decision=True,
+                    decision={
+                        "decision_label_he": "אישור",
+                        "decision_summary_he": "אישור שינוי תבחין",
+                        "source_quote_he": "הוועדה ממליצה לשנות את התבחין",
+                        "confidence": 0.8,
+                        "limitations": [],
+                    },
+                )
+            ]
+        },
+    )
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "המלצה"
+    assert subjects[0].subject_payload["subject_child_label_he"] == ""
+    assert subjects[0].subject_payload["is_decision"] is False
+    assert quality.my_judgment == "subject_candidate_with_rejected_decision"
+    assert "recommendation_without_approval_outcome" in quality.reason_for_failure
+
+
+def test_recommendation_wording_overrides_model_approval_label_without_approval_outcome() -> None:
+    artifact = _artifact_dataclass(
+        real_text="החלטה מספר1 שינוי תבחין תקציב רשות הספורט הוועדה ממליצה לשנות את התבחין בתחום רשות הספורט ומצרפת את התבחין המעודכן",
+        topic_label_he="תרבות וספורט",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={
+            "subjects": [
+                _subject_payload(
+                    root="אישור החלטה",
+                    child="אישור החלטת ועדה",
+                    object_text="שינוי תבחין תקציב רשות הספורט",
+                    details="הוועדה ממליצה לשנות את התבחין",
+                    evidence="הוועדה ממליצה לשנות את התבחין",
+                    is_decision=True,
+                    decision={
+                        "decision_label_he": "אישור החלטה",
+                        "decision_summary_he": "אישור שינוי תבחין",
+                        "source_quote_he": "הוועדה ממליצה לשנות את התבחין",
+                        "confidence": 0.9,
+                        "limitations": [],
+                    },
+                )
+            ]
+        },
+    )
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "המלצה"
+    assert subjects[0].subject_payload["is_decision"] is False
+    assert quality.action_root_by_dicta == "המלצה"
+    assert "recommendation_without_approval_outcome" in quality.reason_for_failure
+
+
+def test_approval_decision_repairs_missing_exact_source_quote_from_raw_text() -> None:
+    artifact = _artifact_dataclass(
+        real_text="15 )(עודד לוי החלטות הודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה חברי המועצה מאשרים ברוב קולות את ההודעה הצביעו בעד 19 חברים",
+        topic_label_he="שירותי שמירה והיטל שמירה",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={
+            "subjects": [
+                _subject_payload(
+                    root="אישור החלטה",
+                    child="",
+                    object_text="שירותי שמירה והיטל שמירה",
+                    details="חברי המועצה מאשרים ברוב קולות את ההודעה",
+                    evidence="מאשרים ברוב קולות",
+                    is_decision=True,
+                    decision={
+                        "decision_label_he": "",
+                        "decision_summary_he": "",
+                        "source_quote_he": "",
+                        "confidence": 0.8,
+                        "limitations": [],
+                    },
+                )
+            ]
+        },
+    )
+
+    decision = subjects[0].subject_payload["decision"]
+    assert subjects[0].validation_status == "accepted"
+    assert subjects[0].subject_payload["is_decision"] is True
+    assert decision["decision_label_he"] == "אישור החלטה"
+    assert "חברי המועצה מאשרים ברוב קולות את ההודעה" in decision["source_quote_he"]
+    assert quality.status == "decision_candidate"
+
+
+def test_approval_decision_repairs_exact_quote_that_omits_action_words() -> None:
+    artifact = _artifact_dataclass(
+        real_text="הסכמי רשות ופיתוח להקמה והפעלת מקווה טהרה חברי המועצה מאשרים פה אחד את ( ההסכם24 )חברים 156021 05/03/2025",
+        topic_label_he="הסכמי רשות ופיתוח",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={
+            "subjects": [
+                _subject_payload(
+                    root="אישור החלטה",
+                    child="",
+                    object_text="הסכמי רשות ופיתוח להקמה והפעלת מקווה טהרה",
+                    details="חברי המועצה מאשרים פה אחד את ההסכם 24",
+                    evidence="מאשרים פה אחד את",
+                    is_decision=True,
+                    decision={
+                        "decision_label_he": "אישור החלטה",
+                        "decision_summary_he": "אישור הסכם 24",
+                        "source_quote_he": "( ההסכם24 )חברים 156021 05/03/2025",
+                        "confidence": 0.9,
+                        "limitations": [],
+                    },
+                )
+            ]
+        },
+    )
+
+    assert subjects[0].validation_status == "accepted"
+    assert "חברי המועצה מאשרים פה אחד את" in subjects[0].subject_payload["decision"]["source_quote_he"]
+    assert quality.status == "decision_candidate"
+
+
+def test_agenda_proposal_removed_from_agenda_gets_procedural_outcome_action() -> None:
+    artifact = _artifact_dataclass(
+        real_text="סעיף11 מתן ייעוץ מתכלל 8/2024 ביטול מכרז פומבי - הצעה לסדר בנושא מדיניות ייעוץ בקשה של עו\"ד גלבר הלן ההצעה יורדת מסדר היום ברוב קולות בעד 17 חברים נגד 6 חברים",
+        topic_label_he="מכרזים והתקשרויות",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={
+            "subjects": [
+                _subject_payload(
+                    root="אישור החלטה",
+                    child="",
+                    object_text="ביטול מכרז פומבי 8/2024",
+                    details="ההצעה יורדת מסדר היום ברוב קולות",
+                    evidence="מאשרים / אושר / הוחלט לאשר",
+                    is_decision=True,
+                    decision={
+                        "decision_label_he": "אישור החלטה",
+                        "decision_summary_he": "אישור ביטול מכרז",
+                        "source_quote_he": "מאשרים / אושר / הוחלט לאשר",
+                        "confidence": 0.9,
+                        "limitations": [],
+                    },
+                )
+            ]
+        },
+    )
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "הסרה מסדר היום"
+    assert subjects[0].subject_payload["subject_object_he"] == "ביטול מכרז פומבי 8/2024"
+    assert subjects[0].subject_payload["is_decision"] is True
+    assert subjects[0].subject_payload["decision"]["decision_label_he"] == "הסרה מסדר היום"
+    assert "יורדת מסדר היום" in subjects[0].subject_payload["decision"]["source_quote_he"]
+    assert quality.status == "decision_candidate"
+
+
+def test_committee_referral_keeps_concrete_subject_matter_not_source_topic() -> None:
+    artifact = _artifact_dataclass(
+        real_text=". הצעה2.4 קריאת - לסדר רחוב על שמו של זאב רווח ז\"ל בקשתו של מר עמירם בן זקן ההצעה עוברת לדיון בוועדת שמות 156046 05/03/2025",
+        topic_label_he="שמות והנצחה",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={
+            "subjects": [
+                _subject_payload(
+                    root="בקשה",
+                    child="",
+                    object_text="שמות והנצחה",
+                    details="בקשת מר עמירם בן זקן לקרוא רחוב על שמו של זאב רווח",
+                    evidence="ההצעה עוברת לדיון בוועדת שמות",
+                )
+            ]
+        },
+    )
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "הפניה לוועדה"
+    assert subjects[0].subject_payload["subject_child_label_he"] == ""
+    assert subjects[0].subject_payload["subject_object_he"] == "קריאת רחוב על שמו של זאב רווח ז\"ל"
+    assert quality.action_root_by_dicta == "הפניה לוועדה"
+    assert quality.subject_matter_by_dicta == "קריאת רחוב על שמו של זאב רווח ז\"ל"
+
+
+def test_agenda_proposal_replaces_broad_source_topic_with_heading_subject_matter() -> None:
+    artifact = _artifact_dataclass(
+        real_text="בסד לכבוד ראש העיר הנדון הצעה לסדר יום- הצפות חוזרות ונשנות ברחבי העיר- טיפול בתשתיות ופיצוי התושבים בעקבות נזקי ההצפות",
+        topic_label_he="תכנון ובנייה",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="הצעה לסדר יום", child="", object_text="תכנון ובנייה", details="הצעה בנושא תכנון ובנייה", evidence="הצעה לסדר יום")]},
+    )
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "הצעה לסדר יום"
+    assert subjects[0].subject_payload["subject_object_he"] == "הצפות חוזרות ונשנות ברחבי העיר- טיפול בתשתיות ופיצוי התושבים"
+    assert quality.subject_matter_by_dicta == "הצפות חוזרות ונשנות ברחבי העיר- טיפול בתשתיות ופיצוי התושבים"
+
+
+def test_inquiry_title_replaces_broad_source_topic_with_inquiry_subject() -> None:
+    artifact = _artifact_dataclass(
+        real_text="סעיף7 : . שאילתה בנושא מתחם ההחלקה על הקרח בקניון בלו אייס ארנה, בקשתה של הגברת סופה לנדבר הוקראה תשובת ראש העיר",
+        topic_label_he="מרכזים מסחריים",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="שאילתה", child="", object_text="מרכזים מסחריים", details="שאילתה בנושא מרכזים", evidence="שאילתה בנושא")]},
+    )
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "מענה לשאילתה"
+    assert subjects[0].subject_payload["subject_object_he"] == "מתחם ההחלקה על הקרח בקניון בלו אייס ארנה"
+    assert quality.action_root_by_dicta == "מענה לשאילתה"
+    assert quality.subject_matter_by_dicta == "מתחם ההחלקה על הקרח בקניון בלו אייס ארנה"
+
+
+def test_committee_decision_approval_uses_specific_approval_root() -> None:
+    artifact = _artifact_dataclass(
+        real_text="וועדת משנה לתמיכות מאשרת את החלטת ועדה מקצועית 9 החלטה 1",
+        topic_label_he="תמיכות",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={
+            "subjects": [
+                _subject_payload(
+                    root="אישור",
+                    child="אישור החלטה",
+                    object_text="החלטת ועדה מקצועית 9 החלטה 1",
+                    details="וועדת משנה לתמיכות מאשרת את החלטת הוועדה המקצועית",
+                    evidence="מאשרת את החלטת ועדה מקצועית",
+                    is_decision=True,
+                    decision={
+                        "decision_label_he": "אישור החלטה",
+                        "decision_summary_he": "אישור החלטת ועדה מקצועית",
+                        "source_quote_he": "וועדת משנה לתמיכות מאשרת את החלטת ועדה מקצועית 9 החלטה 1",
+                        "confidence": 0.9,
+                        "limitations": [],
+                    },
+                )
+            ]
+        },
+    )
+
+    apply_event_grouping(artifacts=[artifact], extracted=subjects, quality_rows=[quality])
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "אישור החלטה"
+    assert subjects[0].subject_payload["subject_child_label_he"] == "אישור החלטת ועדה"
+    assert quality.row_role == "action_anchor"
+    assert is_countable_subject_event(subjects[0])
+
+
+def test_event_grouping_links_numbered_proposal_action_to_agenda_proposal() -> None:
+    proposal_artifact = _artifact_dataclass(
+        artifact_id="artifact-flood-proposal",
+        real_text="הנדון הצעה לסדר יום - הצפות חוזרות ברחבי העיר וטיפול בתשתיות ופיצוי התושבים",
+        topic_label_he="תכנון ובנייה",
+        source_ordinal=1,
+    )
+    detail_artifact = _artifact_dataclass(
+        artifact_id="artifact-flood-detail",
+        real_text="1. לפעול בהתאם לתוכנית אב שהוגשה ולהחליף צינורות באזורים המועדים להצפות",
+        topic_label_he="תכנון ובנייה",
+        source_ordinal=2,
+    )
+    proposal_subjects, proposal_quality = process_topic_subject_payload(
+        artifact=proposal_artifact,
+        model_payload={"subjects": [_subject_payload(root="בקשה", child="בקשת אישור", object_text="הצפות חוזרות ברחבי העיר", details="טיפול בתשתיות ופיצוי תושבים", evidence="הצעה לסדר יום")]},
+    )
+    detail_subjects, detail_quality = process_topic_subject_payload(
+        artifact=detail_artifact,
+        model_payload={"subjects": [_subject_payload(root="פעולה", child="פעולה מיידית", object_text="טיפול בתשתיות הצפה", details="החלפת צינורות", evidence="לפעול בהתאם")]},
+    )
+
+    apply_event_grouping(
+        artifacts=[proposal_artifact, detail_artifact],
+        extracted=proposal_subjects + detail_subjects,
+        quality_rows=[proposal_quality, detail_quality],
+    )
+
+    assert proposal_quality.subject_root_by_dicta == "הצעה לסדר יום"
+    assert proposal_quality.anchor_status == "validated_anchor"
+    assert detail_quality.row_role == "dependent_detail"
+    assert detail_quality.subject_root_by_dicta == "הצעה לסדר יום"
+    assert not is_countable_subject_event(detail_subjects[0])
+
+
+def test_agenda_proposal_ocr_variant_becomes_specific_root() -> None:
+    artifact = _artifact_dataclass(
+        real_text="הנדון הצעה סדר יום - שיפוץ מרכז מסחרי רובע ט. לאור האמור אבקש לעלות את הנושא לסדר יום הישיבה הקרובה",
+        topic_label_he="נכסים ומרכזים מסחריים",
+    )
+
+    subjects, quality = process_topic_subject_payload(
+        artifact=artifact,
+        model_payload={"subjects": [_subject_payload(root="בקשה", child="", object_text="שיפוץ מרכז מסחרי", details="העלאת הנושא לסדר היום", evidence="אבקש לעלות את הנושא לסדר יום")]},
+    )
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "הצעה לסדר יום"
+    assert subjects[0].subject_payload["subject_child_label_he"] == ""
+    assert quality.subject_root_by_dicta == "הצעה לסדר יום"
+
+
+def test_model_empty_background_row_is_context_detail_not_failed() -> None:
+    artifact = _artifact_dataclass(
+        real_text="מלגת עיריית אשדוד בשיתוף פרח ומפעל הפיס מורכבת מ-120 שעות פעילות ותמורת 10,000 שח",
+        topic_label_he="תמיכות",
+    )
+
+    subjects, quality = process_topic_subject_payload(artifact=artifact, model_payload={"subjects": [], "overall_summary_he": "פרטי רקע על מלגה"})
+    apply_event_grouping(artifacts=[artifact], extracted=subjects, quality_rows=[quality])
+
+    assert subjects == []
+    assert quality.status == "context_detail"
+    assert quality.row_role == "context_detail"
+    assert quality.reason_for_failure == ""
+
+
+def test_clear_agenda_request_title_is_countable_request_subject() -> None:
+    artifact = _artifact_dataclass(
+        artifact_id="artifact-agenda-request-title",
+        real_text="2 . יד ביד לאורך כל הדרך- מענה תומך במשפחות אלמנים ואלמנות וילדיהם באשדוד, בקשתם של מר מאיר אברז'ל ומר יניב קקון",
+        topic_label_he="סיוע למשפחות",
+    )
+    payload = preclassify_trivial_subject_payload(artifact)
+
+    assert payload is not None
+    assert payload.get("agenda_title_subject") is True
+
+    subjects, quality = process_topic_subject_payload(artifact=artifact, model_payload=payload)
+    apply_event_grouping(artifacts=[artifact], extracted=subjects, quality_rows=[quality])
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "בקשה"
+    assert subjects[0].subject_payload["subject_child_label_he"] == "בקשת דיון"
+    assert quality.row_role == "action_anchor"
+    assert quality.anchor_status == "validated_anchor"
+    assert is_countable_subject_event(subjects[0])
+
+
+def test_clear_agenda_proposal_title_is_countable_proposal_subject() -> None:
+    artifact = _artifact_dataclass(
+        artifact_id="artifact-agenda-proposal-title",
+        real_text="הנדון הצעה לסדר יום - הצפות חוזרות ברחבי העיר וטיפול בתשתיות",
+        topic_label_he="תכנון ובנייה",
+    )
+    payload = preclassify_trivial_subject_payload(artifact)
+
+    assert payload is not None
+    assert payload.get("agenda_title_subject") is True
+
+    subjects, quality = process_topic_subject_payload(artifact=artifact, model_payload=payload)
+    apply_event_grouping(artifacts=[artifact], extracted=subjects, quality_rows=[quality])
+
+    assert subjects[0].subject_payload["subject_root_label_he"] == "הצעה לסדר יום"
+    assert subjects[0].subject_payload["subject_child_label_he"] == ""
+    assert quality.row_role == "action_anchor"
+    assert is_countable_subject_event(subjects[0])
+
+
+def test_event_block_first_calls_model_once_for_title_plus_approval_block() -> None:
+    title_artifact = _artifact_dataclass(
+        artifact_id="artifact-block-title",
+        real_text="סעיף26 : . הודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה",
+        topic_label_he="שירותי שמירה והיטל שמירה",
+        source_ordinal=1,
+    )
+    approval_artifact = _artifact_dataclass(
+        artifact_id="artifact-block-approval",
+        real_text="חברי המועצה מאשרים ברוב קולות את ההודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה",
+        topic_label_he="שירותי שמירה והיטל שמירה",
+        source_ordinal=2,
+    )
+
+    class RecordingBlockClient:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def extract(self, *, artifact: TopicDecisionArtifact, config: TopicSubjectResearchConfig) -> dict:
+            self.calls.append(artifact)
+            assert artifact.artifact_id == approval_artifact.artifact_id
+            assert len(artifact.metadata["event_block_rows"]) == 2
+            return {
+                "subjects": [
+                    _subject_payload(
+                        root="אישור",
+                        child="",
+                        object_text="שירותי שמירה והיטל שמירה",
+                        details="אישור ההודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה",
+                        evidence="מאשרים ברוב קולות",
+                        is_decision=True,
+                        decision={
+                            "decision_label_he": "אישור",
+                            "decision_summary_he": "אישור הודעה בדבר הפעלת שירותי שמירה",
+                            "source_quote_he": "חברי המועצה מאשרים ברוב קולות את ההודעה",
+                            "confidence": 0.9,
+                            "limitations": [],
+                        },
+                    )
+                ]
+            }
+
+    blocks = build_topic_subject_event_blocks([title_artifact, approval_artifact])
+    client = RecordingBlockClient()
+
+    extracted, quality_rows = extract_subjects_from_event_blocks(event_blocks=blocks, client=client, config=TopicSubjectResearchConfig())
+    apply_event_grouping(artifacts=[title_artifact, approval_artifact], extracted=extracted, quality_rows=quality_rows)
+    apply_event_block_links(event_blocks=blocks, extracted=extracted, quality_rows=quality_rows)
+
+    quality_by_id = {row.artifact_id: row for row in quality_rows}
+    assert len(client.calls) == 1
+    assert blocks[0].kind == "model_block"
+    assert blocks[0].anchor_artifact == approval_artifact
+    assert quality_by_id[approval_artifact.artifact_id].row_role == "action_anchor"
+    assert quality_by_id[title_artifact.artifact_id].row_role == "dependent_detail"
+    assert quality_by_id[title_artifact.artifact_id].linked_event_id == quality_by_id[approval_artifact.artifact_id].event_id
+
+
+def test_event_block_builder_does_not_attach_next_section_title_to_previous_anchor() -> None:
+    previous_approval = _artifact_dataclass(
+        artifact_id="artifact-previous-approval",
+        real_text="חברי המועצה מאשרים פה אחד את ההסכם",
+        topic_label_he="הסכמים והתקשרויות",
+        source_ordinal=1,
+    )
+    next_title = _artifact_dataclass(
+        artifact_id="artifact-next-section-title",
+        real_text="סעיף26 : . הודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה",
+        topic_label_he="שירותי שמירה והיטל שמירה",
+        source_ordinal=2,
+    )
+    next_approval = _artifact_dataclass(
+        artifact_id="artifact-next-approval",
+        real_text="חברי המועצה מאשרים ברוב קולות את ההודעה בדבר הפעלת שירותי שמירה וגביית היטל שמירה",
+        topic_label_he="שירותי שמירה והיטל שמירה",
+        source_ordinal=3,
+    )
+
+    blocks = build_topic_subject_event_blocks([previous_approval, next_title, next_approval])
+
+    assert blocks[0].anchor_artifact == previous_approval
+    assert [artifact.artifact_id for artifact in blocks[0].artifacts] == [previous_approval.artifact_id]
+    assert blocks[1].anchor_artifact == next_approval
+    assert [artifact.artifact_id for artifact in blocks[1].artifacts] == [next_title.artifact_id, next_approval.artifact_id]
+
+
+def test_event_block_builder_treats_generic_section_title_as_forward_boundary() -> None:
+    previous_approval = _artifact_dataclass(
+        artifact_id="artifact-previous-committee-approval",
+        real_text="חברי המועצה מאשרים פה אחד את ההחלטה",
+        topic_label_he="חילופי גברי",
+        source_ordinal=1,
+    )
+    next_title = _artifact_dataclass(
+        artifact_id="artifact-next-generic-section-title",
+        real_text="סעיף28 : . שכרו ומועד תחילת עבודתו של מנהל אגף רכש ולוגיסטיקה",
+        topic_label_he="מינוי עובדים בכירים",
+        source_ordinal=2,
+    )
+    next_approval = _artifact_dataclass(
+        artifact_id="artifact-next-manager-approval",
+        real_text="חברי המועצה מאשרים פה אחד את שכרו, מועד תחילת עבודתו ואישור מינויו של מנהל אגף רכש ולוגיסטיקה",
+        topic_label_he="מינוי עובדים בכירים",
+        source_ordinal=3,
+    )
+
+    blocks = build_topic_subject_event_blocks([previous_approval, next_title, next_approval])
+
+    assert blocks[0].anchor_artifact == previous_approval
+    assert [artifact.artifact_id for artifact in blocks[0].artifacts] == [previous_approval.artifact_id]
+    assert blocks[1].anchor_artifact == next_approval
+    assert [artifact.artifact_id for artifact in blocks[1].artifacts] == [next_title.artifact_id, next_approval.artifact_id]
+
+
+def test_event_block_builder_attaches_split_inquiry_question_rows() -> None:
+    inquiry_anchor = _artifact_dataclass(
+        artifact_id="artifact-inquiry-intro",
+        real_text="2022 כי נתניה תבצע את המודל לאור האמור, אבקש לדעת",
+        topic_label_he="סדר יום ושאילתות",
+        source_ordinal=1,
+    )
+    first_question = _artifact_dataclass(
+        artifact_id="artifact-inquiry-question-one",
+        real_text="1. מי הגורם שמימן את חריגת התקציב בסך 71 מיליון שח? האם הגרעון מומן על ידי העירייה או משרד התחבורה?",
+        topic_label_he="סדר יום ושאילתות",
+        source_ordinal=2,
+    )
+    second_question = _artifact_dataclass(
+        artifact_id="artifact-inquiry-question-two",
+        real_text="2. אם התשובה חיובית ביחס למימון הגרעון על ידי משרד התחבורה- מתי הושלם התקציב? ומה הסכום שהועבר?",
+        topic_label_he="תחבורה ציבורית",
+        source_ordinal=3,
+    )
+
+    blocks = build_topic_subject_event_blocks([inquiry_anchor, first_question, second_question])
+
+    assert len(blocks) == 1
+    assert blocks[0].anchor_artifact == inquiry_anchor
+    assert [artifact.artifact_id for artifact in blocks[0].artifacts] == [
+        inquiry_anchor.artifact_id,
+        first_question.artifact_id,
+        second_question.artifact_id,
+    ]
+
+
+def test_event_block_builder_attaches_condition_scope_with_incidental_approval_words() -> None:
+    request_anchor = _artifact_dataclass(
+        artifact_id="artifact-delegation-request-anchor",
+        real_text="אבקש את אישור מועצת העיר להאצלת סמכויות חתימה לגב לינור כהן בהתאם למפורט",
+        topic_label_he="האצלת סמכויות חתימה",
+        source_ordinal=1,
+    )
+    condition_detail = _artifact_dataclass(
+        artifact_id="artifact-condition-scope-detail",
+        real_text="בהזמנות הנגזרות: מחוזה חתום כדין הנגזר ממכרז כדין או במסלול פטור ממכרז מאושר בידי היועמש, החלטות של ועדת רכש, הצעות מחיר מאושרות כדין, הקצבות ותמיכות, הסכום ללא הגבלה",
+        topic_label_he="הסכמים והתקשרויות",
+        source_ordinal=2,
+    )
+
+    blocks = build_topic_subject_event_blocks([request_anchor, condition_detail])
+
+    assert len(blocks) == 1
+    assert blocks[0].anchor_artifact == request_anchor
+    assert [artifact.artifact_id for artifact in blocks[0].artifacts] == [request_anchor.artifact_id, condition_detail.artifact_id]
+
+
+def test_event_block_builder_attaches_numbered_proposal_action_bullets() -> None:
+    proposal_anchor = _artifact_dataclass(
+        artifact_id="artifact-long-proposal-anchor",
+        real_text=(
+            "לכבוד ראש העיר הנדון הצעה לסדר יום בנושא הצפות חוזרות ברחבי העיר. "
+            "בעקבות נזקי ההצפות בחודשי החורף ולאחר פניות רבות של תושבים, "
+            "אבקש להביא את ההצעה לסדר יום כדי לדון בטיפול בתשתיות ובפיצוי תושבים שנפגעו. "
+            "המסמך מפרט רקע רחב על אירועי הצפה קודמים ועל הצורך בדיון ציבורי מסודר במועצת העיר."
+        ),
+        topic_label_he="תכנון ובנייה",
+        source_ordinal=1,
+    )
+    action_bullet = _artifact_dataclass(
+        artifact_id="artifact-proposal-action-bullet",
+        real_text="1. לפעול בהתאם לתוכנית אב שהוגשה ולהחליף צינורות באזורים המועדים להצפות",
+        topic_label_he="תכנון ובנייה",
+        source_ordinal=2,
+    )
+
+    blocks = build_topic_subject_event_blocks([proposal_anchor, action_bullet])
+
+    assert len(blocks) == 1
+    assert blocks[0].anchor_artifact == proposal_anchor
+    assert [artifact.artifact_id for artifact in blocks[0].artifacts] == [proposal_anchor.artifact_id, action_bullet.artifact_id]
+
+
+def test_event_block_empty_model_output_falls_back_for_exact_protocol_approval() -> None:
+    approval_artifact = _artifact_dataclass(
+        artifact_id="artifact-empty-model-protocol-approval",
+        real_text="חברי המועצה מאשרים פה אחד את הפרוטוקול 156025 05/03/2025",
+        topic_label_he="סדר יום ושאילתות",
+    )
+
+    class EmptyBlockClient:
+        def extract(self, *, artifact: TopicDecisionArtifact, config: TopicSubjectResearchConfig) -> dict:
+            return {"subjects": [], "overall_summary_he": "המודל לא החזיר נושא"}
+
+    blocks = build_topic_subject_event_blocks([approval_artifact])
+    extracted, quality_rows = extract_subjects_from_event_blocks(event_blocks=blocks, client=EmptyBlockClient(), config=TopicSubjectResearchConfig())
+    apply_event_grouping(artifacts=[approval_artifact], extracted=extracted, quality_rows=quality_rows)
+
+    assert len(extracted) == 1
+    assert extracted[0].subject_payload["subject_root_label_he"] == "אישור פרוטוקול"
+    assert quality_rows[0].row_role == "action_anchor"
+    assert quality_rows[0].status == "decision_candidate"
+    assert is_countable_subject_event(extracted[0])
+
+
+def test_topic_subject_v3_normalization_payload_hides_source_topic() -> None:
+    artifact = _artifact_dataclass(
+        real_text="אבקש לאשר נסיעה מקצועית לכנס ארצי בנושא שירות לתושב.",
+        topic_label_he="חינוך",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    payload = topic_subject_v3_normalization_payload(context=context, max_text_chars=1000)
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert "known_topic" not in payload
+    assert "topic_label_he" not in serialized
+    assert "חינוך" not in serialized
+    assert payload["source_context"]["target_row"]["artifact_id"] == artifact.artifact_id
+
+
+def test_topic_subject_v3_extraction_payload_uses_controlled_ontology_and_threshold() -> None:
+    artifact = _artifact_dataclass(real_text="במענה לשאילתה בנושא הצללה בגני משחקים נמסר כי בוצע סקר.", topic_label_he="גני ילדים")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+    config = TopicSubjectResearchConfig(action_confidence_threshold=0.75)
+
+    payload = topic_subject_v3_extraction_payload(
+        context=context,
+        normalized_event={"is_event": True, "matter_candidate_he": "הצללה בגני משחקים"},
+        config=config,
+    )
+
+    labels = {row["label_he"] for row in payload["allowed_actions"]}
+    assert "מענה לשאילתה" in labels
+    assert "אחר" in labels
+    assert "אישור" in labels
+    assert "אישור החלטה" not in labels
+    assert any("below 0.75" in requirement for requirement in payload["requirements"])
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "known_topic" not in serialized
+    assert "subject_matter_he" not in serialized
+    assert "matter_he" in serialized
+    assert "outcome" in serialized
+
+
+def test_topic_subject_model_policy_keeps_semantic_stages_on_thinking_heavy_model() -> None:
+    config = TopicSubjectResearchConfig()
+
+    assert topic_subjects_module.topic_subject_model_for_stage(stage="topic_subject_v3_action_subject_extraction", config=config) == config.model_name
+    assert topic_subjects_module.topic_subject_model_for_stage(stage="topic_subject_v3_event_judge", config=config) == config.model_name
+    assert topic_subjects_module.topic_subject_model_for_stage(stage="unknown_new_semantic_stage", config=config) == config.model_name
+    assert topic_subjects_module.topic_subject_model_for_stage(stage="topic_subject_v3_quote_repair", config=config) == config.small_model_name
+    assert topic_subjects_module.topic_subject_model_for_stage(stage="topic_subject_v3_evidence_entailment", config=config) == config.small_model_name
+    assert topic_subjects_module.topic_subject_thinking_enabled_for_model(config.model_name) is True
+    assert topic_subjects_module.topic_subject_system_prompt("/no_think\nReturn JSON only.", think=True) == "Return JSON only."
+
+
+def test_ollama_v3_request_bodies_route_models_and_keep_thinking_enabled() -> None:
+    artifact = _artifact_dataclass(real_text="אבקש לאשר נסיעה מקצועית לכנס ארצי בנושא שירות לתושב.", topic_label_he="חינוך")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+    config = TopicSubjectResearchConfig()
+    calls: list[dict] = []
+
+    class CapturingV3Client(topic_subjects_module.OllamaTopicSubjectV3Client):
+        def _post_chat_with_timeout_retry(self, *, body, config):  # type: ignore[no-untyped-def]
+            calls.append(body)
+            return {"message": {"content": "{}"}}, None
+
+    client = CapturingV3Client()
+    client.normalize_event(context=context, config=config)
+    semantic_body = calls[-1]
+
+    assert semantic_body["model"] == config.model_name
+    assert semantic_body["think"] is True
+    assert "/no_think" not in semantic_body["messages"][0]["content"]
+
+    client.assess_event_evidence(
+        context=context,
+        normalized_event={"is_event": True},
+        event_payload={"is_event": True, "action_type_he": "בקשה", "matter_he": "נסיעה מקצועית", "outcome_is_decision": False},
+        config=config,
+    )
+    support_body = calls[-1]
+
+    assert support_body["model"] == config.small_model_name
+    assert support_body["think"] is True
+    assert "/no_think" not in support_body["messages"][0]["content"]
+
+
+def test_topic_subject_v3_evidence_entailment_payload_checks_action_matter_outcome() -> None:
+    artifact = _artifact_dataclass(real_text="אבקש לאשר נסיעה מקצועית לכנס ארצי.", topic_label_he="חינוך")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    payload = topic_subjects_module.topic_subject_v3_evidence_entailment_payload(
+        context=context,
+        normalized_event={"is_event": True, "matter_candidate_he": "נסיעה מקצועית לכנס ארצי"},
+        event_payload={
+            "is_event": True,
+            "action_type_he": "אישור",
+            "matter_he": "נסיעה מקצועית לכנס ארצי",
+            "outcome_is_decision": False,
+        },
+    )
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert payload["task"] == "topic_subject_v3_evidence_entailment"
+    assert "action_type_he" in payload["schema"]["field_assessments"]
+    assert "matter_he" in payload["schema"]["field_assessments"]
+    assert "outcome" in payload["schema"]["field_assessments"]
+    assert "repair_required" in payload["schema"]
+    assert "known_topic" not in serialized
+    assert "topic_label_he" not in serialized
+
+
+def test_process_topic_subject_v3_applies_evidence_entailment_repair() -> None:
+    artifact = _artifact_dataclass(real_text="אבקש לאשר נסיעה מקצועית לכנס ארצי בנושא שירות לתושב מטעם העירייה.", topic_label_he="חינוך")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    class EvidenceRepairClient(MockTopicSubjectV3Client):
+        def extract_event(self, *, context, normalized_event, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "is_event": True,
+                "event_key_he": "אישור: דבר שלא מופיע",
+                "action_type_he": "אישור",
+                "action_type_confidence": 0.92,
+                "matter_he": "דבר שלא מופיע",
+                "action_quote_he": context.target_artifact.real_text,
+                "outcome_is_decision": False,
+                "target_row_role": "action_anchor",
+                "confidence": 0.9,
+                "rationale_he": "over inferred",
+            }
+
+        def assess_event_evidence(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "entailment_status": "partially_entailed",
+                "repair_required": True,
+                "repaired_event": {
+                    "context_id": context.context_id,
+                    "target_artifact_id": context.target_artifact.artifact_id,
+                    "is_event": True,
+                    "event_key_he": "בקשה: נסיעה מקצועית לכנס ארצי בנושא שירות לתושב",
+                    "action_type_he": "בקשה",
+                    "action_type_confidence": 0.88,
+                    "matter_he": "נסיעה מקצועית לכנס ארצי בנושא שירות לתושב",
+                    "action_quote_he": context.target_artifact.real_text,
+                    "outcome_is_decision": False,
+                    "target_row_role": "action_anchor",
+                    "confidence": 0.86,
+                    "rationale_he": "המקור מבקש אישור אך אינו מתאר אישור בפועל.",
+                },
+                "failure_reasons": ["action_and_matter_over_inferred"],
+                "rationale_he": "repair to supported request",
+            }
+
+    event, row = process_topic_subject_v3_context(
+        context=context,
+        client=EvidenceRepairClient(),
+        config=TopicSubjectResearchConfig(),
+    )
+
+    assert event is not None
+    assert event.event_payload["action_type_he"] == "בקשה"
+    assert event.event_payload["matter_he"] == "נסיעה מקצועית לכנס ארצי בנושא שירות לתושב"
+    assert event.event_payload["outcome_is_decision"] is False
+    assert event.event_payload["v3_evidence_entailment"]["repair_applied"] is True
+    assert row.quality_status == "accepted"
+
+
+def test_topic_subject_v3_low_confidence_controlled_action_becomes_other() -> None:
+    artifact = _artifact_dataclass(real_text="אבקש לאשר נסיעה מקצועית לכנס ארצי.", topic_label_he="חינוך")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    event_payload = normalize_topic_subject_v3_event_payload(
+        payload={
+            "is_event": True,
+            "action_type_he": "בקשה",
+            "action_subtype_he": "",
+            "action_type_confidence": 0.62,
+            "matter_he": "נסיעה מקצועית לכנס ארצי",
+            "outcome_is_decision": False,
+            "confidence": 0.7,
+        },
+        context=context,
+        action_confidence_threshold=0.75,
+    )
+
+    assert event_payload["action_type_he"] == "אחר"
+    assert event_payload["other_action_type_he"] == "בקשה"
+    assert event_payload["action_type_status"] == "other_low_confidence"
+
+
+def test_topic_subject_v3_decision_quote_must_be_grounded_in_context_rows() -> None:
+    artifact = _artifact_dataclass(real_text="חברי המועצה מאשרים פה אחד את הנסיעה המקצועית.", topic_label_he="חינוך")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+    event_payload = normalize_topic_subject_v3_event_payload(
+        payload={
+            "is_event": True,
+            "action_type_he": "אישור",
+            "action_type_confidence": 0.91,
+            "matter_he": "נסיעה מקצועית",
+            "action_quote_he": "חברי המועצה מאשרים פה אחד את הנסיעה המקצועית",
+            "outcome_is_decision": True,
+            "outcome": {
+                "outcome_type": "approved",
+                "outcome_label_he": "אישור",
+                "outcome_summary_he": "אושרה הנסיעה המקצועית",
+                "outcome_quote_he": "ציטוט שלא מופיע במקור",
+                "confidence": 0.9,
+                "limitations": [],
+            },
+            "confidence": 0.91,
+        },
+        context=context,
+    )
+
+    failures = validate_topic_subject_v3_event_payload(context=context, event_payload=event_payload)
+
+    assert "outcome_quote_not_grounded" in failures
+
+
+def test_topic_subject_v3_accepted_judge_non_event_reports_non_event_status() -> None:
+    artifact = _artifact_dataclass(real_text="פרוטוקול מישיבת ועדת כספים שהתקיימה בתאריך 1.1.2025", topic_label_he="כספים")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    row = topic_subject_v3_row_quality_from_payloads(
+        context=context,
+        event_id="",
+        event_payload={"is_event": False, "target_row_role": "structural_metadata"},
+        judge_payload={
+            "judge_prediction": {
+                "is_event": False,
+                "action_type_he": None,
+                "matter_he": None,
+                "outcome_type": "none",
+                "confidence": 0.9,
+                "rationale_he": "header",
+            },
+            "prediction_comparison": "same",
+            "judge_status": "accepted",
+            "ground_truth_he": "",
+            "failure_reasons": [],
+            "row_quality": {
+                "row_role": "structural_metadata",
+                "event_role": "not_part_of_event",
+                "quality_status": "accepted",
+                "ground_truth_he": "",
+                "reason_for_failure": None,
+            },
+        },
+        validation_status="non_event",
+        failure_reasons=[],
+    )
+
+    assert row.quality_status == "non_event"
+    assert row.judge_status == "non_event"
+    assert row.prediction_comparison == "same"
+    assert row.ground_truth_he
+
+
+def test_topic_subject_v3_event_output_includes_full_source_rows() -> None:
+    anchor = _artifact_dataclass(
+        artifact_id="artifact-v3-anchor",
+        real_text="חברי המועצה מאשרים פה אחד את הנסיעה המקצועית.",
+        topic_label_he="נסיעות",
+        source_ordinal=1,
+    )
+    detail = _artifact_dataclass(
+        artifact_id="artifact-v3-detail",
+        real_text="הנסיעה מיועדת לכנס מקצועי בתחום החינוך.",
+        topic_label_he="חינוך",
+        source_ordinal=2,
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[anchor, detail], max_context_rows=5)[0]
+
+    event, _row = process_topic_subject_v3_context(
+        context=context,
+        client=MockTopicSubjectV3Client(),
+        config=TopicSubjectResearchConfig(),
+    )
+
+    assert event is not None
+    payload = topic_subject_v3_event_to_dict(event)
+    assert payload["anchor_source_text_he"] == anchor.real_text
+    assert anchor.real_text in payload["full_source_text_he"]
+    assert detail.real_text in payload["full_source_text_he"]
+    assert payload["event_source_rows"][0]["full_source_text_he"] == anchor.real_text
+    assert payload["event_payload"]["action_type_he"] == "אישור"
+    assert payload["event_payload"]["matter_he"]
+    assert payload["event_payload"]["outcome_is_decision"] is True
+
+
+def test_topic_subject_v3_consolidates_duplicate_decision_and_supporting_request() -> None:
+    request = _artifact_dataclass(
+        artifact_id="artifact-v3-request",
+        real_text="אבקש לאשר השתתפות בסמינר חדשנות של מנהל חינוך בארהב.",
+        topic_label_he="חינוך",
+        source_ordinal=1,
+    )
+    approval = _artifact_dataclass(
+        artifact_id="artifact-v3-approval",
+        real_text="חברי המועצה מאשרים פה אחד השתתפות בסמינר מקצועי ללמידה חדשנית בארהב.",
+        topic_label_he="נסיעות",
+        source_ordinal=2,
+    )
+    duplicate = _artifact_dataclass(
+        artifact_id="artifact-v3-duplicate",
+        real_text="החלטה בנושא הסמינר המקצועי ללמידה חדשנית בארהב.",
+        topic_label_he="חינוך",
+        source_ordinal=3,
+    )
+    contexts = {context.target_artifact.artifact_id: context for context in build_topic_subject_v3_event_contexts(artifacts=[request, approval, duplicate], max_context_rows=5)}
+    decision_quote = approval.real_text
+    events = [
+        _v3_event_result(
+            context=contexts[request.artifact_id],
+            action_type="אישור",
+            matter="נסיעתה של מנהלת קשרי חוץ להשתתפות בסמינר חדשנות למנהלי חינוך בארהב",
+            confidence=0.93,
+            outcome_quote=request.real_text,
+        ),
+        _v3_event_result(
+            context=contexts[approval.artifact_id],
+            action_type="אישור",
+            matter="השתתפות בסמינר מקצועי ללמידה חדשנית בארהב",
+            confidence=0.91,
+            outcome_quote=decision_quote,
+        ),
+        _v3_event_result(
+            context=contexts[duplicate.artifact_id],
+            action_type="אישור",
+            matter="סמינר מקצועי ללמידה חדשנית בארהב",
+            confidence=0.88,
+            outcome_quote=decision_quote,
+        ),
+    ]
+    events[2].validation_status = "failed"
+    events[2].failure_reasons = ["action_quote_not_grounded"]
+    events[2].row_quality.quality_status = "failed"
+    events[2].row_quality.reason_for_failure = "action_quote_not_grounded"
+    quality_rows = [event.row_quality for event in events]
+
+    assert topic_subjects_module.topic_subject_v3_target_row_request_like_without_decision(events[0]) is True
+    assert topic_subjects_module.topic_subject_v3_text_similarity("השתתפותה בסמינר מקצועי בארהב", "להשתתפות בסמינר חדשנות בארהב") >= 0.5
+
+    selected, quality_rows = topic_subjects_module.consolidate_topic_subject_v3_events(events=events, row_quality_rows=quality_rows)
+    result = topic_subjects_module.TopicSubjectV3ResearchResult(
+        run_id=None,
+        topic_tree={},
+        artifacts=[request, approval, duplicate],
+        events=selected,
+        row_quality_rows=quality_rows,
+        elapsed_seconds=0.0,
+    )
+
+    assert len(selected) == 1
+    assert selected[0].context.target_artifact.artifact_id == approval.artifact_id
+    assert selected[0].event_payload["event_identity_status"] == "primary_event"
+    assert selected[0].event_payload["matter_he"] == "השתתפות בסמינר מקצועי ללמידה חדשנית בארהב"
+    assert selected[0].event_payload["canonical_matter_source_artifact_id"] == approval.artifact_id
+    assert result.candidate_subject_count == 1
+    assert result.candidate_decision_count == 1
+    quality_by_artifact = {row.artifact.artifact_id: row for row in quality_rows}
+    assert quality_by_artifact[approval.artifact_id].quality_status == "accepted_primary"
+    assert quality_by_artifact[request.artifact_id].event_role == "supporting_phase"
+    assert quality_by_artifact[request.artifact_id].action_type_by_dicta == "בקשה"
+    assert quality_by_artifact[request.artifact_id].outcome_by_dicta == ""
+    assert quality_by_artifact[request.artifact_id].quality_status == "accepted_supporting_phase"
+    assert quality_by_artifact[request.artifact_id].metadata["event_identity_status"] == "supporting_row_only"
+    assert quality_by_artifact[duplicate.artifact_id].event_role == "duplicate_event_prediction"
+    assert quality_by_artifact[duplicate.artifact_id].quality_status == "accepted_duplicate"
+    assert quality_by_artifact[duplicate.artifact_id].reason_for_failure == ""
+    assert quality_by_artifact[duplicate.artifact_id].metadata["suppressed_secondary_failure_reason"] == "action_quote_not_grounded"
+    assert quality_by_artifact[duplicate.artifact_id].metadata["event_identity_reason"] == "same_exact_outcome_quote"
+    report = topic_subjects_module.topic_subject_v3_quality_report_markdown(quality_rows)
+    assert "No problematic or low-confidence rows found." in report
+
+
+def test_topic_subject_v3_missing_action_confidence_fallback_is_visible() -> None:
+    artifact = _artifact_dataclass(real_text="חברי המועצה מאשרים פה אחד את הנסיעה המקצועית.", topic_label_he="נסיעות")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    event_payload = normalize_topic_subject_v3_event_payload(
+        payload={
+            "is_event": True,
+            "action_type_he": "אישור",
+            "matter_he": "נסיעה מקצועית",
+            "outcome_is_decision": True,
+            "outcome": {
+                "outcome_type": "approved",
+                "outcome_label_he": "אישור",
+                "outcome_quote_he": artifact.real_text,
+                "confidence": 0.9,
+                "limitations": [],
+            },
+            "confidence": 0.91,
+        },
+        context=context,
+    )
+
+    assert event_payload["action_type_he"] == "אישור"
+    assert event_payload["action_type_confidence"] == 0.91
+    assert event_payload["schema_warnings"] == ["missing_action_type_confidence_used_event_confidence"]
+
+
+def test_topic_subject_v3_approval_without_decision_outcome_is_reported() -> None:
+    artifact = _artifact_dataclass(real_text="פרוטוקול ועדת משנה להקצאות קרקע ללא ציטוט החלטה מפורש.", topic_label_he="הקצאות")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+    row = topic_subject_v3_row_quality_from_payloads(
+        context=context,
+        event_id="event-test",
+        event_payload={
+            "is_event": True,
+            "action_type_he": "אישור",
+            "matter_he": "הקצאת קרקעות",
+            "outcome_is_decision": False,
+            "target_row_role": "action_anchor",
+        },
+        judge_payload={
+            "judge_prediction": {"is_event": True, "action_type_he": "אישור", "matter_he": "הקצאת קרקעות", "outcome_type": "none"},
+            "prediction_comparison": "same",
+            "judge_status": "accepted",
+            "failure_reasons": [],
+            "row_quality": {"row_role": "action_anchor", "event_role": "primary", "quality_status": "accepted"},
+        },
+        validation_status="accepted",
+        failure_reasons=[],
+    )
+
+    assert "approval_action_without_decision_outcome" in row.reason_for_failure
+    assert topic_subjects_module.topic_subject_v3_row_needs_quality_report(row) is True
+
+
+def test_topic_subject_v3_long_meeting_participant_header_is_structural_non_event() -> None:
+    participant_text = (
+        "ישיבת מועצת העיר תל אביב-יפו מיוחדת מתאריך ח בשבט תשעט היו\"ר רון חולדאי השתתפו "
+        + " ".join(f"חבר מועצה {index}" for index in range(90))
+        + " מנכ\"ל העירייה נכחו בישיבה היועמ\"ש גזבר העירייה מזכירת המועצה סטנוגרמה הישיבה נפתחה בשעה 18:08"
+    )
+    artifact = _artifact_dataclass(real_text=participant_text, topic_label_he="פרוטוקול")
+
+    structural = topic_subjects_module.topic_subject_v3_structural_non_event_payload(artifact)
+
+    assert structural is not None
+    assert structural["row_role"] == "meeting_header"
+
+
+def test_topic_subject_v3_meeting_opening_with_participants_is_structural_non_event() -> None:
+    artifact = _artifact_dataclass(
+        real_text=(
+            "2019) מתאריך ח' בשבט תשע\"ט היו\"ר ר. חולדאי : השתתפו ח. אריאלי ר. אלקבץ "
+            "מנכ\"ל העירייה מנחם לייבה :נכחו בישיבה היועמ\"ש גזבר העירייה "
+            "18:08 :הישיבה נפתחה בשעה סטנוגרמה מזכירת המועצה"
+        ),
+        topic_label_he="פרוטוקול",
+    )
+
+    structural = topic_subjects_module.topic_subject_v3_structural_non_event_payload(artifact)
+
+    assert structural is not None
+    assert structural["row_role"] == "meeting_header"
+
+
+def test_topic_subject_v3_decision_row_with_closing_footer_is_not_structural_header() -> None:
+    artifact = _artifact_dataclass(
+        real_text=(
+            "ליאור שפירא נבחר להיות יו\"ר המועצה החלטה: מחליטים, בהתאם לסעיף 130 "
+            "לפקודת העיריות, לבחור ברוב קולות את מר ליאור שפירא להיות יו\"ר מועצת העירייה. "
+            "הישיבה ננעלה בשעה 18:10 מנכ\"ל יו\"ר ערכה מזכירת המועצה"
+        ),
+        topic_label_he="בחירת יו\"ר",
+    )
+
+    structural = topic_subjects_module.topic_subject_v3_structural_non_event_payload(artifact)
+
+    assert structural is None
+
+
+def test_topic_subject_v3_legal_meeting_basis_fragment_is_structural_non_event() -> None:
+    artifact = _artifact_dataclass(
+        real_text=":סדר היום לפקודת העיריות130 ישיבה מיוחדת לפי סעיף",
+        topic_label_he="סדר יום ושאילתות",
+    )
+
+    structural = topic_subjects_module.topic_subject_v3_structural_non_event_payload(artifact)
+
+    assert structural is not None
+    assert structural["row_role"] == "legal_meeting_basis_fragment"
+
+
+def _v3_event_result(
+    *,
+    context: topic_subjects_module.TopicSubjectV3EventContext,
+    action_type: str,
+    matter: str,
+    confidence: float,
+    outcome_quote: str,
+) -> topic_subjects_module.TopicSubjectV3EventResult:
+    outcome_is_decision = bool(outcome_quote)
+    payload = normalize_topic_subject_v3_event_payload(
+        payload={
+            "context_id": context.context_id,
+            "target_artifact_id": context.target_artifact.artifact_id,
+            "is_event": True,
+            "event_key_he": f"{action_type}: {matter}",
+            "action_type_he": action_type,
+            "action_type_confidence": confidence,
+            "matter_he": matter,
+            "action_quote_he": context.target_artifact.real_text,
+            "outcome_is_decision": outcome_is_decision,
+            "outcome": {
+                "outcome_type": "approved" if outcome_is_decision else "none",
+                "outcome_label_he": "אישור" if outcome_is_decision else None,
+                "outcome_summary_he": outcome_quote if outcome_is_decision else None,
+                "outcome_quote_he": outcome_quote if outcome_is_decision else None,
+                "confidence": confidence if outcome_is_decision else 0.0,
+                "limitations": [],
+            },
+            "target_row_role": "action_anchor",
+            "row_roles": [
+                {
+                    "artifact_id": artifact.artifact_id,
+                    "row_role": "action_anchor" if artifact.artifact_id == context.target_artifact.artifact_id else "dependent_detail",
+                    "event_role": "primary" if artifact.artifact_id == context.target_artifact.artifact_id else "supporting",
+                    "reason_he": "unit_test",
+                }
+                for artifact in context.rows
+            ],
+            "confidence": confidence,
+            "rationale_he": "unit_test",
+        },
+        context=context,
+    )
+    judge_payload = {
+        "judge_prediction": {
+            "is_event": True,
+            "action_type_he": action_type,
+            "matter_he": matter,
+            "outcome_type": "approved" if outcome_is_decision else "none",
+            "outcome_label_he": "אישור" if outcome_is_decision else None,
+            "outcome_quote_he": outcome_quote or None,
+            "confidence": confidence,
+            "rationale_he": "unit_test",
+        },
+        "prediction_comparison": "same",
+        "event_identity_status": "new_event",
+        "judge_status": "accepted",
+        "ground_truth_he": "unit_test",
+        "reason_for_failure": "",
+        "failure_reasons": [],
+        "row_quality": {
+            "row_role": "action_anchor",
+            "event_role": "primary",
+            "quality_status": "accepted",
+            "ground_truth_he": "unit_test",
+            "reason_for_failure": "",
+        },
+    }
+    event_id = topic_subjects_module.topic_subject_v3_event_id(context=context, event_payload=payload)
+    row_quality = topic_subject_v3_row_quality_from_payloads(
+        context=context,
+        event_id=event_id,
+        event_payload=payload,
+        judge_payload=judge_payload,
+        validation_status="accepted",
+        failure_reasons=[],
+    )
+    return topic_subjects_module.TopicSubjectV3EventResult(
+        event_id=event_id,
+        event_index=0,
+        context=context,
+        event_payload=payload,
+        normalized_event={"is_event": True},
+        extraction_payload=payload,
+        judge_payload=judge_payload,
+        validation_status="accepted",
+        failure_reasons=[],
+        row_quality=row_quality,
+    )
 
 
 def _artifact_dataclass(*, real_text: str, topic_label_he: str, artifact_id: str = "artifact-test", source_ordinal: int = 1) -> TopicDecisionArtifact:
