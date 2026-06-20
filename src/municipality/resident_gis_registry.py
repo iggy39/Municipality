@@ -17,6 +17,46 @@ class ResidentGisRegistryError(ValueError):
 
 
 @dataclass(frozen=True)
+class ResidentGovMapLayer:
+    alias: str
+    label_he: str = ""
+    status: str = "primary"
+    source_scope: str = "unknown"
+    evidence_he: str = ""
+    caveat_he: str = ""
+    tags: tuple[str, ...] = ()
+    protocol_signal_types: tuple[str, ...] = ()
+    selectable: bool = True
+
+    @classmethod
+    def from_mapping(cls, row: Mapping[str, Any]) -> ResidentGovMapLayer:
+        return cls(
+            alias=_required_text(row, "alias"),
+            label_he=_optional_text(row.get("label_he")),
+            status=_optional_text(row.get("status")) or "primary",
+            source_scope=_optional_text(row.get("source_scope")) or "unknown",
+            evidence_he=_optional_text(row.get("evidence_he")),
+            caveat_he=_optional_text(row.get("caveat_he")),
+            tags=tuple(_text_list(row.get("tags"))),
+            protocol_signal_types=tuple(_text_list(row.get("protocol_signal_types"))),
+            selectable=bool(row.get("selectable", True)),
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "alias": self.alias,
+            "label_he": self.label_he,
+            "status": self.status,
+            "source_scope": self.source_scope,
+            "evidence_he": self.evidence_he,
+            "caveat_he": self.caveat_he,
+            "tags": list(self.tags),
+            "protocol_signal_types": list(self.protocol_signal_types),
+            "selectable": self.selectable,
+        }
+
+
+@dataclass(frozen=True)
 class ResidentGisLayerGroup:
     layer_key: str
     display_name_he: str
@@ -28,6 +68,7 @@ class ResidentGisLayerGroup:
     resident_synergy_he: str
     caveats_he: str
     local_layer_keys: tuple[str, ...] = ()
+    govmap_layers: tuple[ResidentGovMapLayer, ...] = ()
 
     @classmethod
     def from_mapping(cls, row: Mapping[str, Any]) -> ResidentGisLayerGroup:
@@ -42,6 +83,7 @@ class ResidentGisLayerGroup:
             resident_synergy_he=_required_text(row, "resident_synergy_he"),
             caveats_he=_required_text(row, "caveats_he"),
             local_layer_keys=tuple(_text_list(row.get("local_layer_keys"))),
+            govmap_layers=tuple(ResidentGovMapLayer.from_mapping(item) for item in _optional_mapping_list(row.get("govmap_layers"), "govmap_layers")),
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -56,6 +98,7 @@ class ResidentGisLayerGroup:
             "protocol_signal_types": list(self.protocol_signal_types),
             "resident_synergy_he": self.resident_synergy_he,
             "caveats_he": self.caveats_he,
+            "govmap_layers": [layer.to_payload() for layer in self.govmap_layers],
         }
 
 
@@ -164,6 +207,11 @@ def validate_resident_gis_registry(registry: ResidentGisRegistry) -> None:
         raise ResidentGisRegistryError(f"duplicate question ids: {', '.join(duplicate_questions)}")
 
     known_layers = set(layer_keys)
+    for layer in registry.layer_groups:
+        aliases = [*layer.govmap_aliases, *(govmap_layer.alias for govmap_layer in layer.govmap_layers)]
+        duplicate_aliases = _duplicates(aliases)
+        if duplicate_aliases:
+            raise ResidentGisRegistryError(f"{layer.layer_key} has duplicate GovMap aliases: {', '.join(duplicate_aliases)}")
     for question in registry.question_archetypes:
         unknown = [layer_key for layer_key in question.layer_keys if layer_key not in known_layers]
         if unknown:
@@ -204,6 +252,7 @@ def recommend_layers_for_question(
                 "matching_tags": matching_tags,
                 "matching_protocol_signals": matching_signals,
                 "govmap_aliases": list(layer.govmap_aliases),
+                "govmap_layers": [govmap_layer.to_payload() for govmap_layer in layer.govmap_layers],
                 "local_layer_keys": list(layer.local_layer_keys),
                 "synergy_he": layer.resident_synergy_he,
                 "caveats_he": layer.caveats_he,
@@ -274,11 +323,21 @@ def _mapping_list(value: Any, field_name: str) -> list[Mapping[str, Any]]:
     return out
 
 
+def _optional_mapping_list(value: Any, field_name: str) -> list[Mapping[str, Any]]:
+    if value is None:
+        return []
+    return _mapping_list(value, field_name)
+
+
 def _required_text(row: Mapping[str, Any], key: str) -> str:
     value = row.get(key)
     if not isinstance(value, str) or not value.strip():
         raise ResidentGisRegistryError(f"missing required text field: {key}")
     return value.strip()
+
+
+def _optional_text(value: Any) -> str:
+    return str(value).strip() if value is not None and str(value).strip() else ""
 
 
 def _text_list(value: Any) -> list[str]:

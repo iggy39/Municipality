@@ -2518,9 +2518,6 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
               <li><label><input type="checkbox" data-map-object-toggle="municipal_bike_paths" checked /><span class="mapLayerLegendSwatch bike"></span><span>שבילי אופניים</span></label></li>
               <li><label><input type="checkbox" data-map-object-toggle="osm_interest" checked /><span class="mapLayerLegendSwatch osm"></span><span>OSM מוקדי עניין</span></label></li>
             </ul>
-            <p id="govmap-catalog-layer-title" class="mapLayerPopoverSectionTitle" hidden>שכבות ניסוי</p>
-            <p id="govmap-catalog-layer-help" class="residentGovMapHelp" hidden>שכבות GovMap נוספות שנבדקו במחקר אחרון. שכבות חלקיות מסומנות כדי להפריד אותן מהקבוצות הקיימות.</p>
-            <ul id="govmap-catalog-layer-group-list" class="mapLayerLegendList residentGovMapLayerList govMapCatalogLayerList" hidden></ul>
             <p id="resident-govmap-layer-group-title" class="mapLayerPopoverSectionTitle" hidden>קבוצות GIS לתושב</p>
             <p id="resident-govmap-layer-help" class="residentGovMapHelp" hidden>אלו קבוצות של שכבות GovMap שרלוונטיות לתושב, למשל מבני ציבור, גנים, חניה ותשתיות. חפשו לפי נושא או שם שכבה, ואז פתחו קבוצה כדי לבחור שכבות מפה.</p>
             <input id="resident-govmap-layer-search" class="residentGovMapSearch" type="search" placeholder="חיפוש שכבה או קבוצה" autocomplete="off" hidden />
@@ -4539,13 +4536,6 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             aliases.add(alias);
           }
         }
-        for (const input of document.querySelectorAll("[data-catalog-govmap-layer-toggle]")) {
-          if (!input.checked) continue;
-          const alias = String(input.dataset.catalogGovmapLayerToggle || "").trim();
-          if (alias) {
-            aliases.add(alias);
-          }
-        }
         return Array.from(aliases);
       };
 
@@ -4732,9 +4722,17 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             const kindLabel = layer.kind === "search_datatype" ? "כלי חיפוש" : "שכבת מפה";
             childMeta.textContent = `${alias} · ${kindLabel}`;
             childText.append(childName, childMeta);
+            if (layer.status && layer.status !== "primary") {
+              const badge = document.createElement("span");
+              badge.className = `govMapCatalogBadge${layer.status === "partial" ? " isPartial" : ""}`;
+              badge.textContent = layer.status === "partial" ? "חלקי" : "מאומת";
+              childText.appendChild(badge);
+            }
             if (!selectable) {
               childLabel.classList.add("isDisabled");
               childLabel.title = layer.reason_he || "לא ניתן להציג כשכבת מפה.";
+            } else if (layer.evidence_he || layer.caveat_he) {
+              childLabel.title = [layer.evidence_he, layer.caveat_he].filter(Boolean).join(" ");
             }
             childLabel.append(childInput, childText);
             childItem.appendChild(childLabel);
@@ -4750,125 +4748,8 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         return true;
       };
 
-      const renderGovMapCatalogLayerGroups = (payload) => {
-        const title = document.getElementById("govmap-catalog-layer-title");
-        const help = document.getElementById("govmap-catalog-layer-help");
-        const list = document.getElementById("govmap-catalog-layer-group-list");
-        if (!title || !list) return false;
-        const groups = Array.isArray(payload?.govmap?.catalog_layer_groups) ? payload.govmap.catalog_layer_groups : [];
-        title.hidden = groups.length === 0;
-        if (help) help.hidden = groups.length === 0;
-        list.hidden = groups.length === 0;
-        list.replaceChildren();
-        const setGroupExpanded = (item, expanded) => {
-          const button = item.querySelector("[data-catalog-govmap-expand]");
-          const childList = item.querySelector(".residentGovMapChildList");
-          if (!button || !childList) return;
-          childList.hidden = !expanded;
-          button.setAttribute("aria-expanded", String(expanded));
-          button.textContent = expanded ? "סגור" : "פתח";
-          button.setAttribute("aria-label", `${expanded ? "סגירת" : "פתיחת"} קבוצת קטלוג ${item.dataset.groupName || "GovMap"}`);
-        };
-        const syncGroupState = (item) => {
-          const groupInput = item.querySelector("[data-catalog-govmap-layer-group-toggle]");
-          const childInputs = Array.from(item.querySelectorAll("[data-catalog-govmap-layer-toggle]"));
-          const checkedCount = childInputs.filter((input) => input.checked).length;
-          groupInput.disabled = childInputs.length === 0;
-          groupInput.indeterminate = checkedCount > 0 && checkedCount < childInputs.length;
-          groupInput.checked = childInputs.length > 0 && checkedCount === childInputs.length;
-        };
-        for (const group of groups) {
-          const key = String(group.group_key || "").trim();
-          const layers = Array.isArray(group.layers) ? group.layers : [];
-          if (!key || layers.length === 0) continue;
-          const item = document.createElement("li");
-          item.className = "residentGovMapGroupItem";
-          item.dataset.groupName = group.display_name_he || key;
-          const header = document.createElement("div");
-          header.className = "residentGovMapGroupHeader";
-          const label = document.createElement("label");
-          label.title = group.help_he || "";
-          const input = document.createElement("input");
-          input.type = "checkbox";
-          input.checked = group.default_visible === true;
-          input.dataset.catalogGovmapLayerGroupToggle = key;
-          input.autocomplete = "off";
-          input.addEventListener("change", () => {
-            for (const childInput of item.querySelectorAll("[data-catalog-govmap-layer-toggle]")) {
-              childInput.checked = input.checked;
-            }
-            syncGroupState(item);
-            window.__updateGovMapIframeUrl?.();
-          });
-          const textWrap = document.createElement("span");
-          textWrap.className = "residentGovMapLayerText";
-          const name = document.createElement("span");
-          name.className = "residentGovMapLayerName";
-          name.textContent = group.display_name_he || key;
-          const meta = document.createElement("span");
-          meta.className = "residentGovMapLayerMeta";
-          meta.textContent = `${group.status === "partial" ? "חלקי" : "נוסף"} · ${layers.length} שכבות`;
-          textWrap.append(name, meta);
-          label.append(input, textWrap);
-          const expandButton = document.createElement("button");
-          expandButton.type = "button";
-          expandButton.className = "residentGovMapExpandButton";
-          expandButton.dataset.catalogGovmapExpand = key;
-          expandButton.setAttribute("aria-expanded", "false");
-          expandButton.addEventListener("click", () => {
-            const nextExpanded = expandButton.getAttribute("aria-expanded") !== "true";
-            item.dataset.userExpanded = String(nextExpanded);
-            setGroupExpanded(item, nextExpanded);
-          });
-          header.append(label, expandButton);
-          item.appendChild(header);
-          const childList = document.createElement("ul");
-          childList.className = "residentGovMapChildList";
-          childList.id = `govmap-catalog-children-${key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-          childList.hidden = true;
-          expandButton.setAttribute("aria-controls", childList.id);
-          for (const layer of layers) {
-            const alias = String(layer.alias || "").trim();
-            if (!alias) continue;
-            const childItem = document.createElement("li");
-            const childLabel = document.createElement("label");
-            childLabel.title = layer.evidence_he || "";
-            const childInput = document.createElement("input");
-            childInput.type = "checkbox";
-            childInput.checked = layer.default_visible === true;
-            childInput.dataset.catalogGovmapLayerToggle = alias;
-            childInput.autocomplete = "off";
-            childInput.addEventListener("change", () => {
-              syncGroupState(item);
-              window.__updateGovMapIframeUrl?.();
-            });
-            const childText = document.createElement("span");
-            childText.className = "residentGovMapLayerText";
-            const childName = document.createElement("span");
-            childName.className = "residentGovMapLayerName";
-            childName.textContent = layer.label_he || alias;
-            const childMeta = document.createElement("span");
-            childMeta.className = "residentGovMapLayerMeta";
-            childMeta.textContent = `${alias} · ${layer.category_he || "GovMap"}`;
-            const badge = document.createElement("span");
-            badge.className = `govMapCatalogBadge${layer.status === "partial" ? " isPartial" : ""}`;
-            badge.textContent = layer.status === "partial" ? "חלקי" : "נוסף";
-            childText.append(childName, childMeta, badge);
-            childLabel.append(childInput, childText);
-            childItem.appendChild(childLabel);
-            childList.appendChild(childItem);
-          }
-          item.appendChild(childList);
-          setGroupExpanded(item, group.status === "additional");
-          syncGroupState(item);
-          list.appendChild(item);
-        }
-        return true;
-      };
-
       const renderGovMapLayerControls = (payload) => {
         if (!payload?.govmap) return false;
-        renderGovMapCatalogLayerGroups(payload);
         renderResidentGovMapLayerGroups(payload);
         return true;
       };

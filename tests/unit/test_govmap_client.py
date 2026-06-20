@@ -74,12 +74,11 @@ def test_build_govmap_dashboard_payload_degrades_without_live_calls(monkeypatch)
     assert all(layer["selectable"] is True for layer in public_buildings["layers"])
     assert "layer_210692" not in {layer["alias"] for group in resident_groups for layer in group["layers"]}
     assert "layer_210697" not in {layer["alias"] for group in resident_groups for layer in group["layers"]}
-    assert all(group["layer_key"] != "playgrounds_youth_space" for group in resident_groups)
-    catalog_groups = payload["govmap"]["catalog_layer_groups"]
-    assert {group["display_name_he"] for group in catalog_groups} == {"שכבות נוספות", "חלקיות"}
-    assert {group["status"] for group in catalog_groups} == {"additional", "partial"}
-    catalog_aliases = {layer["alias"] for group in catalog_groups for layer in group["layers"]}
-    assert {"sport", "situr_ironi", "ravkav", "mehoziot_app_taba"} <= catalog_aliases
+    playgrounds = next(group for group in resident_groups if group["layer_key"] == "playgrounds_youth_space")
+    assert {layer["alias"] for layer in playgrounds["layers"]} == {"teva_ironi", "teva_ironi_nek"}
+    assert {layer["status"] for layer in playgrounds["layers"]} == {"partial"}
+    resident_aliases = {layer["alias"] for group in resident_groups for layer in group["layers"]}
+    assert {"sport", "situr_ironi", "ravkav", "mehoziot_app_taba"} <= resident_aliases
     assert {"sport", "situr_ironi", "ravkav"} <= set(payload["govmap"]["visible_layers"])
     assert "PARCEL_ALL" in payload["govmap"]["visible_layers"]
     assert "address" not in payload["govmap"]["visible_layers"]

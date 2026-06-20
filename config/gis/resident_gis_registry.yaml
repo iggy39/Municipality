@@ -82,6 +82,47 @@ layer_groups:
     display_name_he: "תכניות, ייעודי קרקע ומגרשי תב\"ע"
     govmap_category_he: "קדסטר, מקרקעין ותכנון"
     govmap_aliases: [retzefmigrashim, mehoziot_app_yk, talar_prep, tama70, tabaot]
+    govmap_layers:
+      - alias: michrazim
+        label_he: "מכרזי מקרקעין - גבולות - רמ\"י"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "נמצא בקטלוג GovMap ובמדגם ערים; הכיסוי תלוי במכרזים פעילים או היסטוריים."
+        caveat_he: "לא כל תכנית או הקצאה עירונית קשורה למכרז רמ\"י."
+        tags: [planning, land_use, land_allocation, tender, development]
+        protocol_signal_types: [cadastral_reference, agreement_or_allocation, municipal_action]
+      - alias: michrazim_haluka
+        label_he: "מכרזי מקרקעין - מגרשים - רמ\"י"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "משלים את גבולות מכרזי רמ\"י; הכיסוי במדגם היה תלוי מיקום."
+        caveat_he: "שכבת מגרשי מכרז אינה תחליף לשכבות תכנית/חלקה רשמיות."
+        tags: [planning, parcel, tender, land_allocation]
+        protocol_signal_types: [cadastral_reference, agreement_or_allocation, municipal_action]
+      - alias: urbanrenewal_settlment
+        label_he: "התחדשות עירונית - יישובים"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "שכבת יישובים להתחדשות עירונית; לא כל עיר במדגם כלולה."
+        caveat_he: "שכבת יישוב אינה מזהה מתחם או מבנה ספציפי."
+        tags: [planning, urban_renewal, development, citywide_context]
+        protocol_signal_types: [municipal_action, service_population]
+      - alias: add_projects_ur_muchraz
+        label_he: "מתחמי התחדשות עירונית מוכרזים"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "ערך תכנוני גבוה אך כיסוי המדגם היה דליל."
+        caveat_he: "יש להציג רק כהקשר אם אין התאמה למתחם ספציפי."
+        tags: [planning, urban_renewal, development, public_participation]
+        protocol_signal_types: [cadastral_reference, municipal_action, agreement_or_allocation]
+      - alias: mehoziot_app_taba
+        label_he: "קווים כחולים - מבא\"ת"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "שכבת תכנון רשמית בעלת ערך, אך חופפת חלקית לשכבות תכנון קיימות."
+        caveat_he: "חפיפה עם שכבות תכנון אחרות מחייבת דה-דופליקציה בתשובה."
+        tags: [planning, plan_status, land_use, objection]
+        protocol_signal_types: [cadastral_reference, municipal_action]
     geometry: polygon
     tags: [planning, land_use, plan_status, public_participation, development, objection]
     protocol_signal_types: [cadastral_reference, municipal_action, agreement_or_allocation]
@@ -111,6 +152,23 @@ layer_groups:
     display_name_he: "גני משחקים, פארקים ומרחבי נוער"
     govmap_category_he: "חינוך ודת / תיירות, טבע, פנאי וספורט"
     govmap_aliases: []
+    govmap_layers:
+      - alias: teva_ironi
+        label_he: "אתרי טבע עירוני"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "נמצא בקטלוג GovMap; כיסוי חלקי בערים קטנות, אך מועיל להקשר מרחב ציבורי וטבע עירוני."
+        caveat_he: "זו אינה שכבת גני משחקים כללית, אלא הקשר טבע/מרחב ציבורי."
+        tags: [park, public_space, urban_nature, leisure]
+        protocol_signal_types: [named_place, risk_or_hazard, municipal_action]
+      - alias: teva_ironi_nek
+        label_he: "טבע עירוני - ממצאים נקודתיים"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "נמצא בקטלוג GovMap; כיסוי חלקי בערים קטנות."
+        caveat_he: "נקודות טבע עירוני אינן מחליפות שמות גינות או פארקים מקומיים."
+        tags: [park, public_space, urban_nature, leisure]
+        protocol_signal_types: [named_place, risk_or_hazard, municipal_action]
     local_layer_keys: [municipal_parks]
     geometry: point_or_polygon
     tags: [park, playground, youth, public_space, night_activity, safety, leisure]
@@ -121,6 +179,31 @@ layer_groups:
     display_name_he: "רווחה, בריאות ושירותים לאוכלוסיות"
     govmap_category_he: "בריאות ורפואה ורווחה"
     govmap_aliases: [clinics, pharmacies, mosdot_griatric, yad_sarah, btl, mechozotrevacha, defi, emergancy_hospitals, clinicinsurance]
+    govmap_layers:
+      - alias: tipat_halav
+        label_he: "תחנות טיפת חלב"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "שכבה לאומית שנמצאה בקטלוג, אך כיסוי המדגם בערים קטנות היה חלקי."
+        caveat_he: "היעדר תוצאה לא מוכיח שאין שירות; נדרש מקור בריאות משלים."
+        tags: [health, family_support, children, accessibility]
+        protocol_signal_types: [service_population, named_place, municipal_action]
+      - alias: young_ctr
+        label_he: "מרכזי צעירים"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "שכבה לאומית; לא בכל עיר יש מרכז צעירים."
+        caveat_he: "יש להציג כפוטנציאל שירות, לא ככיסוי אוניברסלי."
+        tags: [welfare, youth, family_support, public_facility]
+        protocol_signal_types: [service_population, named_place, budget_or_support, municipal_action]
+      - alias: shil
+        label_he: "תחנות שי\"ל"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "שכבה לאומית; כיסוי המדגם היה חלקי."
+        caveat_he: "שירות ייעוץ לאזרח עשוי להינתן גם בערוצים שאינם שכבת GIS."
+        tags: [welfare, family_support, accessibility, public_service]
+        protocol_signal_types: [service_population, named_place, budget_or_support]
     geometry: point_or_polygon
     tags: [welfare, health, elderly, family_support, social_services, accessibility, vulnerability]
     protocol_signal_types: [service_population, named_place, risk_or_hazard, budget_or_support]
@@ -130,6 +213,15 @@ layer_groups:
     display_name_he: "חירום, ביטחון והצלה"
     govmap_category_he: "חירום, ביטחון והצלה"
     govmap_aliases: [bombshelters, layer_210766, fire_stations, police_yehida_location, mada_stations, emergencyfuelstations, maagalbldg, maagalroads]
+    govmap_layers:
+      - alias: situr_ironi
+        label_he: "שיטור עירוני וכפרי"
+        status: confirmed
+        source_scope: generic_national
+        evidence_he: "נמצא כיסוי בכל 8 הערים הקטנות שנבדקו במחקר קטלוג GovMap."
+        caveat_he: "מיקום יחידת שיטור אינו מוכיח זמינות בזמן אמת או תחום אחריות מבצעי."
+        tags: [emergency, police, public_safety, preparedness]
+        protocol_signal_types: [risk_or_hazard, named_place, municipal_action]
     geometry: point_or_polygon
     tags: [emergency, shelter, police, fire, ambulance, public_safety, preparedness, hazard]
     protocol_signal_types: [risk_or_hazard, service_population, municipal_action, named_place]
@@ -139,6 +231,23 @@ layer_groups:
     display_name_he: "תחבורה ציבורית ונגישות"
     govmap_category_he: "תחבורה"
     govmap_aliases: [bus_stops, neta_lines, red_line_sta, nta_metro_lines, nta_metro_stations]
+    govmap_layers:
+      - alias: ravkav
+        label_he: "עמדות טעינה רב קו"
+        status: confirmed
+        source_scope: generic_national
+        evidence_he: "נמצא כיסוי בכל 8 הערים הקטנות שנבדקו במחקר קטלוג GovMap."
+        caveat_he: "עמדת טעינה היא הקשר נגישות משלים, לא מידע קווים או תדירות."
+        tags: [public_transport, accessibility, mobility, transit]
+        protocol_signal_types: [resident_address, named_place, municipal_action, budget_or_support]
+      - alias: train_statoins
+        label_he: "תחנות רכבת"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "שכבה לאומית הרלוונטית רק ביישובים עם תחנות רכבת או סמיכות למסילה."
+        caveat_he: "שם alias בקטלוג כולל שגיאת כתיב; אין להסיק כיסוי בעיר ללא תחנת רכבת."
+        tags: [public_transport, rail, accessibility, mobility]
+        protocol_signal_types: [resident_address, named_place, municipal_action, budget_or_support]
     local_layer_keys: [mot_gtfs_stops]
     geometry: point_or_line
     tags: [public_transport, bus_stop, transit, accessibility, mobility, budget]
@@ -168,6 +277,71 @@ layer_groups:
     display_name_he: "סביבה, פסולת, אוויר וניקיון"
     govmap_category_he: "סביבה, חקלאות ומיחזור"
     govmap_aliases: [sviva_nitur_air, aq_realtime, divuchim2021, contaminated_soils, hof_naki_update, layer_211888]
+    govmap_layers:
+      - alias: orange_trash
+        label_he: "פח כתום במרחב ציבורי"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "כיסוי טוב בחלק מהערים במדגם, וחסר באחרות."
+        caveat_he: "לא כל רשות מפרסמת תשתיות מיחזור בשכבה זו."
+        tags: [environment, sanitation, waste, recycling, public_space]
+        protocol_signal_types: [named_place, municipal_action, service_population]
+      - alias: hof_polygon
+        label_he: "חופי רחצה"
+        status: partial
+        source_scope: broad_regional
+        evidence_he: "שכבה רשמית בעלת ערך לרשויות חוף."
+        caveat_he: "רלוונטי רק לרשויות חוף; אין להציג כחסרון בעיר שאינה חופית."
+        tags: [environment, beach, public_space, cleanliness]
+        protocol_signal_types: [named_place, risk_or_hazard, municipal_action]
+      - alias: layer_227988
+        label_he: "איכות המים בנחלים"
+        status: partial
+        source_scope: broad_regional
+        evidence_he: "שכבה סביבתית רשמית, אך הכיסוי נקודתי/נחלי."
+        caveat_he: "רלוונטי רק ליד נחלים ונקודות ניטור."
+        tags: [environment, water_quality, pollution, risk_or_hazard]
+        protocol_signal_types: [risk_or_hazard, named_place, municipal_action]
+      - alias: layer_227909
+        label_he: "איכות המים בנחלים - נקודתי"
+        status: partial
+        source_scope: broad_regional
+        evidence_he: "שכבה סביבתית רשמית נקודתית."
+        caveat_he: "מדגם נקודתי אינו מייצג בהכרח חשיפה ברחוב/שכונה."
+        tags: [environment, water_quality, pollution, risk_or_hazard]
+        protocol_signal_types: [risk_or_hazard, named_place, municipal_action]
+      - alias: svivanoiseday
+        label_he: "מפלס רעש תחבורה - יממה"
+        status: partial
+        source_scope: broad_regional
+        evidence_he: "כיסוי המדגם נראה אזורי ודורש בדיקה לפני הסתמכות."
+        caveat_he: "יש להציג כרעש תחבורתי מודלי/אזורי בלבד."
+        tags: [environment, noise, traffic_safety, pollution]
+        protocol_signal_types: [risk_or_hazard, resident_address, municipal_action]
+      - alias: svivanoisenight
+        label_he: "מפלס רעש תחבורה - לילה"
+        status: partial
+        source_scope: broad_regional
+        evidence_he: "כיסוי המדגם נראה אזורי ודורש בדיקה לפני הסתמכות."
+        caveat_he: "יש להציג כרעש תחבורתי מודלי/אזורי בלבד."
+        tags: [environment, noise, night_activity, traffic_safety, pollution]
+        protocol_signal_types: [risk_or_hazard, resident_address, municipal_action]
+      - alias: kartoniot
+        label_he: "קרטוניות"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "נמצא בקטלוג, אך מדגם המרכזים החזיר אפס."
+        caveat_he: "אין להציג כהוכחת היעדר קרטוניות."
+        tags: [environment, sanitation, waste, recycling]
+        protocol_signal_types: [named_place, municipal_action, service_population]
+      - alias: layer_230865
+        label_he: "פתרונות קצה לטיפול וסילוק פסולת"
+        status: partial
+        source_scope: generic_national
+        evidence_he: "נמצא בקטלוג, אך מדגם המרכזים החזיר אפס."
+        caveat_he: "שכבת תשתיות קצה אינה שכבת ניקיון שכונתית."
+        tags: [environment, sanitation, waste, infrastructure]
+        protocol_signal_types: [risk_or_hazard, municipal_action]
     geometry: point_or_polygon
     tags: [environment, sanitation, waste, air_quality, pollution, beach, cleanliness, dog_waste]
     protocol_signal_types: [risk_or_hazard, named_place, municipal_action, service_population]
@@ -186,6 +360,15 @@ layer_groups:
     display_name_he: "תרבות, ספורט ופנאי"
     govmap_category_he: "תיירות, טבע, פנאי וספורט / מוסדות ציבור"
     govmap_aliases: [atractions, fieldschool]
+    govmap_layers:
+      - alias: sport
+        label_he: "מתקני ספורט"
+        status: confirmed
+        source_scope: generic_national
+        evidence_he: "נמצא כיסוי בכל 8 הערים הקטנות שנבדקו במחקר קטלוג GovMap."
+        caveat_he: "מתקן ספורט אינו מוכיח בעלות עירונית או זכאות לתמיכה."
+        tags: [sport, leisure, public_facility, accessibility, subsidy]
+        protocol_signal_types: [named_place, budget_or_support, service_population, municipal_action]
     local_layer_keys: [poi_culture, municipal_parks]
     geometry: point_or_polygon
     tags: [culture, sport, leisure, public_facility, subsidy, accessibility, community]

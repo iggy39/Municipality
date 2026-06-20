@@ -27,6 +27,27 @@ def test_resident_registry_uses_only_verified_public_building_map_aliases() -> N
     assert "layer_210692" not in public_buildings.govmap_aliases
     assert "layer_210697" not in public_buildings.govmap_aliases
     assert playgrounds.govmap_aliases == ()
+    assert {layer.alias for layer in playgrounds.govmap_layers} == {"teva_ironi", "teva_ironi_nek"}
+    assert {layer.status for layer in playgrounds.govmap_layers} == {"partial"}
+
+
+def test_pulled_govmap_catalog_layers_are_registry_metadata() -> None:
+    registry = load_resident_gis_registry()
+
+    sport = next(layer for layer in registry.layer_by_key["culture_sport_leisure"].govmap_layers if layer.alias == "sport")
+    policing = next(layer for layer in registry.layer_by_key["emergency_security_services"].govmap_layers if layer.alias == "situr_ironi")
+    ravkav = next(layer for layer in registry.layer_by_key["public_transport_access"].govmap_layers if layer.alias == "ravkav")
+    environment_aliases = {layer.alias for layer in registry.layer_by_key["environment_sanitation"].govmap_layers}
+    planning_aliases = {layer.alias for layer in registry.layer_by_key["planning_land_use"].govmap_layers}
+
+    assert sport.status == "confirmed"
+    assert policing.status == "confirmed"
+    assert ravkav.status == "confirmed"
+    assert sport.source_scope == "generic_national"
+    assert "orange_trash" in environment_aliases
+    assert "svivanoiseday" in environment_aliases
+    assert "michrazim" in planning_aliases
+    assert "mehoziot_app_taba" in planning_aliases
 
 
 def test_flooding_question_prioritizes_drainage_and_roads() -> None:
