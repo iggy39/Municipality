@@ -173,6 +173,33 @@ def test_v3_candidate_payload_includes_ready_govmap_query_plan() -> None:
     assert drainage["real_gis_query"]["payload_templates"]
 
 
+def test_v3_link_payload_preserves_temporal_metadata() -> None:
+    links = link_topic_subject_v3_events_to_gis(
+        [
+            {
+                "row": "ashdod:4:0",
+                "event": {
+                    "event_id": "topic_subject_v3_event_flooding",
+                    "artifact_id": "artifact-flooding",
+                    "validation_status": "accepted",
+                    "full_source_text_he": "26.02.25 נדונה הצעה בנושא הצפות חוזרות.",
+                    "event_payload": {"matter_he": "הצפות חוזרות וטיפול בתשתיות ניקוז"},
+                    "primary_time": {"start": "2025-02-26", "kind": "explicit_text_date", "date_source": "explicit_text_date"},
+                    "time_mentions": [{"raw_text": "26.02.25", "iso_date": "2025-02-26", "kind": "numeric_date"}],
+                    "raw_date_mentions": [{"raw_text": "26.02.25", "iso_date": "2025-02-26", "kind": "numeric_date"}],
+                },
+            }
+        ],
+        archetypes=[],
+    )
+
+    payload = links[0].to_payload()
+
+    assert payload["primary_time"]["start"] == "2025-02-26"
+    assert payload["time_mentions"][0]["iso_date"] == "2025-02-26"
+    assert payload["raw_date_mentions"][0]["raw_text"] == "26.02.25"
+
+
 def test_v3_unknown_municipality_govmap_query_plan_is_blocked() -> None:
     links = link_topic_subject_v3_events_to_gis(
         [

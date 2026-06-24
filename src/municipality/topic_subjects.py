@@ -5,7 +5,7 @@ import hashlib
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -1946,12 +1946,197 @@ def topic_subject_v3_source_paths(artifact: TopicDecisionArtifact) -> dict[str, 
 def topic_subject_v3_raw_date_mentions(text: str) -> list[dict[str, Any]]:
     mentions: list[dict[str, Any]] = []
     for match in re.finditer(r"(?<!\d)\d{1,2}[./-]\d{1,2}[./-]\d{2,4}(?!\d)", text):
-        mentions.append({"raw_text": match.group(0), "char_start": match.start(), "char_end": match.end(), "kind": "numeric_date"})
+        mention = {"raw_text": match.group(0), "char_start": match.start(), "char_end": match.end(), "kind": "numeric_date"}
+        iso_date = topic_subject_v3_parse_numeric_date(match.group(0))
+        if iso_date:
+            mention["iso_date"] = iso_date
+        mentions.append(mention)
     for match in re.finditer(r"מתאריך\s+([^\n.,;:]{2,40})", text):
         raw = compact_text(match.group(1))
         if raw:
-            mentions.append({"raw_text": raw, "char_start": match.start(1), "char_end": match.end(1), "kind": "date_after_metaarich"})
+            mention = {"raw_text": raw, "char_start": match.start(1), "char_end": match.end(1), "kind": "date_after_metaarich"}
+            iso_date = topic_subject_v3_first_iso_date(raw)
+            if iso_date:
+                mention["iso_date"] = iso_date
+            mentions.append(mention)
     return mentions[:20]
+
+
+TOPIC_SUBJECT_V3_RELATIVE_TIME_PATTERNS: tuple[tuple[str, str], ...] = (
+    (r"לאחרונה|בזמן האחרון|בעת האחרונה", "recently"),
+    (r"כעת|עכשיו|בימים אלה|בימים אלו", "now"),
+    (r"\bהיום\b|היום עדיין", "today"),
+    (r"השנה(?:\s+הנוכחית)?|בשנה\s+הנוכחית|השנה\s+לעומת", "this_year"),
+)
+
+TOPIC_SUBJECT_V3_GREGORIAN_MONTHS: dict[str, int] = {
+    "ינואר": 1,
+    "פברואר": 2,
+    "מרץ": 3,
+    "אפריל": 4,
+    "מאי": 5,
+    "יוני": 6,
+    "יולי": 7,
+    "אוגוסט": 8,
+    "ספטמבר": 9,
+    "אוקטובר": 10,
+    "נובמבר": 11,
+    "דצמבר": 12,
+}
+
+
+def topic_subject_v3_parse_numeric_date(raw_text: Any) -> str:
+    text = compact_text(raw_text)
+    match = re.search(r"(?<!\d)(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})(?!\d)", text)
+    if not match:
+        return ""
+    day = int(match.group(1))
+    month = int(match.group(2))
+    year = int(match.group(3))
+    if year < 100:
+        year = 2000 + year if year <= 35 else 1900 + year
+    return topic_subject_v3_iso_date(year=year, month=month, day=day)
+
+
+def topic_subject_v3_parse_path_date(raw_text: Any) -> str:
+    text = str(raw_text or "")
+    for match in re.finditer(r"(?<!\d)((?:19|20)\d{2})(\d{2})(\d{2})(?!\d)", text):
+        iso_date = topic_subject_v3_iso_date(year=int(match.group(1)), month=int(match.group(2)), day=int(match.group(3)))
+        if iso_date:
+            return iso_date
+    return ""
+
+
+def topic_subject_v3_parse_hebrew_month_date(raw_text: Any) -> str:
+    text = compact_text(raw_text)
+    for month_name, month in TOPIC_SUBJECT_V3_GREGORIAN_MONTHS.items():
+        pattern = rf"(?<!\d)(\d{{1,2}})(?:-|\s+)?ב?{month_name}\s+((?:19|20)\d{{2}})(?!\d)"
+        match = re.search(pattern, text)
+        if match:
+            return topic_subject_v3_iso_date(year=int(match.group(2)), month=month, day=int(match.group(1)))
+    return ""
+
+
+def topic_subject_v3_first_iso_date(raw_text: Any) -> str:
+    return topic_subject_v3_parse_numeric_date(raw_text) or topic_subject_v3_parse_hebrew_month_date(raw_text) or topic_subject_v3_parse_path_date(raw_text)
+
+
+def topic_subject_v3_iso_date(*, year: int, month: int, day: int) -> str:
+    try:
+        parsed = date(year, month, day)
+    except ValueError:
+        return ""
+    if not 1990 <= parsed.year <= 2035:
+        return ""
+    return parsed.isoformat()
+
+
+def topic_subject_v3_relative_time_mentions(text: str, *, source_scope: str = "text") -> list[dict[str, Any]]:
+    mentions: list[dict[str, Any]] = []
+    seen: set[tuple[int, int, str]] = set()
+    for pattern, kind in TOPIC_SUBJECT_V3_RELATIVE_TIME_PATTERNS:
+        for match in re.finditer(pattern, text):
+            raw = compact_text(match.group(0))
+            key = (match.start(), match.end(), raw)
+            if not raw or key in seen:
+                continue
+            seen.add(key)
+            mentions.append({"raw_text": raw, "char_start": match.start(), "char_end": match.end(), "kind": kind, "source_scope": source_scope, "temporal_type": "relative"})
+    mentions.sort(key=lambda item: (int(item["char_start"]), int(item["char_end"])))
+    return mentions[:20]
+
+
+def topic_subject_v3_protocol_time_contexts(artifact: TopicDecisionArtifact) -> list[dict[str, str]]:
+    metadata = artifact.metadata if isinstance(artifact.metadata, dict) else {}
+    artifact_metadata = topic_subject_v3_artifact_metadata(artifact)
+    contexts: list[dict[str, str]] = []
+
+    def add(scope: str, value: Any) -> None:
+        text = compact_text(value)
+        if text:
+            contexts.append({"source_scope": scope, "text": text})
+
+    add("source_title", artifact.source_title)
+    add("source_url", artifact.source_url)
+    for key, value in topic_subject_v3_source_paths(artifact).items():
+        add(f"source_provenance.{key}", value)
+    for key in ("meeting_date", "protocol_date", "document_date", "date", "topic_identification_context", "raw_text_sample", "unit_raw_text", "raw_text", "protocol_subject_he"):
+        add(f"artifact_metadata.{key}", artifact_metadata.get(key))
+        add(f"metadata.{key}", metadata.get(key))
+    step4_item = artifact_metadata.get("step4_item") if isinstance(artifact_metadata.get("step4_item"), dict) else {}
+    for key in ("topic_identification_context", "raw_text_sample", "unit_raw_text", "raw_text", "protocol_subject_he"):
+        add(f"step4_item.{key}", step4_item.get(key))
+    return contexts
+
+
+def topic_subject_v3_protocol_primary_time(artifact: TopicDecisionArtifact) -> dict[str, Any] | None:
+    for context in topic_subject_v3_protocol_time_contexts(artifact):
+        iso_date = topic_subject_v3_first_iso_date(context["text"])
+        if iso_date:
+            return {
+                "start": iso_date,
+                "end": None,
+                "precision": "day",
+                "kind": "protocol_date",
+                "raw_text": context["text"][:160],
+                "source_scope": context["source_scope"],
+                "date_source": "protocol_date_context",
+                "confidence_label": "medium",
+                "is_protocol_fallback": True,
+            }
+    return None
+
+
+def topic_subject_v3_text_time_mentions(*, text: str, source_scope: str) -> list[dict[str, Any]]:
+    mentions: list[dict[str, Any]] = []
+    for mention in topic_subject_v3_raw_date_mentions(text):
+        mentions.append({**mention, "source_scope": source_scope, "temporal_type": "absolute"})
+    mentions.extend(topic_subject_v3_relative_time_mentions(text, source_scope=source_scope))
+    return mentions
+
+
+def topic_subject_v3_primary_time_for_text(*, text: str, source_scope: str, artifact: TopicDecisionArtifact | None = None, prefer_relative: bool = True) -> dict[str, Any] | None:
+    raw_text = compact_text(text)
+    protocol_time = topic_subject_v3_protocol_primary_time(artifact) if artifact is not None else None
+    relative_mentions = topic_subject_v3_relative_time_mentions(raw_text, source_scope=source_scope)
+    for mention in topic_subject_v3_raw_date_mentions(raw_text):
+        iso_date = compact_text(mention.get("iso_date")) or topic_subject_v3_first_iso_date(mention.get("raw_text"))
+        if iso_date:
+            return {
+                "start": iso_date,
+                "end": None,
+                "precision": "day",
+                "kind": "explicit_text_date",
+                "raw_text": mention["raw_text"],
+                "source_scope": source_scope,
+                "date_source": "explicit_text_date",
+                "confidence_label": "high",
+                "is_protocol_fallback": False,
+            }
+    if prefer_relative and relative_mentions and protocol_time is not None:
+        mention = relative_mentions[0]
+        return {
+            **protocol_time,
+            "kind": "relative_to_protocol_date",
+            "raw_text": mention["raw_text"],
+            "source_scope": source_scope,
+            "date_source": "relative_mention_resolved_to_protocol_date",
+            "confidence_label": "medium",
+            "is_protocol_fallback": False,
+            "relative_kind": mention["kind"],
+        }
+    return protocol_time
+
+
+def topic_subject_v3_event_time_text(event_payload: dict[str, Any], fallback_text: str) -> str:
+    outcome = event_payload.get("outcome") if isinstance(event_payload.get("outcome"), dict) else {}
+    return compact_text(
+        event_payload.get("action_quote_he")
+        or event_payload.get("action_focus_quote_he")
+        or outcome.get("outcome_quote_he")
+        or event_payload.get("action_details_he")
+        or fallback_text
+    )
 
 
 TOPIC_SUBJECT_V3_GEOGRAPHY_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -1987,37 +2172,38 @@ def topic_subject_v3_text_metadata(*, text: str, scope: str) -> dict[str, Any]:
         "raw_text_before_cleaning_he": raw_text,
         "corrected_text_he": corrected_hebrew_text(raw_text),
         "date_mentions": topic_subject_v3_raw_date_mentions(raw_text),
+        "time_mentions": topic_subject_v3_text_time_mentions(text=raw_text, source_scope=scope),
         "geography_mentions": topic_subject_v3_geography_mentions(raw_text),
     }
 
 
-def topic_subject_v3_general_text_metadata(artifact: TopicDecisionArtifact) -> dict[str, Any]:
+def topic_subject_v3_general_text_metadata(artifact: TopicDecisionArtifact, event_payload: dict[str, Any] | None = None) -> dict[str, Any]:
     metadata = topic_subject_v3_text_metadata(text=artifact.real_text, scope="general_text")
+    primary_time = topic_subject_v3_primary_time_for_text(text=artifact.real_text, source_scope="general_text", artifact=artifact, prefer_relative=True)
     metadata.update(
         {
             "source_provenance": topic_subject_v3_source_paths(artifact),
             "source_document_version_id": artifact.source_document_version_id,
             "source_ordinal": artifact.source_ordinal,
             "page_span": {"start": artifact.start_page, "end": artifact.end_page},
+            "primary_time": primary_time,
         }
     )
+    if event_payload:
+        metadata["event_primary_time"] = topic_subject_v3_primary_time(event_payload=event_payload, artifact=artifact)
     return metadata
 
 
-def topic_subject_v3_event_metadata(event_payload: dict[str, Any], fallback_text: str) -> dict[str, Any]:
-    text = compact_text(
-        event_payload.get("action_quote_he")
-        or event_payload.get("action_focus_quote_he")
-        or event_payload.get("action_details_he")
-        or fallback_text
-    )
+def topic_subject_v3_event_metadata(event_payload: dict[str, Any], fallback_text: str, artifact: TopicDecisionArtifact | None = None) -> dict[str, Any]:
+    text = topic_subject_v3_event_time_text(event_payload, fallback_text)
     metadata = topic_subject_v3_text_metadata(text=text, scope="event")
     metadata["action_type_he"] = compact_text(event_payload.get("action_type_he"))
     metadata["event_phase"] = compact_text(event_payload.get("event_phase"))
+    metadata["primary_time"] = topic_subject_v3_primary_time_for_text(text=text, source_scope="event", artifact=artifact, prefer_relative=True)
     return metadata
 
 
-def topic_subject_v3_subject_metadata(event_payload: dict[str, Any], fallback_text: str) -> dict[str, Any]:
+def topic_subject_v3_subject_metadata(event_payload: dict[str, Any], fallback_text: str, artifact: TopicDecisionArtifact | None = None) -> dict[str, Any]:
     text = compact_text(
         event_payload.get("matter_he")
         or event_payload.get("subject_summary_he")
@@ -2026,24 +2212,39 @@ def topic_subject_v3_subject_metadata(event_payload: dict[str, Any], fallback_te
     )
     metadata = topic_subject_v3_text_metadata(text=text, scope="subject")
     metadata["matter_he"] = compact_text(event_payload.get("matter_he"))
+    metadata["primary_time"] = topic_subject_v3_primary_time_for_text(text=text, source_scope="subject", artifact=artifact, prefer_relative=True)
     return metadata
 
 
 def topic_subject_v3_artifact_metadata_blocks(*, artifact: TopicDecisionArtifact, event_payload: dict[str, Any]) -> dict[str, Any]:
+    primary_time = topic_subject_v3_primary_time(event_payload=event_payload, artifact=artifact)
     return {
         "source_provenance": topic_subject_v3_source_paths(artifact),
         "source_document_version_id": artifact.source_document_version_id,
         "source_ordinal": artifact.source_ordinal,
         "page_span": {"start": artifact.start_page, "end": artifact.end_page},
         "raw_date_mentions": topic_subject_v3_raw_date_mentions(artifact.real_text),
+        "time_mentions": topic_subject_v3_text_time_mentions(text=artifact.real_text, source_scope="general_text"),
+        "primary_time": primary_time,
         "raw_geography_mentions": topic_subject_v3_geography_mentions(artifact.real_text),
-        "general_text_metadata": topic_subject_v3_general_text_metadata(artifact),
-        "event_metadata": topic_subject_v3_event_metadata(event_payload, artifact.real_text),
-        "subject_metadata": topic_subject_v3_subject_metadata(event_payload, artifact.real_text),
+        "general_text_metadata": topic_subject_v3_general_text_metadata(artifact, event_payload),
+        "event_metadata": topic_subject_v3_event_metadata(event_payload, artifact.real_text, artifact),
+        "subject_metadata": topic_subject_v3_subject_metadata(event_payload, artifact.real_text, artifact),
         "raw_text_before_cleaning_he": artifact.real_text,
         "full_source_text_he": artifact.real_text,
         "corrected_text_he": corrected_hebrew_text(artifact.real_text),
     }
+
+
+def topic_subject_v3_primary_time(*, event_payload: dict[str, Any], artifact: TopicDecisionArtifact) -> dict[str, Any] | None:
+    event_text = topic_subject_v3_event_time_text(event_payload, artifact.real_text)
+    event_time = topic_subject_v3_primary_time_for_text(text=event_text, source_scope="event", artifact=artifact, prefer_relative=True)
+    if event_time is not None and not bool(event_time.get("is_protocol_fallback")):
+        return event_time
+    general_time = topic_subject_v3_primary_time_for_text(text=artifact.real_text, source_scope="general_text", artifact=artifact, prefer_relative=True)
+    if general_time is not None and not bool(general_time.get("is_protocol_fallback")):
+        return general_time
+    return event_time or general_time or topic_subject_v3_protocol_primary_time(artifact)
 
 
 def topic_subject_v3_upstream_subject_hint(artifact: TopicDecisionArtifact) -> dict[str, Any]:
@@ -4694,9 +4895,9 @@ def topic_subject_v3_event_source_rows(event: TopicSubjectV3EventResult) -> list
                 "source_paths": topic_subject_v3_source_paths(artifact),
                 "raw_date_mentions": topic_subject_v3_raw_date_mentions(artifact.real_text),
                 "raw_geography_mentions": topic_subject_v3_geography_mentions(artifact.real_text),
-                "general_text_metadata": topic_subject_v3_general_text_metadata(artifact),
-                "event_metadata": topic_subject_v3_event_metadata(event.event_payload, artifact.real_text),
-                "subject_metadata": topic_subject_v3_subject_metadata(event.event_payload, artifact.real_text),
+                "general_text_metadata": topic_subject_v3_general_text_metadata(artifact, event.event_payload),
+                "event_metadata": topic_subject_v3_event_metadata(event.event_payload, artifact.real_text, artifact),
+                "subject_metadata": topic_subject_v3_subject_metadata(event.event_payload, artifact.real_text, artifact),
                 "raw_text_before_cleaning_he": artifact.real_text,
                 "full_source_text_he": artifact.real_text,
                 "corrected_text_he": corrected_hebrew_text(artifact.real_text),
@@ -4787,9 +4988,11 @@ def topic_subject_v3_event_to_dict(event: TopicSubjectV3EventResult) -> dict[str
         "source_provenance": topic_subject_v3_source_paths(event.context.target_artifact),
         "raw_date_mentions": topic_subject_v3_raw_date_mentions(event.context.target_artifact.real_text),
         "raw_geography_mentions": topic_subject_v3_geography_mentions(event.context.target_artifact.real_text),
-        "general_text_metadata": topic_subject_v3_general_text_metadata(event.context.target_artifact),
-        "event_metadata": topic_subject_v3_event_metadata(event.event_payload, event.context.target_artifact.real_text),
-        "subject_metadata": topic_subject_v3_subject_metadata(event.event_payload, event.context.target_artifact.real_text),
+        "primary_time": topic_subject_v3_primary_time(event_payload=event.event_payload, artifact=event.context.target_artifact),
+        "time_mentions": topic_subject_v3_text_time_mentions(text=event.context.target_artifact.real_text, source_scope="general_text"),
+        "general_text_metadata": topic_subject_v3_general_text_metadata(event.context.target_artifact, event.event_payload),
+        "event_metadata": topic_subject_v3_event_metadata(event.event_payload, event.context.target_artifact.real_text, event.context.target_artifact),
+        "subject_metadata": topic_subject_v3_subject_metadata(event.event_payload, event.context.target_artifact.real_text, event.context.target_artifact),
         "anchor_source_text_he": event.context.target_artifact.real_text,
         "anchor_raw_text_before_cleaning_he": event.context.target_artifact.real_text,
         "full_source_text_he": topic_subject_v3_full_event_text(event),
@@ -4815,9 +5018,11 @@ def topic_subject_v3_row_quality_to_dict(row: TopicSubjectV3RowQualityData) -> d
         "page_span": {"start": row.artifact.start_page, "end": row.artifact.end_page},
         "raw_date_mentions": topic_subject_v3_raw_date_mentions(row.artifact.real_text),
         "raw_geography_mentions": topic_subject_v3_geography_mentions(row.artifact.real_text),
-        "general_text_metadata": topic_subject_v3_general_text_metadata(row.artifact),
-        "event_metadata": topic_subject_v3_event_metadata(row.model_prediction, row.artifact.real_text),
-        "subject_metadata": topic_subject_v3_subject_metadata(row.model_prediction, row.artifact.real_text),
+        "primary_time": topic_subject_v3_primary_time(event_payload=row.model_prediction, artifact=row.artifact),
+        "time_mentions": topic_subject_v3_text_time_mentions(text=row.artifact.real_text, source_scope="general_text"),
+        "general_text_metadata": topic_subject_v3_general_text_metadata(row.artifact, row.model_prediction),
+        "event_metadata": topic_subject_v3_event_metadata(row.model_prediction, row.artifact.real_text, row.artifact),
+        "subject_metadata": topic_subject_v3_subject_metadata(row.model_prediction, row.artifact.real_text, row.artifact),
         "source_topic_label_he": row.artifact.topic_label_he,
         "raw_text_before_cleaning_he": row.artifact.real_text,
         "full_source_text_he": row.artifact.real_text,

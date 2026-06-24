@@ -132,6 +132,64 @@ def test_story_builder_marks_mock_dates_for_missing_protocol_dates() -> None:
     assert any("timeline_events" in field for field in story["mock_fields"])
 
 
+def test_story_builder_uses_v3_primary_time_without_mock_date() -> None:
+    payload = {
+        "links": [
+            {
+                **_link(
+                    artifact_id="protocol-a",
+                    event_id="event-a",
+                    status="open_request",
+                    matter="בקשה לטיפול במדרכות ברחוב הרצל",
+                    text="בקשה לטיפול במדרכות ברחוב הרצל",
+                    layer_key="roads_parking_public_works",
+                ),
+                "primary_time": {
+                    "start": "2025-12-29",
+                    "kind": "protocol_date",
+                    "date_source": "protocol_date_context",
+                },
+            }
+        ]
+    }
+
+    story = build_protocol_gis_stories(payload)["stories"][0]
+    event = story["timeline_events"][0]
+
+    assert event["date"] == "2025-12-29"
+    assert event["date_is_mock"] is False
+    assert event["date_source"] == "protocol_date_context"
+    assert event["mock_fields"] == []
+    assert event["inferred_fields"] == ["date"]
+
+
+def test_story_builder_parses_compact_protocol_date_from_source_paths() -> None:
+    payload = {
+        "links": [
+            {
+                **_link(
+                    artifact_id="protocol-a",
+                    event_id="event-a",
+                    status="discussed",
+                    matter="דיון בטיפול במדרכות ברחוב הרצל",
+                    text="דיון בטיפול במדרכות ברחוב הרצל",
+                    layer_key="roads_parking_public_works",
+                ),
+                "source_provenance": {
+                    "source_paths": {
+                        "protocol_run_dir": "/tmp/protocol_31_20251229_2cdaf368_v1",
+                    }
+                },
+            }
+        ]
+    }
+
+    event = build_protocol_gis_stories(payload)["stories"][0]["timeline_events"][0]
+
+    assert event["date"] == "2025-12-29"
+    assert event["date_is_mock"] is False
+
+
 def test_story_builder_excludes_failed_and_unknown_empty_rows() -> None:
     payload = {
         "links": [

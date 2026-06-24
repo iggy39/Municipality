@@ -3378,6 +3378,8 @@ def test_topic_subject_v3_event_output_includes_full_source_rows() -> None:
     assert payload["source_provenance"]["protocol_run_dir"] == "/tmp/protocol-run"
     assert payload["anchor_raw_text_before_cleaning_he"] == anchor.real_text
     assert payload["raw_date_mentions"][0]["raw_text"] == "05/03/2025"
+    assert payload["primary_time"]["start"] == "2025-03-05"
+    assert payload["primary_time"]["kind"] == "explicit_text_date"
     assert payload["event_source_rows"][0]["raw_text_before_cleaning_he"] == anchor.real_text
     assert payload["event_payload"]["action_type_he"] == "אישור"
     assert payload["event_payload"]["matter_he"]
@@ -3386,7 +3388,78 @@ def test_topic_subject_v3_event_output_includes_full_source_rows() -> None:
     quality_payload = topic_subjects_module.topic_subject_v3_row_quality_to_dict(event.row_quality)
     assert quality_payload["source_provenance"]["protocol_run_dir"] == "/tmp/protocol-run"
     assert quality_payload["raw_date_mentions"][0]["raw_text"] == "05/03/2025"
+    assert quality_payload["primary_time"]["start"] == "2025-03-05"
     assert quality_payload["raw_text_before_cleaning_he"] == anchor.real_text
+
+
+def test_topic_subject_v3_primary_time_uses_protocol_path_fallback() -> None:
+    artifact = _artifact_dataclass(
+        real_text="דיון בנושא תחזוקת מדרכות ברחוב הרצל ללא תאריך בגוף הטקסט.",
+        topic_label_he="תשתיות",
+        metadata={
+            "artifact_metadata": {
+                "source_paths": {
+                    "protocol_run_dir": "/tmp/protocol_31_20251229_2cdaf368_v1",
+                }
+            }
+        },
+    )
+
+    primary_time = topic_subjects_module.topic_subject_v3_primary_time(
+        event_payload={"action_type_he": "דיון", "matter_he": "תחזוקת מדרכות"},
+        artifact=artifact,
+    )
+
+    assert primary_time["start"] == "2025-12-29"
+    assert primary_time["kind"] == "protocol_date"
+    assert primary_time["date_source"] == "protocol_date_context"
+    assert primary_time["is_protocol_fallback"] is True
+
+
+def test_topic_subject_v3_primary_time_resolves_relative_mentions_to_protocol_date() -> None:
+    artifact = _artifact_dataclass(
+        real_text="לאחרונה התקבלו פניות בנושא תחזוקת מדרכות ברחוב הרצל.",
+        topic_label_he="תשתיות",
+        metadata={
+            "artifact_metadata": {
+                "source_paths": {
+                    "protocol_run_dir": "/tmp/protocol_31_20251229_2cdaf368_v1",
+                }
+            }
+        },
+    )
+
+    primary_time = topic_subjects_module.topic_subject_v3_primary_time(
+        event_payload={"action_type_he": "דיון", "matter_he": "תחזוקת מדרכות", "action_quote_he": "לאחרונה התקבלו פניות"},
+        artifact=artifact,
+    )
+
+    assert primary_time["start"] == "2025-12-29"
+    assert primary_time["kind"] == "relative_to_protocol_date"
+    assert primary_time["date_source"] == "relative_mention_resolved_to_protocol_date"
+    assert primary_time["relative_kind"] == "recently"
+
+
+def test_topic_subject_v3_primary_time_prefers_explicit_date_over_relative_mention() -> None:
+    artifact = _artifact_dataclass(
+        real_text="לאחרונה, ביום 05/03/2025, נדונה תחזוקת מדרכות ברחוב הרצל.",
+        topic_label_he="תשתיות",
+        metadata={
+            "artifact_metadata": {
+                "source_paths": {
+                    "protocol_run_dir": "/tmp/protocol_31_20251229_2cdaf368_v1",
+                }
+            }
+        },
+    )
+
+    primary_time = topic_subjects_module.topic_subject_v3_primary_time(
+        event_payload={"action_type_he": "דיון", "matter_he": "תחזוקת מדרכות"},
+        artifact=artifact,
+    )
+
+    assert primary_time["start"] == "2025-03-05"
+    assert primary_time["kind"] == "explicit_text_date"
 
 
 def test_topic_subject_v3_event_source_rows_normalize_role_leaks() -> None:

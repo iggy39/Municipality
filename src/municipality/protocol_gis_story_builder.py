@@ -631,6 +631,8 @@ def _timeline_events(cluster: _StoryCluster) -> list[dict[str, Any]]:
                     "stage": _status_stage(event_status),
                 },
                 "mock_fields": ["date"] if date_is_mock else [],
+                "real_fields": ["date"] if not date_is_mock and event.date_source in {"explicit_text_date", "source_text_date"} else [],
+                "inferred_fields": ["date"] if not date_is_mock and event.date_source not in {"explicit_text_date", "source_text_date"} else [],
             }
         )
     if timeline:
@@ -771,6 +773,22 @@ def _text_tokens(text: str) -> list[str]:
 
 
 def _extract_protocol_date(link: Mapping[str, Any]) -> tuple[date | None, str]:
+    primary_time = link.get("primary_time") if isinstance(link.get("primary_time"), Mapping) else {}
+    primary_start = str(primary_time.get("start") or "")
+    if primary_start:
+        parsed_primary = _date_from_iso(primary_start)
+        if parsed_primary is not None:
+            return parsed_primary, str(primary_time.get("date_source") or primary_time.get("kind") or "primary_time")
+    for mention in link.get("time_mentions") or []:
+        if isinstance(mention, Mapping):
+            parsed_mention = _date_from_iso(str(mention.get("iso_date") or mention.get("start") or ""))
+            if parsed_mention is not None:
+                return parsed_mention, str(mention.get("date_source") or mention.get("kind") or "time_mentions")
+    for mention in link.get("raw_date_mentions") or []:
+        if isinstance(mention, Mapping):
+            parsed_mention = _date_from_iso(str(mention.get("iso_date") or mention.get("start") or "")) or _first_date(str(mention.get("raw_text") or ""))
+            if parsed_mention is not None:
+                return parsed_mention, str(mention.get("date_source") or mention.get("kind") or "raw_date_mentions")
     source_provenance = link.get("source_provenance") if isinstance(link.get("source_provenance"), Mapping) else {}
     texts = [
         str(link.get("matter_he") or ""),
@@ -778,6 +796,7 @@ def _extract_protocol_date(link: Mapping[str, Any]) -> tuple[date | None, str]:
         str(source_provenance.get("source_title") or ""),
         str(source_provenance.get("source_url") or ""),
     ]
+    texts.extend(_source_provenance_texts(source_provenance))
     for text in texts:
         parsed = _first_date(text)
         if parsed is not None:
@@ -785,7 +804,24 @@ def _extract_protocol_date(link: Mapping[str, Any]) -> tuple[date | None, str]:
     return None, "missing_protocol_date"
 
 
+def _date_from_iso(value: str) -> date | None:
+    try:
+        parsed = date.fromisoformat(str(value or "")[:10])
+    except ValueError:
+        return None
+    if 1990 <= parsed.year <= 2035:
+        return parsed
+    return None
+
+
 def _first_date(text: str) -> date | None:
+    for match in re.finditer(r"(?<!\d)((?:19|20)\d{2})(\d{2})(\d{2})(?!\d)", str(text or "")):
+        try:
+            parsed = date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        except ValueError:
+            continue
+        if 1990 <= parsed.year <= 2035:
+            return parsed
     for pattern in _DATE_PATTERNS:
         for match in pattern.finditer(str(text or "")):
             try:
@@ -798,6 +834,19 @@ def _first_date(text: str) -> date | None:
             if 1990 <= parsed.year <= 2035:
                 return parsed
     return None
+
+
+def _source_provenance_texts(value: Any) -> list[str]:
+    texts: list[str] = []
+    if isinstance(value, Mapping):
+        for nested in value.values():
+            texts.extend(_source_provenance_texts(nested))
+    elif isinstance(value, list | tuple):
+        for nested in value:
+            texts.extend(_source_provenance_texts(nested))
+    elif value not in (None, ""):
+        texts.append(str(value))
+    return texts[:40]
 
 
 def _mock_story_base_date(cluster: _StoryCluster) -> date:

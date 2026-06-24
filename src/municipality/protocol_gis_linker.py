@@ -255,6 +255,9 @@ class ProtocolV3GisLink:
     matter_he: str
     outcome_he: str
     source_provenance: dict[str, Any]
+    primary_time: dict[str, Any] | None
+    time_mentions: tuple[dict[str, Any], ...]
+    raw_date_mentions: tuple[dict[str, Any], ...]
     evidence_quotes: tuple[str, ...]
     source_text: str
     location_hints: tuple[ProtocolV3LocationHint, ...]
@@ -274,6 +277,9 @@ class ProtocolV3GisLink:
             "matter_he": self.matter_he,
             "outcome_he": self.outcome_he,
             "source_provenance": self.source_provenance,
+            "primary_time": self.primary_time,
+            "time_mentions": list(self.time_mentions),
+            "raw_date_mentions": list(self.raw_date_mentions),
             "evidence_quotes": list(self.evidence_quotes),
             "source_text": self.source_text,
             "location_hints": [hint.to_payload() for hint in self.location_hints],
@@ -378,7 +384,10 @@ def link_topic_subject_v3_events_to_gis(
                 action_type_he=_v3_action_type(event),
                 matter_he=_v3_matter(event),
                 outcome_he=_v3_outcome(event),
-                source_provenance=dict(event.get("source_provenance") or {}),
+                source_provenance=_v3_source_provenance(event=event, wrapper=wrapper),
+                primary_time=_v3_primary_time(event=event, wrapper=wrapper),
+                time_mentions=tuple(_v3_time_mentions(event=event, wrapper=wrapper)),
+                raw_date_mentions=tuple(_v3_raw_date_mentions(event=event, wrapper=wrapper)),
                 evidence_quotes=tuple(_v3_evidence_quotes(event)),
                 source_text=_shorten(source_text, 600),
                 location_hints=tuple(location_hints),
@@ -854,8 +863,7 @@ def _iter_v3_events(payload: Sequence[Mapping[str, Any]]) -> Iterable[tuple[Mapp
 def _v3_event_to_protocol_row(*, event: Mapping[str, Any], wrapper: Mapping[str, Any]) -> dict[str, Any]:
     event_payload = event.get("event_payload") if isinstance(event.get("event_payload"), Mapping) else {}
     normalized = event.get("normalized_event") if isinstance(event.get("normalized_event"), Mapping) else {}
-    quality = wrapper.get("quality") if isinstance(wrapper.get("quality"), Mapping) else {}
-    source_provenance = event.get("source_provenance") if isinstance(event.get("source_provenance"), Mapping) else quality.get("source_provenance") if isinstance(quality.get("source_provenance"), Mapping) else {}
+    source_provenance = _v3_source_provenance(event=event, wrapper=wrapper)
     artifact_id = str(wrapper.get("artifact_id") or event.get("artifact_id") or event_payload.get("target_artifact_id") or normalized.get("target_artifact_id") or "")
     source_text = "\n".join(
         _dedupe_text(
@@ -933,6 +941,60 @@ def _v3_outcome(event: Mapping[str, Any]) -> str:
     normalized = event.get("normalized_event") if isinstance(event.get("normalized_event"), Mapping) else {}
     outcome = event_payload.get("outcome") if event_payload.get("outcome") is not None else normalized.get("outcome_he")
     return str(outcome or "")
+
+
+def _v3_source_provenance(*, event: Mapping[str, Any], wrapper: Mapping[str, Any]) -> dict[str, Any]:
+    quality = wrapper.get("quality") if isinstance(wrapper.get("quality"), Mapping) else {}
+    for payload in (event, wrapper, quality):
+        source_provenance = payload.get("source_provenance") if isinstance(payload.get("source_provenance"), Mapping) else None
+        if source_provenance:
+            return dict(source_provenance)
+    return {}
+
+
+def _v3_primary_time(*, event: Mapping[str, Any], wrapper: Mapping[str, Any]) -> dict[str, Any] | None:
+    for source in _v3_time_sources(event=event, wrapper=wrapper):
+        primary = source.get("primary_time") if isinstance(source.get("primary_time"), Mapping) else None
+        if primary and primary.get("start"):
+            return dict(primary)
+    return None
+
+
+def _v3_time_mentions(*, event: Mapping[str, Any], wrapper: Mapping[str, Any]) -> list[dict[str, Any]]:
+    mentions: list[dict[str, Any]] = []
+    for source in _v3_time_sources(event=event, wrapper=wrapper):
+        raw_mentions = source.get("time_mentions") if isinstance(source.get("time_mentions"), list) else []
+        if not raw_mentions and isinstance(source.get("date_mentions"), list):
+            raw_mentions = source.get("date_mentions") or []
+        for mention in raw_mentions:
+            if isinstance(mention, Mapping):
+                mentions.append(dict(mention))
+    return mentions[:40]
+
+
+def _v3_raw_date_mentions(*, event: Mapping[str, Any], wrapper: Mapping[str, Any]) -> list[dict[str, Any]]:
+    mentions: list[dict[str, Any]] = []
+    for source in _v3_time_sources(event=event, wrapper=wrapper):
+        raw_mentions = source.get("raw_date_mentions") if isinstance(source.get("raw_date_mentions"), list) else []
+        if not raw_mentions and isinstance(source.get("date_mentions"), list):
+            raw_mentions = source.get("date_mentions") or []
+        for mention in raw_mentions:
+            if isinstance(mention, Mapping):
+                mentions.append(dict(mention))
+    return mentions[:40]
+
+
+def _v3_time_sources(*, event: Mapping[str, Any], wrapper: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    sources: list[Mapping[str, Any]] = []
+    quality = wrapper.get("quality") if isinstance(wrapper.get("quality"), Mapping) else {}
+    for payload in (event, wrapper, quality):
+        if isinstance(payload, Mapping):
+            sources.append(payload)
+            for key in ("general_text_metadata", "event_metadata", "subject_metadata"):
+                nested = payload.get(key)
+                if isinstance(nested, Mapping):
+                    sources.append(nested)
+    return sources
 
 
 def _v3_evidence_quotes(event: Mapping[str, Any]) -> list[str]:
