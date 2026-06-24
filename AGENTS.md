@@ -31,6 +31,7 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 
 ## AI Model Preferences
 - Prefer local Ollama models for AI tasks.
+- Ollama can run multiple instances of the same model when parallel model work is useful.
 - Use `qwen3.5:122b` for general AI tasks.
 - Use `dictaLM` for Hebrew-language tasks.
 - Use `mistral-small3.1` for vision tasks.
