@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -44,10 +44,11 @@ def main() -> int:
     parser.add_argument("--pipeline-version", choices=["legacy", "v3"], default="legacy", help="legacy keeps the current V2-compatible extractor; v3 uses event-first Dicta contextual extraction")
     parser.add_argument("--mock-dicta", action="store_true", help="Use a fast local mock client for verification instead of calling Ollama")
     parser.add_argument("--model", default=DEFAULT_DICTA_MODEL)
-    parser.add_argument("--small-model", default=DEFAULT_DICTA_SMALL_MODEL, help="Model used for short bounded support stages such as quote/JSON repair and V3 evidence entailment")
+    parser.add_argument("--small-model", default=DEFAULT_DICTA_SMALL_MODEL, help="Model for helper/repair stages. Defaults to the primary model until mixed routing is explicitly requested.")
     parser.add_argument("--ollama-base-url", default=DEFAULT_OLLAMA_BASE_URL)
     parser.add_argument("--timeout-seconds", type=float, default=180.0)
     parser.add_argument("--max-text-chars", type=int, default=3500)
+    parser.add_argument("--disable-schema-no-think-helpers", action="store_true", help="Disable the default V3 helper-stage schema/no-think profile for A/B debugging.")
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     args = parser.parse_args()
 
@@ -64,6 +65,7 @@ def main() -> int:
         write=bool(args.write),
         output_dir=output_dir,
         pipeline_version=str(args.pipeline_version),
+        use_schema_no_think_helpers=not bool(args.disable_schema_no_think_helpers),
     )
     if args.pipeline_version == "v3":
         client = MockTopicSubjectV3Client() if args.mock_dicta else OllamaTopicSubjectV3Client()
@@ -78,6 +80,7 @@ def main() -> int:
                 "municipality": config.municipality_slug,
                 "model": "mock" if args.mock_dicta else config.model_name,
                 "small_model": "mock" if args.mock_dicta else config.small_model_name,
+                "schema_no_think_helpers": bool(config.use_schema_no_think_helpers),
                 "offset": config.offset,
                 "estimated_execution_time": _estimated_execution_time(limit=args.limit, mock=bool(args.mock_dicta), pipeline_version=str(args.pipeline_version)),
                 "output_dir": str(output_dir),
@@ -107,6 +110,7 @@ def main() -> int:
             "run_id": result.run_id,
             "model": "mock" if args.mock_dicta else config.model_name,
             "small_model": "mock" if args.mock_dicta else config.small_model_name,
+            "schema_no_think_helpers": bool(config.use_schema_no_think_helpers),
             "selected_artifacts": len(result.artifacts),
             "events": result.event_count,
             "candidate_subjects": result.candidate_subject_count,
@@ -125,7 +129,6 @@ def main() -> int:
             "pipeline_version": "legacy",
             "run_id": result.run_id,
             "model": "mock" if args.mock_dicta else config.model_name,
-            "small_model": "mock" if args.mock_dicta else config.small_model_name,
             "selected_artifacts": len(result.artifacts),
             "extracted_subjects": len(result.extracted_subjects),
             "candidate_subjects": result.candidate_subject_count,
@@ -142,7 +145,7 @@ def main() -> int:
 
 
 def _run_dir_name(*, municipality_slug: str, mock: bool, write: bool, pipeline_version: str) -> str:
-    stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     mode = "mock" if mock else "dicta"
     write_mode = "write" if write else "dry_run"
     version = "v3" if pipeline_version == "v3" else "legacy"
