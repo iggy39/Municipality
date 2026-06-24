@@ -1,0 +1,795 @@
+{
+  "version": 1,
+  "purpose": "Standalone copy of the resident RAG dashboard mock scenario catalog used by src/municipality/rag_dashboard_mock.py.",
+  "scenario_count": 24,
+  "category_labels": {
+    "planning": "תכנון ובנייה",
+    "transport": "תחבורה",
+    "education": "חינוך",
+    "welfare": "רווחה",
+    "environment": "סביבה",
+    "emergency": "חירום",
+    "culture": "תרבות וספורט",
+    "commerce": "מסחר ותעסוקה"
+  },
+  "timeline_templates": [
+    [
+      "2024-03-18",
+      "דיון ראשון",
+      "פתיחת דיון עירוני בנושא"
+    ],
+    [
+      "2024-04-22",
+      "בדיקה מקצועית",
+      "הצגת בדיקה מקצועית לוועדה"
+    ],
+    [
+      "2024-05-29",
+      "אומדן ותקצוב",
+      "דיון בתקציב, אחריות ולוחות זמנים"
+    ],
+    [
+      "2024-06-24",
+      "החלטת מועצה",
+      "קבלת החלטה או הנחיית המשך"
+    ],
+    [
+      "2024-07-16",
+      "מעקב ביצוע",
+      "עדכון ביצוע והשלמות"
+    ]
+  ],
+  "progress_templates": [
+    {
+      "status": "yellow",
+      "label_he": "נפתח דיון",
+      "title_he": "דיון ראשון"
+    },
+    {
+      "status": "yellow",
+      "label_he": "בבדיקה",
+      "title_he": "בדיקה מקצועית"
+    },
+    {
+      "status": "red",
+      "label_he": "חסם פתוח",
+      "title_he": "נדרש תקציב או תיאום"
+    },
+    {
+      "status": "green",
+      "label_he": "אושרה פעולה",
+      "title_he": "החלטת מועצה"
+    },
+    {
+      "status": "green",
+      "label_he": "במעקב",
+      "title_he": "עדכון ביצוע"
+    }
+  ],
+  "scenarios": [
+    {
+      "key": "near_me_recent_decisions",
+      "question": "אילו החלטות עירייה התקבלו לאחרונה ליד דיזנגוף 99 תל אביב",
+      "category": "planning",
+      "topic": "החלטות קרובות לבית",
+      "intent": "resident_nearby_recent_decisions",
+      "brief": "מוקאפ תל אביבי שמסנן החלטות עירוניות לפי קרבה לבית ומציג רק שכבות שמסבירות השפעה יומיומית.",
+      "address": "דיזנגוף 99",
+      "layer_keys": [
+        "resident_location",
+        "neighborhoods_and_statistics",
+        "public_buildings_assets",
+        "roads_parking_public_works",
+        "playgrounds_youth_space"
+      ],
+      "aliases": [
+        "neighborhoods_area",
+        "bus_stops",
+        "school",
+        "clinics",
+        "bombshelters"
+      ],
+      "focuses": [
+        "neighborhoods_area",
+        "bus_stops",
+        "school",
+        "clinics",
+        "bombshelters"
+      ],
+      "base_question": "מה הוחלט לאחרונה על אזור המגורים שלי, ומה מתוך זה באמת קרוב אליי?",
+      "display_address": "דיזנגוף 99 תל אביב"
+    },
+    {
+      "key": "parcel_allocation_watch",
+      "question": "האם אושרו הקצאות קרקע או הסכמי שימוש ליד אבן גבירול 71 תל אביב?",
+      "category": "planning",
+      "topic": "הקצאות קרקע ליד הבית",
+      "intent": "parcel_allocation_context",
+      "brief": "החלטות הקצאה והסכמי שימוש הופכות מובנות כשהן מוצמדות לחלקה, בעלות, ייעוד ושירות קרוב.",
+      "address": "אבן גבירול 71",
+      "layer_keys": [
+        "parcels_cadaster",
+        "public_buildings_assets",
+        "religious_services",
+        "planning_land_use"
+      ],
+      "aliases": [
+        "PARCEL_ALL",
+        "SUB_GUSH_ALL",
+        "retzefmigrashim",
+        "mikve",
+        "neighborhoods_area"
+      ],
+      "focuses": [
+        "PARCEL_ALL",
+        "retzefmigrashim",
+        "mikve",
+        "SUB_GUSH_ALL",
+        "neighborhoods_area"
+      ],
+      "base_question": "האם יש הקצאות קרקע, הסכמי שימוש או פיתוח בגוש/חלקה ליד הבית שלי?",
+      "display_address": "אבן גבירול 71 תל אביב"
+    },
+    {
+      "key": "school_future_near_child",
+      "question": "אילו החלטות התקבלו על בתי ספר וגנים ליד ארלוזורוב 120 תל אביב?",
+      "category": "education",
+      "topic": "עתיד מוסדות חינוך בשכונה",
+      "intent": "education_facility_context",
+      "brief": "מוקאפ שמחבר דיוני חינוך למוסדות, גנים, הליכה בטוחה ושכונת המגורים של הילד.",
+      "address": "ארלוזורוב 120",
+      "layer_keys": [
+        "education_facilities",
+        "neighborhoods_and_statistics",
+        "playgrounds_youth_space",
+        "demographic_equity"
+      ],
+      "aliases": [
+        "school",
+        "kids_g",
+        "neighborhoods_area",
+        "bus_stops"
+      ],
+      "focuses": [
+        "school",
+        "kids_g",
+        "neighborhoods_area",
+        "bus_stops",
+        "school"
+      ],
+      "base_question": "מה קורה עם בתי הספר והגנים באזור של הילדים שלי, והאם יש שינוי שיכול להשפיע על הליכה/רישום/קהילה?",
+      "display_address": "ארלוזורוב 120 תל אביב"
+    },
+    {
+      "key": "youth_parks_night_safety",
+      "question": "מה העירייה החליטה על בטיחות בני נוער בפארקים סביב שדרות בן גוריון 42 תל אביב?",
+      "category": "emergency",
+      "topic": "בטיחות בני נוער בפארקים",
+      "intent": "youth_parks_safety_context",
+      "brief": "הסיפור מציג איך דיוני בטיחות מקבלים הקשר דרך פארקים, דרכי גישה ונקודות חירום סמוכות.",
+      "address": "שדרות בן גוריון 42",
+      "layer_keys": [
+        "playgrounds_youth_space",
+        "emergency_security_services",
+        "roads_parking_public_works",
+        "neighborhoods_and_statistics"
+      ],
+      "aliases": [
+        "neighborhoods_area",
+        "bombshelters",
+        "bus_stops",
+        "teva_ironi"
+      ],
+      "focuses": [
+        "neighborhoods_area",
+        "bombshelters",
+        "bus_stops",
+        "neighborhoods_area",
+        "bombshelters"
+      ],
+      "base_question": "איפה בעיר דיברו על מפגשי בני נוער בפארקים בלילה, ומה מצב הביטחון/תאורה/שירותים סביב הפארקים שלי?",
+      "display_address": "שדרות בן גוריון 42 תל אביב"
+    },
+    {
+      "key": "elderly_winter_vulnerability",
+      "question": "אילו החלטות רווחה נוגעות לקשישים ליד וייצמן 14 תל אביב?",
+      "category": "welfare",
+      "topic": "פגיעות קשישים בחורף",
+      "intent": "elderly_welfare_context",
+      "brief": "דיוני רווחה מוצגים דרך שירותי בריאות קרובים, תחבורה ושכונות עם אוכלוסייה רגישה.",
+      "address": "וייצמן 14",
+      "layer_keys": [
+        "welfare_health_services",
+        "demographic_equity",
+        "neighborhoods_and_statistics",
+        "public_transport_access"
+      ],
+      "aliases": [
+        "clinics",
+        "pharmacies",
+        "neighborhoods_area",
+        "bus_stops"
+      ],
+      "focuses": [
+        "clinics",
+        "pharmacies",
+        "neighborhoods_area",
+        "bus_stops",
+        "clinics"
+      ],
+      "base_question": "בשכונה שלי יש הרבה קשישים? האם העירייה דיברה על מוות מקור/בדידות ומה השירותים הקרובים?",
+      "display_address": "וייצמן 14 תל אביב"
+    },
+    {
+      "key": "flooding_damage_and_drainage",
+      "question": "מה הוחלט על הצפות וניקוז ליד נחלת בנימין 88 תל אביב?",
+      "category": "environment",
+      "topic": "הצפות וניקוז ברחוב",
+      "intent": "flooding_drainage_context",
+      "brief": "מוקאפ שמספר סיפור של תלונת הצפה, בדיקת תשתיות, עבודות רחוב והחלטת תחזוקה.",
+      "address": "נחלת בנימין 88",
+      "layer_keys": [
+        "drainage_water_sewer",
+        "roads_parking_public_works",
+        "parcels_cadaster",
+        "neighborhoods_and_statistics"
+      ],
+      "aliases": [
+        "neighborhoods_area",
+        "PARCEL_ALL",
+        "bus_stops",
+        "water_flow"
+      ],
+      "focuses": [
+        "neighborhoods_area",
+        "PARCEL_ALL",
+        "bus_stops",
+        "neighborhoods_area",
+        "PARCEL_ALL"
+      ],
+      "base_question": "האם הרחוב שלי נמצא באזור שהוזכר בהצפות, ומה ידוע על ניקוז/צינורות/פיצוי?",
+      "display_address": "נחלת בנימין 88 תל אביב"
+    },
+    {
+      "key": "commercial_center_safety",
+      "question": "האם דנו בשיפוץ או בטיחות המרכז המסחרי ליד דיזנגוף סנטר תל אביב?",
+      "category": "commerce",
+      "topic": "בטיחות מרכז מסחרי",
+      "intent": "commercial_center_safety_context",
+      "brief": "מרכז מסחרי מוקאפ מחובר למבנה, חלקה, דרכי גישה ונקודות חירום סמוכות.",
+      "address": "דיזנגוף סנטר תל אביב",
+      "layer_keys": [
+        "commerce_employment",
+        "parcels_cadaster",
+        "emergency_security_services",
+        "public_buildings_assets"
+      ],
+      "aliases": [
+        "PARCEL_ALL",
+        "GASSTATIONS",
+        "bombshelters",
+        "bus_stops",
+        "neighborhoods_area"
+      ],
+      "focuses": [
+        "PARCEL_ALL",
+        "bombshelters",
+        "bus_stops",
+        "GASSTATIONS",
+        "neighborhoods_area"
+      ],
+      "base_question": "האם המרכז המסחרי ליד הבית שלי הוזכר כסיכון או כמועמד לשיפוץ, ומה ההקשר הבנייני/תכנוני שלו?",
+      "display_address": "דיזנגוף סנטר תל אביב"
+    },
+    {
+      "key": "antenna_agreement_near_home",
+      "question": "האם אושרו אנטנות או מתקני שידור ליד יהודה המכבי 45 תל אביב?",
+      "category": "environment",
+      "topic": "אנטנות ומתקני שידור",
+      "intent": "cellular_agreement_context",
+      "brief": "החלטת שימוש במתקן שידור מוצגת לצד אנטנות פעילות, בתי ספר, חלקות ומבני ציבור.",
+      "address": "יהודה המכבי 45",
+      "layer_keys": [
+        "cellular_and_radiation_context",
+        "education_facilities",
+        "parcels_cadaster",
+        "public_buildings_assets"
+      ],
+      "aliases": [
+        "cell_active",
+        "school",
+        "PARCEL_ALL",
+        "neighborhoods_area"
+      ],
+      "focuses": [
+        "cell_active",
+        "school",
+        "PARCEL_ALL",
+        "cell_active",
+        "neighborhoods_area"
+      ],
+      "base_question": "האם אושרו אנטנות או מתקני שידור ליד הבית/בית הספר, ובאיזו חלקה או מבנה?",
+      "display_address": "יהודה המכבי 45 תל אביב"
+    },
+    {
+      "key": "public_transport_budget_gap",
+      "question": "אילו החלטות תחבורה ציבורית משפיעות על תחנות ליד רכבת מרכז תל אביב?",
+      "category": "transport",
+      "topic": "פערי תקציב בתחבורה ציבורית",
+      "intent": "public_transport_budget_context",
+      "brief": "תקציב תחבורה מקבל הקשר דרך תחנות, שכונות נגישות וצירי נסיעה שמשמשים את התושב.",
+      "address": "רכבת מרכז תל אביב",
+      "layer_keys": [
+        "public_transport_access",
+        "roads_parking_public_works",
+        "demographic_equity",
+        "neighborhoods_and_statistics"
+      ],
+      "aliases": [
+        "bus_stops",
+        "neighborhoods_area",
+        "neta_lines",
+        "nta_metro_stations"
+      ],
+      "focuses": [
+        "bus_stops",
+        "neighborhoods_area",
+        "bus_stops",
+        "neighborhoods_area",
+        "bus_stops"
+      ],
+      "base_question": "האם יש החלטות על תחבורה ציבורית שמשפיעות על התחנות והמסלולים שאני משתמש בהם?",
+      "display_address": "רכבת מרכז תל אביב"
+    },
+    {
+      "key": "parking_and_roadwork_disruption",
+      "question": "אילו עבודות דרך או שינויי חניה צפויים ליד קינג ג'ורג' 33 תל אביב?",
+      "category": "transport",
+      "topic": "עבודות וחניה סביב הבית",
+      "intent": "roadwork_parking_context",
+      "brief": "עבודות וחניה מוצגות כמסלול הפרעה יומיומי: רחוב, שכונה, תחבורה וצמתים קרובים.",
+      "address": "קינג ג'ורג' 33",
+      "layer_keys": [
+        "roads_parking_public_works",
+        "neighborhoods_and_statistics",
+        "public_transport_access",
+        "resident_location"
+      ],
+      "aliases": [
+        "bus_stops",
+        "neighborhoods_area",
+        "PARCEL_ALL",
+        "districts_new"
+      ],
+      "focuses": [
+        "bus_stops",
+        "neighborhoods_area",
+        "PARCEL_ALL",
+        "bus_stops",
+        "neighborhoods_area"
+      ],
+      "base_question": "אילו עבודות, חניה או שינויי דרך צפויים סביבי, והאם הם עלו במועצה?",
+      "display_address": "קינג ג'ורג' 33 תל אביב"
+    },
+    {
+      "key": "sanitation_dogs_waste",
+      "question": "מה הוחלט על ניקיון ופינוי פסולת ליד פלורנטין 12 תל אביב?",
+      "category": "environment",
+      "topic": "ניקיון ופסולת בשכונה",
+      "intent": "sanitation_service_context",
+      "brief": "שאילתות ניקיון נקשרות לפארקים, שכונות, ימי פינוי ומוקדי מפגע סביב התושב.",
+      "address": "פלורנטין 12",
+      "layer_keys": [
+        "environment_sanitation",
+        "playgrounds_youth_space",
+        "neighborhoods_and_statistics",
+        "roads_parking_public_works"
+      ],
+      "aliases": [
+        "aq_realtime",
+        "neighborhoods_area",
+        "teva_ironi",
+        "bus_stops"
+      ],
+      "focuses": [
+        "neighborhoods_area",
+        "aq_realtime",
+        "bus_stops",
+        "neighborhoods_area",
+        "aq_realtime"
+      ],
+      "base_question": "האם יש החלטות או תשובות על ניקיון, גללי כלבים או פינוי פסולת באזור שלי?",
+      "display_address": "פלורנטין 12 תל אביב"
+    },
+    {
+      "key": "emergency_readiness_near_me",
+      "question": "אילו החלטות חירום ומקלטים נוגעות לאזור קפלן 6 תל אביב?",
+      "category": "emergency",
+      "topic": "מוכנות חירום ליד הבית",
+      "intent": "emergency_readiness_context",
+      "brief": "דיוני חירום מוצגים כמפת שירותי הצלה, מקלטים ונתיבי גישה סביב נקודת התושב.",
+      "address": "קפלן 6",
+      "layer_keys": [
+        "emergency_security_services",
+        "roads_parking_public_works",
+        "public_buildings_assets",
+        "neighborhoods_and_statistics"
+      ],
+      "aliases": [
+        "bombshelters",
+        "GASSTATIONS",
+        "regional_authorities",
+        "neighborhoods_area"
+      ],
+      "focuses": [
+        "bombshelters",
+        "regional_authorities",
+        "GASSTATIONS",
+        "bombshelters",
+        "neighborhoods_area"
+      ],
+      "base_question": "במקרה חירום, אילו מקלטים/תחנות חירום קרובים אליי ומה הוחלט על מוכנות העיר?",
+      "display_address": "קפלן 6 תל אביב"
+    },
+    {
+      "key": "family_support_services",
+      "question": "אילו שירותי תמיכה למשפחות אושרו ליד דרך השלום 53 תל אביב?",
+      "category": "welfare",
+      "topic": "שירותי תמיכה למשפחות",
+      "intent": "family_support_context",
+      "brief": "החלטה חברתית מקבלת שכבת שירותים, תחבורה ונגישות במקום להישאר הצהרה כללית.",
+      "address": "דרך השלום 53",
+      "layer_keys": [
+        "welfare_health_services",
+        "public_transport_access",
+        "demographic_equity",
+        "neighborhoods_and_statistics"
+      ],
+      "aliases": [
+        "clinics",
+        "pharmacies",
+        "bus_stops",
+        "neighborhoods_area"
+      ],
+      "focuses": [
+        "clinics",
+        "bus_stops",
+        "pharmacies",
+        "neighborhoods_area",
+        "clinics"
+      ],
+      "base_question": "האם למשפחות במצב דומה לשלי יש מענים עירוניים קרובים, ומה הוחלט עליהם?",
+      "display_address": "דרך השלום 53 תל אביב"
+    },
+    {
+      "key": "sport_support_distribution",
+      "question": "אילו תמיכות ספורט או מתקנים עירוניים נוגעים לשדרות רוקח 101 תל אביב?",
+      "category": "culture",
+      "topic": "חלוקת תמיכות ספורט",
+      "intent": "sport_support_context",
+      "brief": "תמיכות ספורט מוצגות מול מתקנים, שכונות, נגישות ונתוני שוויון שירותים.",
+      "address": "שדרות רוקח 101",
+      "layer_keys": [
+        "culture_sport_leisure",
+        "neighborhoods_and_statistics",
+        "demographic_equity",
+        "public_transport_access"
+      ],
+      "aliases": [
+        "neighborhoods_area",
+        "bus_stops",
+        "atractions",
+        "fieldschool"
+      ],
+      "focuses": [
+        "neighborhoods_area",
+        "bus_stops",
+        "neighborhoods_area",
+        "bus_stops",
+        "neighborhoods_area"
+      ],
+      "base_question": "מי מקבל תמיכות ספורט בעיר, והאם יש קשר למתקנים או שכונות מסוימות?",
+      "display_address": "שדרות רוקח 101 תל אביב"
+    },
+    {
+      "key": "culture_accessibility_issue",
+      "question": "מה הוחלט על נגישות מוסדות תרבות ליד שאול המלך 27 תל אביב?",
+      "category": "culture",
+      "topic": "נגישות במוסדות תרבות",
+      "intent": "culture_accessibility_context",
+      "brief": "שאלת נגישות מקבלת מוסד, הגעה בתחבורה ונקודות חירום סמוכות.",
+      "address": "שאול המלך 27",
+      "layer_keys": [
+        "culture_sport_leisure",
+        "public_buildings_assets",
+        "public_transport_access",
+        "emergency_security_services"
+      ],
+      "aliases": [
+        "bus_stops",
+        "regional_authorities",
+        "bombshelters",
+        "neighborhoods_area"
+      ],
+      "focuses": [
+        "bus_stops",
+        "regional_authorities",
+        "bombshelters",
+        "neighborhoods_area",
+        "bus_stops"
+      ],
+      "base_question": "האם נדונו בעיות נגישות במוסדות התרבות/פנאי שאני משתמש בהם?",
+      "display_address": "שאול המלך 27 תל אביב"
+    },
+    {
+      "key": "environmental_exposure_near_school",
+      "question": "האם דנו בזיהום או אנטנות ליד בוגרשוב 71 תל אביב?",
+      "category": "environment",
+      "topic": "חשיפה סביבתית ליד בית ספר",
+      "intent": "environmental_exposure_context",
+      "brief": "חשש תושב מוצג יחד עם בית ספר, אנטנות, ניטור סביבתי ושכונה.",
+      "address": "בוגרשוב 71",
+      "layer_keys": [
+        "environment_sanitation",
+        "cellular_and_radiation_context",
+        "education_facilities",
+        "neighborhoods_and_statistics"
+      ],
+      "aliases": [
+        "aq_realtime",
+        "cell_active",
+        "school",
+        "neighborhoods_area"
+      ],
+      "focuses": [
+        "school",
+        "cell_active",
+        "aq_realtime",
+        "neighborhoods_area",
+        "school"
+      ],
+      "base_question": "האם ליד בית הספר/הבית שלי יש מקורות זיהום או אנטנות שהוזכרו בדיוני העירייה?",
+      "display_address": "בוגרשוב 71 תל אביב"
+    },
+    {
+      "key": "local_economy_employment_shift",
+      "question": "אילו החלטות על תעסוקה ומסחר נוגעות ליגאל אלון 94 תל אביב?",
+      "category": "commerce",
+      "topic": "שינויי תעסוקה וכלכלה מקומית",
+      "intent": "local_economy_context",
+      "brief": "שאלה כלכלית מקבלת הקשר מרחבי של אזורי מסחר, תחבורה ונגישות עובדים.",
+      "address": "יגאל אלון 94",
+      "layer_keys": [
+        "commerce_employment",
+        "neighborhoods_and_statistics",
+        "public_transport_access",
+        "demographic_equity"
+      ],
+      "aliases": [
+        "bus_stops",
+        "GASSTATIONS",
+        "neighborhoods_area",
+        "banks"
+      ],
+      "focuses": [
+        "bus_stops",
+        "GASSTATIONS",
+        "neighborhoods_area",
+        "bus_stops",
+        "GASSTATIONS"
+      ],
+      "base_question": "האם העירייה דנה באובדן מקומות עבודה או מעבר מפעלים, ואילו אזורי תעסוקה/מסחר מושפעים?",
+      "display_address": "יגאל אלון 94 תל אביב"
+    },
+    {
+      "key": "planning_objection_window",
+      "question": "איזו תכנית ליד שדרות רוטשילד 22 תל אביב פתוחה להתנגדויות?",
+      "category": "planning",
+      "topic": "חלון התנגדות לתכנית",
+      "intent": "planning_objection_context",
+      "brief": "סטטוס תכנון, השתתפות ציבורית, חלקות ושכונות מוצגים יחד עם פרוטוקולי התכנון.",
+      "address": "שדרות רוטשילד 22",
+      "layer_keys": [
+        "planning_land_use",
+        "parcels_cadaster",
+        "resident_location",
+        "neighborhoods_and_statistics"
+      ],
+      "aliases": [
+        "retzefmigrashim",
+        "PARCEL_ALL",
+        "SUB_GUSH_ALL",
+        "neighborhoods_area"
+      ],
+      "focuses": [
+        "retzefmigrashim",
+        "PARCEL_ALL",
+        "neighborhoods_area",
+        "SUB_GUSH_ALL",
+        "retzefmigrashim"
+      ],
+      "base_question": "יש תכנית ליד הבית שלי; מה נאמר עליה בפרוטוקולים ומתי/איך אפשר להתנגד?",
+      "display_address": "שדרות רוטשילד 22 תל אביב"
+    },
+    {
+      "key": "neighborhood_budget_equity",
+      "question": "האם אזור העלייה 60 תל אביב מקבל שירותים ותקציבים כמו אזורים אחרים?",
+      "category": "welfare",
+      "topic": "שוויון תקציבי בין שכונות",
+      "intent": "neighborhood_budget_equity_context",
+      "brief": "מוקאפ שבודק החלטות תקציביות מול פיזור שירותים ואוכלוסייה בשכונות.",
+      "address": "העלייה 60",
+      "layer_keys": [
+        "demographic_equity",
+        "education_facilities",
+        "welfare_health_services",
+        "neighborhoods_and_statistics"
+      ],
+      "aliases": [
+        "neighborhoods_area",
+        "school",
+        "clinics",
+        "kids_g"
+      ],
+      "focuses": [
+        "neighborhoods_area",
+        "school",
+        "clinics",
+        "kids_g",
+        "neighborhoods_area"
+      ],
+      "base_question": "האם השכונה שלי מקבלת פחות/יותר שירותים או תקציבים לפי הפרוטוקולים והשכבות?",
+      "display_address": "העלייה 60 תל אביב"
+    },
+    {
+      "key": "street_naming_memorialization",
+      "question": "האם הוצעו שמות רחובות או הנצחה ליד שינקין 36 תל אביב?",
+      "category": "planning",
+      "topic": "קריאת רחובות והנצחה",
+      "intent": "street_naming_context",
+      "brief": "הצעות הנצחה מקושרות לשכונה, רחוב, תכנית וסטטוס ועדה.",
+      "address": "שינקין 36",
+      "layer_keys": [
+        "roads_parking_public_works",
+        "neighborhoods_and_statistics",
+        "resident_location",
+        "planning_land_use"
+      ],
+      "aliases": [
+        "neighborhoods_area",
+        "bus_stops",
+        "retzefmigrashim",
+        "PARCEL_ALL"
+      ],
+      "focuses": [
+        "neighborhoods_area",
+        "bus_stops",
+        "retzefmigrashim",
+        "PARCEL_ALL",
+        "neighborhoods_area"
+      ],
+      "base_question": "האם יש הצעות לקריאת רחובות או הנצחה באזור שלי, ומה הסטטוס שלהן?",
+      "display_address": "שינקין 36 תל אביב"
+    },
+    {
+      "key": "municipal_asset_contracts",
+      "question": "אילו הסכמים סביב נכסים עירוניים אושרו ליד מרמורק 10 תל אביב?",
+      "category": "planning",
+      "topic": "הסכמים סביב נכסים עירוניים",
+      "intent": "municipal_asset_contract_context",
+      "brief": "הסכמים משפטיים מוצגים לצד נכסים ומבנים שהתושב יכול לזהות במפה.",
+      "address": "מרמורק 10",
+      "layer_keys": [
+        "public_buildings_assets",
+        "parcels_cadaster",
+        "commerce_employment",
+        "planning_land_use"
+      ],
+      "aliases": [
+        "PARCEL_ALL",
+        "regional_authorities",
+        "bus_stops",
+        "retzefmigrashim"
+      ],
+      "focuses": [
+        "PARCEL_ALL",
+        "regional_authorities",
+        "bus_stops",
+        "retzefmigrashim",
+        "PARCEL_ALL"
+      ],
+      "base_question": "אילו הסכמים עם מתקנים ציבוריים או חברות עירוניות קיימים סביבי ומה אושר בהם?",
+      "display_address": "מרמורק 10 תל אביב"
+    },
+    {
+      "key": "religious_service_access",
+      "question": "האם אושר מקווה או שירות דת ליד ספיר 7 תל אביב?",
+      "category": "planning",
+      "topic": "נגישות לשירותי דת",
+      "intent": "public_service_facility_context",
+      "brief": "החלטת שירות דת מקבלת הקשר של מתקן, שכונה, חלקה ותכנית.",
+      "address": "ספיר 7 תל אביב",
+      "layer_keys": [
+        "religious_services",
+        "parcels_cadaster",
+        "neighborhoods_and_statistics",
+        "planning_land_use"
+      ],
+      "aliases": [
+        "mikve",
+        "PARCEL_ALL",
+        "neighborhoods_area",
+        "retzefmigrashim"
+      ],
+      "focuses": [
+        "mikve",
+        "PARCEL_ALL",
+        "neighborhoods_area",
+        "retzefmigrashim",
+        "mikve"
+      ],
+      "base_question": "האם מתוכנן או אושר מקווה/שירות דת ליד השכונה שלי, ועל איזו קרקע?",
+      "display_address": "ספיר 7 תל אביב"
+    },
+    {
+      "key": "citywide_risk_hotspots",
+      "question": "אילו מוקדי סיכון עירוניים הוזכרו סביב כיכר רבין תל אביב?",
+      "category": "emergency",
+      "topic": "מוקדי סיכון עירוניים",
+      "intent": "citywide_risk_hotspots_context",
+      "brief": "מפת סיכון מוקאפ מתוך פרוטוקולים: חירום, ניקוז, סביבה ושכונות עם ריבוי אזכורים.",
+      "address": "כיכר רבין תל אביב",
+      "layer_keys": [
+        "emergency_security_services",
+        "drainage_water_sewer",
+        "environment_sanitation",
+        "neighborhoods_and_statistics"
+      ],
+      "aliases": [
+        "bombshelters",
+        "aq_realtime",
+        "neighborhoods_area",
+        "PARCEL_ALL"
+      ],
+      "focuses": [
+        "bombshelters",
+        "aq_realtime",
+        "neighborhoods_area",
+        "PARCEL_ALL",
+        "bombshelters"
+      ],
+      "base_question": "איפה בעיר חוזרות שאילתות על סיכונים: הצפות, מבנים מסוכנים, אלימות, בטיחות או זיהום?",
+      "display_address": "כיכר רבין תל אביב"
+    },
+    {
+      "key": "service_gap_for_children",
+      "question": "האם יש מספיק שירותים לילדים ונוער ליד לינקולן 5 תל אביב?",
+      "category": "education",
+      "topic": "פער שירותים לילדים ונוער",
+      "intent": "children_service_gap_context",
+      "brief": "הסיפור משווה מוסדות ילדים, פארקים, רווחה ודמוגרפיה סביב נקודת התושב.",
+      "address": "לינקולן 5",
+      "layer_keys": [
+        "education_facilities",
+        "playgrounds_youth_space",
+        "demographic_equity",
+        "welfare_health_services"
+      ],
+      "aliases": [
+        "school",
+        "kids_g",
+        "clinics",
+        "neighborhoods_area"
+      ],
+      "focuses": [
+        "school",
+        "kids_g",
+        "clinics",
+        "neighborhoods_area",
+        "school"
+      ],
+      "base_question": "האם באזור שלי יש מספיק מענים לילדים ונוער ביחס למה שהמועצה דנה בו?",
+      "display_address": "לינקולן 5 תל אביב"
+    }
+  ]
+}

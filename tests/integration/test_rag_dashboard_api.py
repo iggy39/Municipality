@@ -26,7 +26,11 @@ from municipality.migrations import apply_all
 from municipality.models import Document, DocumentVersion, ExtractedDocument, RetrievalArtifact, SourceSite
 from municipality.rag_dashboard_adapter import build_dashboard_error_payload, encode_artifact_evidence_id, validate_dashboard_payload
 from municipality.rag_dashboard_contracts import RagDashboardInteractionRequest, RagDashboardPayload
+from municipality.rag_dashboard_mock import CURRENT_QUESTION, POPULAR_QUESTIONS, SCENARIOS, TIMELINE_TEMPLATES, build_mock_rag_dashboard_payload
 from municipality.rag_dashboard_ui import render_rag_dashboard_page
+
+
+DEFAULT_TOPIC = "החלטות קרובות לבית"
 
 
 def _flatten_strings(value: Any) -> set[str]:
@@ -66,28 +70,33 @@ def test_rag_dashboard_mock_endpoint_returns_contract_shaped_payload() -> None:
     payload = rag_dashboard_mock()
     assert RagDashboardPayload.model_validate(payload).state.map_mode == "schematic"
 
-    assert payload["state"]["municipality_id"] == "ashdod"
-    assert payload["state"]["current_question"] == "מה הוחלט לגבי תכנית רובע טו?"
-    assert payload["state"]["search_intent"] == "decision_about_topic"
+    assert payload["state"]["municipality_id"] == "tel_aviv"
+    assert payload["state"]["current_question"] == CURRENT_QUESTION
+    assert payload["state"]["search_intent"] == "resident_nearby_recent_decisions"
     assert payload["state"]["active_detail_drawer_mode"] == "answer"
     assert payload["state"]["filter_modal_open"] is False
     assert payload["state"]["map_mode"] == "schematic"
 
     discovery = payload["start_discovery_panel"]
-    assert [row["label"] for row in discovery["categories"]] == [
-        "תכנון ובנייה",
-        "תחבורה",
-        "חינוך",
-        "רווחה",
-        "סביבה",
-    ]
+    assert [row["label"] for row in discovery["categories"]] == ["תכנון ובנייה", "תחבורה", "חינוך", "רווחה", "סביבה", "חירום", "תרבות וספורט", "מסחר ותעסוקה"]
     assert discovery["categories"][0]["count"] == 342
+    assert {row["id"] for row in discovery["categories"] if row["disabled"]} == set()
     assert discovery["hot_topics"][0] == {
-        "id": "topic_rova_tet_vav_plan",
-        "label": "תכנית רובע טו",
-        "count": 23,
+        "id": "topic_near_me_recent_decisions",
+        "label": DEFAULT_TOPIC,
+        "count": 24,
         "selected": True,
+        "disabled": False,
+        "disabled_reason": None,
     }
+    assert [row["id"] for row in discovery["hot_topics"]] == [
+        "topic_near_me_recent_decisions",
+        "topic_parcel_allocation_watch",
+        "topic_street_naming_memorialization",
+        "topic_municipal_asset_contracts",
+        "topic_religious_service_access",
+    ]
+    assert "חלון התנגדות לתכנית" not in {row["label"] for row in discovery["hot_topics"]}
     assert discovery["focused_topic_tree_context"]["root"]["label"] == "תכנון ובנייה"
 
     workspace = payload["main_civic_workspace"]
@@ -95,51 +104,51 @@ def test_rag_dashboard_mock_endpoint_returns_contract_shaped_payload() -> None:
     assert workspace["map"]["real_gis_available"] is False
     assert workspace["map"]["real_geometry"] is None
     assert workspace["map"]["geometry_provenance"] is None
-    assert workspace["map"]["provenance"] == {
-        "status": "schematic_only",
-        "label_he": "מפה סכמטית בלבד",
-        "description_he": "אין גיאומטריית GIS מאומתת; המיקומים והצורות מוצגים להמחשה בלבד על בסיס הראיות.",
-        "source_evidence_refs": [],
-    }
+    assert workspace["map"]["provenance"]["status"] == "schematic_only"
+    assert workspace["map"]["provenance"]["label_he"] == "מפה סכמטית בלבד"
+    assert "GovMap" in workspace["map"]["provenance"]["description_he"]
+    assert workspace["map"]["provenance"]["source_evidence_refs"] == []
     assert workspace["map"]["entities"][0]["real_geometry"] is None
     assert workspace["map"]["entities"][0]["geometry_provenance"] is None
-    assert workspace["timeline"]["selected_event_id"] == "event_2024_06_23"
+    assert workspace["timeline"]["selected_event_id"] == "event_near_me_recent_decisions_2024_05_29"
     assert [event["date_label"] for event in workspace["timeline"]["events"]] == [
-        "10.05.2024",
-        "28.05.2024",
-        "23.06.2024",
-        "02.07.2024",
-        "15.07.2024",
+        "18.03.2024",
+        "22.04.2024",
+        "29.05.2024",
+        "24.06.2024",
+        "16.07.2024",
     ]
 
     drawer = payload["end_detail_drawer"]
     assert drawer["mode"] == "answer"
     assert drawer["title"] == "תשובה"
-    assert drawer["confidence_label"] == "גבוהה"
-    assert len(drawer["decisions"]) == 4
-    assert [decision["summary"] for decision in drawer["decisions"]] == [
-        "אישור להפקדה בתנאים",
-        "נקבעו תנאים להמשך קידום התכנית והפקדתה.",
-        "נדרש עדכון בדו״ח ההשפעה על הסביבה לפני שלב ההפקדה הסופית.",
-        "הצגת התכנית לציבור ושמיעת ההתנגדויות בכפוף לפרסום הודעה כדין.",
-    ]
+    assert drawer["confidence_label"] == "בינונית"
+    assert len(drawer["decisions"]) == 5
+    decision_summaries = [decision["summary"] for decision in drawer["decisions"]]
+    assert decision_summaries[0].startswith("נבדקו עבודות רחוב, מבני ציבור ונקודות שירות")
+    assert "ועדת התכנון דנה בהחלטות קרובות לבית ליד דיזנגוף 99 תל אביב" in decision_summaries[0]
+    assert decision_summaries[3].startswith("אושרה הכנת רשימת פעולות קרובות לבית")
+    assert "המועצה אישרה לקדם את החלטות קרובות לבית" in decision_summaries[3]
+    assert len(set(decision_summaries)) == 5
+    assert all("תושב מעלה" not in summary and "מוקאפ" not in summary for summary in decision_summaries)
     assert all(decision["resident_evidence_links"][0]["label_he"] == "מקור" for decision in drawer["decisions"])
-    assert [topic["label"] for topic in drawer["related_topics"]] == [
-        "רובע טו",
-        "תכנית רובע טו",
-        "תכנון ובנייה",
-        "תוכניות מפורטות",
-        "תחבורה ציבורית",
-        "שטחים פתוחים",
-        "השפעה סביבתית",
-    ]
+    assert drawer["related_topics"][0]["label"] == DEFAULT_TOPIC
 
     assert payload["contracts"]["topic_nodes"]
     assert payload["contracts"]["decisions"] == drawer["decisions"]
     assert payload["contracts"]["evidence"] == payload["evidence"]
-    assert payload["evidence"][0]["artifact_kind"] == "decision_unit"
-    assert payload["evidence"][0]["header_path"] == ["מועצת העיר", "תכנון ובנייה", "תכנית רובע טו"]
-    assert payload["evidence"][0]["page_span"] == {"start": 7, "end": 7}
+    assert payload["evidence"][0]["artifact_kind"] == "agenda_item"
+    assert payload["evidence"][0]["header_path"] == ["עיריית תל אביב-יפו", "תכנון ובנייה", DEFAULT_TOPIC]
+    assert payload["evidence"][0]["page_span"] == {"start": 3, "end": 3}
+    assert payload["ui_copy"]["popular_searches"]["choices"] == POPULAR_QUESTIONS
+    assert len(payload["ui_copy"]["popular_searches"]["choices"]) == 24
+    story_review = payload["gis_story_review"]
+    assert story_review["status"] == "loaded"
+    assert story_review["summary"]["strong_story_count"] == 9
+    assert story_review["summary"]["needs_review_count"] == 9
+    assert [lane["id"] for lane in story_review["lanes"]] == ["strong_story", "needs_review"]
+    assert [len(lane["stories"]) for lane in story_review["lanes"]] == [9, 9]
+    assert all(story["traffic_light"] in {"red", "yellow", "green"} for lane in story_review["lanes"] for story in lane["stories"])
 
 
 def test_rag_dashboard_mock_payload_covers_current_dashboard_visual_data() -> None:
@@ -147,116 +156,26 @@ def test_rag_dashboard_mock_payload_covers_current_dashboard_visual_data() -> No
     endpoint_strings = _flatten_strings(payload)
     ask_body = bytes(ask_playground_page().body).decode("utf-8")
 
-    expected_visual_strings = {
-        "לוח מחוונים עירוני",
-        "עירייה",
-        "מה הוחלט לגבי תכנית רובע טו?",
-        "חיפושים פופולריים",
-        "מסננים",
-        "מנהל",
-        "תשובה",
-        "שאלה:",
-        "תקציר",
-        "ביטחון התשובה:",
-        "גבוהה",
-        "החלטות עיקריות",
-        "נושאים קשורים",
-        "מגבלות",
-        "אישור להפקדה בתנאים",
-        "נקבעו תנאים להמשך קידום התכנית והפקדתה.",
-        "נדרש עדכון בדו״ח ההשפעה על הסביבה לפני שלב ההפקדה הסופית.",
-        "הצגת התכנית לציבור ושמיעת ההתנגדויות בכפוף לפרסום הודעה כדין.",
-        "מקור",
-        "רובע טו",
-        "תכנית רובע טו",
-        "תכנון ובנייה",
-        "תוכניות מפורטות",
-        "תחבורה ציבורית",
-        "שטחים פתוחים",
-        "השפעה סביבתית",
-        "ייתכנו שינויים בהחלטות עד לאישור סופי. מומלץ לפתוח את המקור לפני הסקת מסקנות.",
-        "מפה סכמטית של רובע טו",
-        "מפה סכמטית בלבד",
-        "אין גיאומטריית GIS מאומתת; המיקומים והצורות מוצגים להמחשה בלבד על בסיס הראיות.",
-        "חוף הים",
-        "צפון העיר",
-        "מרכז העיר",
-        "מערב העיר",
-        "מזרח העיר",
-        "דרום העיר",
-        "מקרא",
-        "חלקה נבחרת",
-        "תכנית / גבול תכנון",
-        "שכונה / גבול עירוני",
-        "מוסד חינוך",
-        "מבנה הקשר OSM",
-        "מוקד הקשר OSM",
-        "מרכז מפה",
-        "התקרבות",
-        "התרחקות",
-        "שכבות מפה",
-        "ציר זמן",
-        "אירוע קודם",
-        "אירוע הבא",
-        "15.07.2024",
-        "פרסום להפקדה",
-        "התחלת תהליך",
-        "02.07.2024",
-        "החלטה מס׳ 1123",
-        "אישור התנאים",
-        "23.06.2024",
-        "ישיבה מס׳ 478",
-        "אישור להפקדה",
-        "28.05.2024",
-        "דיון ציבורי",
-        "הצגת התכנית",
-        "10.05.2024",
-        "דיונים מקדימים",
-        "פרסום תכנית",
-        "קטגוריות",
-        "תחבורה",
-        "חינוך",
-        "רווחה",
-        "סביבה",
-        "הצג עוד",
-        "נושאים בולטים",
-        "הקמת קו רכבת קלה",
-        "שדרוג פארק לכיש",
-        "תכנית מתאר חדשה",
-        "עץ נושאים",
-        "תוכניות מתאר",
-        "היתרים",
-        "הצג כל העץ",
-        "סינון תוצאות",
-        "אזור",
-        "טווח זמן",
-        "קטגוריה",
-        "סוגי מקורות",
-        "ודאות",
-        "איפוס",
-        "החל סינון",
-        "כל העיר",
-        "כל השנים",
-        "פרוטוקולים ונספחים",
-        "פרוטוקולים",
-        "גבוהה ובינונית",
-        "כל הרמות",
-    }
-
-    expected_body_strings = (
-        expected_visual_strings
-        - {"חלקה נבחרת", "תכנית / גבול תכנון", "שכונה / גבול עירוני"}
-        | {"חלקת MAPI רשמית", "תכנית אם קיימת בנקודה", "גבול תל אביב רשמי"}
-    )
-
-    assert expected_visual_strings <= endpoint_strings
-    assert all(value in ask_body for value in expected_body_strings)
+    assert {"לוח מחוונים עירוני", "חיפושים פופולריים", "ציר זמן", "החלטות עיקריות", CURRENT_QUESTION, DEFAULT_TOPIC} <= endpoint_strings
+    assert set(POPULAR_QUESTIONS) <= endpoint_strings
+    assert CURRENT_QUESTION in ask_body
+    assert "popularPopover.replaceChildren" in ask_body
+    assert "focusLayer: geo.focus_layer" in ask_body
+    assert "timeline-progress-banner" in ask_body
+    assert "gis-story-review-panel" in ask_body
+    assert "renderGisStoryReview" in ask_body
+    assert "progress-summary" not in ask_body
+    assert "resident-context-address" in ask_body
+    assert "כתובת לבדיקה" not in ask_body
+    assert "buttons[idx].disabled = disabled" in ask_body
+    assert 'href="/ui/subjects"' in ask_body
+    assert "Subject Browser" in ask_body
     assert 'muni: "ashdod"' not in ask_body
     assert "selectedMunicipalityForQuery" in ask_body
 
-    assert [row["count"] for row in payload["start_discovery_panel"]["categories"]] == [342, 128, 95, 76, 64]
-    assert [row["count"] for row in payload["start_discovery_panel"]["hot_topics"]] == [23, 18, 14, 11]
-    assert [row["count"] for row in payload["start_discovery_panel"]["focused_topic_tree_context"]["children"]] == [12, 23, 7]
+    assert [row["count"] for row in payload["start_discovery_panel"]["categories"]] == [342, 128, 95, 76, 64, 42, 31, 27]
+    assert [row["count"] for row in payload["start_discovery_panel"]["hot_topics"]] == [24, 22, 20, 18, 16]
+    assert [row["count"] for row in payload["start_discovery_panel"]["focused_topic_tree_context"]["children"]] == [24, 22, 20, 18, 16]
 
     evidence_ids = {row["id"] for row in payload["evidence"]}
     for decision in payload["end_detail_drawer"]["decisions"]:
@@ -271,6 +190,50 @@ def test_rag_dashboard_mock_payload_covers_current_dashboard_visual_data() -> No
         assert entity["spatial_representation"] == "schematic"
         assert entity["real_geometry"] is None
         assert entity["geometry_provenance"] is None
+
+    geo = payload["state"]["intent_resolution"]["geo"]
+    assert geo["map_context"]["municipality_code"] == "5000"
+    assert geo["map_context"]["story"]["scenario_key"] == "near_me_recent_decisions"
+
+
+def test_all_resident_mock_questions_have_gis_timeline_stories() -> None:
+    assert len(SCENARIOS) == 24
+    assert len(POPULAR_QUESTIONS) == 24
+    assert len(set(POPULAR_QUESTIONS)) == 24
+
+    timeline_signatures: dict[tuple[str, ...], str] = {}
+    for scenario in SCENARIOS:
+        payload = build_mock_rag_dashboard_payload(question=scenario["question"])
+        RagDashboardPayload.model_validate(payload)
+        geo = payload["state"]["intent_resolution"]["geo"]
+        story = geo["map_context"]["story"]
+        assert payload["state"]["municipality_id"] == "tel_aviv"
+        assert payload["state"]["current_question"] == scenario["question"]
+        assert "כתובת לבדיקה" not in scenario["question"]
+        assert scenario["display_address"] in scenario["question"]
+        assert geo["needs_gis"] is True
+        assert geo["resident_layer_keys"]
+        assert geo["govmap_layer_aliases"]
+        assert story["scenario_key"] == scenario["key"]
+        assert geo["focus"]["address_query"] == scenario["display_address"]
+        assert geo["map_context"]["resident_context"]["address"] == scenario["display_address"]
+        assert geo["map_context"]["progress"]["status"] in {"red", "yellow", "green"}
+        assert len(payload["main_civic_workspace"]["timeline"]["events"]) == len(TIMELINE_TEMPLATES)
+        assert all(row["decision_ids"] and row["evidence_refs"] for row in payload["main_civic_workspace"]["timeline"]["events"])
+        timeline_text = [row["summary"] for row in payload["main_civic_workspace"]["timeline"]["events"]]
+        assert len(set(timeline_text)) == len(TIMELINE_TEMPLATES)
+        assert all("תושב מעלה" not in text and "מוקאפ" not in text for text in timeline_text)
+        signature = tuple(timeline_text)
+        assert signature not in timeline_signatures, f"{scenario['key']} duplicates {timeline_signatures.get(signature)}"
+        timeline_signatures[signature] = scenario["key"]
+        base_focus = geo["focus_layer"]
+        base_aliases = geo["govmap_layer_aliases"]
+        for event in payload["main_civic_workspace"]["timeline"]["events"]:
+            event_payload = build_mock_rag_dashboard_payload(question=scenario["question"], selected_event_id=event["id"])
+            event_geo = event_payload["state"]["intent_resolution"]["geo"]
+            assert event_geo["focus_layer"] == base_focus
+            assert event_geo["govmap_layer_aliases"] == base_aliases
+    assert len(timeline_signatures) == len(SCENARIOS)
 
 
 def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None:
@@ -298,7 +261,7 @@ def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None
     assert "clearGeometriesByName" in body
     assert "data-govmap-layer-toggle" in body
     assert "default_visible_layers" in body
-    assert "const defaultVisible" in body
+    assert "const aliases = new Set(payload?.govmap?.default_visible_layers" in body
     assert "selectFeaturesOnMap" in body
     assert "GOVMAP_SELECTED_NEIGHBORHOOD_RADIUS_M" in body
     assert "selectOnMap: false" in body
@@ -306,15 +269,22 @@ def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None
     assert "govMapSelectedAreaRing" in body
     assert "waitForGovMapNativeCommand" in body
     assert "12000" in body
-    assert "showSelectedArea: false" in body
     assert "האזור הנבחר יוצג רק כאשר GovMap מאשר פקודות API לדומיין הנוכחי" in body
     assert "לא מוצג פוליגון דמה בגיבוי" in body
     assert "renderGovMapOverlay(payload, { showDistrictLabels: false, showMarkers: false })" not in body
+    assert "renderGovMapOverlay(payload, {\n            showSelectedArea: true" not in body
     assert "whereClause" in body
     assert "clearSelection" in body
-    assert "govmap_selected_neighborhood_failed" in body
+    assert "govmap_selected_area_circle_failed" in body
+    assert "govmap_neighborhood_boundary_failed" in body
+    assert "govmap_address_marker_failed" in body
+    assert "displayGovMapHouseMarker" in body
+    assert "displayGovMapPointWkt" in body
+    assert "gisSignature" in body
+    assert "__municipalDashboardLastGisSkipped" in body
+    assert "__municipalDashboardWheelZoomBlocked" in body
     assert 'aliases.add("neighborhoods_area")' not in body
-    assert "renderGovMapLayerFilters" in body
+    assert "renderResidentGovMapLayerGroups" in body
     assert "__municipalDashboardMapFiltersChanged" in body
     assert "updateGovMapFilterAvailability" in body
     assert "window.__municipalDashboardGisMapFromServer=true" not in body
@@ -361,8 +331,8 @@ def test_prefixed_reverse_proxy_rejects_missing_secret(monkeypatch: pytest.Monke
 def test_rag_dashboard_page_wires_stage_6_point_report_and_coverage_ui() -> None:
     body = bytes(ask_playground_page().body).decode("utf-8")
 
-    assert 'const POINT_REPORT_ENDPOINT = "/v1/point-report"' in body
-    assert 'const COVERAGE_ENDPOINT = "/v1/coverage"' in body
+    assert 'const POINT_REPORT_ENDPOINT = appUrl("/v1/point-report")' in body
+    assert 'const COVERAGE_ENDPOINT = appUrl("/v1/coverage")' in body
     assert 'id="point-report-panel"' in body
     assert 'id="coverage-panel"' in body
     assert 'id="coverage-matrix-button"' in body
@@ -379,7 +349,7 @@ def test_rag_dashboard_page_wires_stage_6_point_report_and_coverage_ui() -> None
     assert "renderGovMapEmbed" in body
     assert "renderGovMapTileBasemap" in body
     assert "applyGovMapOverlayFilters" in body
-    assert "שכבות GovMap פעילות" in body
+    assert "קבוצות של שכבות GovMap" in body
     assert "מסנן בסיס המפה אינו פעיל במצב GovMap רשמי" in body
     assert 'loadDashboardGisMap = async (profile = "initial"' in body
     assert "params.set(\"municipality\", municipality)" in body
@@ -425,6 +395,17 @@ def test_rag_dashboard_gis_map_endpoint_defaults_to_govmap(monkeypatch: pytest.M
     assert {layer["alias"] for layer in payload["govmap"]["layer_filters"]} >= {"PARCEL_ALL", "bus_stops", "GASSTATIONS"}
     assert payload["govmap"]["default_visible_layers"] == ["neighborhoods_area"]
     assert payload["govmap"]["level"] == 8
+    assert payload["query"]["selected_area_radius_m"] == 300.0
+    assert payload["govmap"]["selected_area"]["feature_type"] == "address_radius_selected_area"
+    assert payload["govmap"]["selected_area"]["radius_m"] == 300.0
+    assert payload["govmap"]["selected_area"]["display_wkt"].startswith("POLYGON")
+    assert payload["govmap"]["selected_area"]["geometry"]["type"] == "Polygon"
+    assert payload["govmap"]["address_marker"]["feature_type"] == "address_marker"
+    assert payload["govmap"]["address_marker"]["display_wkt"].startswith("POINT")
+    assert payload["govmap"]["address_marker"]["house_display_wkt"].startswith("POLYGON")
+    assert payload["govmap"]["address_marker"]["geometry_kind"] == "house_marker"
+    assert payload["govmap"]["address_marker"]["geometry"]["type"] == "Point"
+    assert payload["govmap"]["neighborhood_boundary"] is None
     assert payload["query"]["center_x"] == 180428.96
     assert payload["query"]["center_y"] == 665728.35
     assert payload["query"]["center_source"] == "fallback_tel_aviv"
@@ -541,8 +522,8 @@ def test_ask_dashboard_page_is_wired_to_backend_mock_endpoint() -> None:
     assert 'class="mapProvenanceBadge" data-spatial-representation="schematic"' in body
     assert "dashboardRoot.dataset.mapSpatialRepresentation" in body
     assert "dashboardRoot.dataset.realGisAvailable" in body
-    assert 'const DASHBOARD_QUERY_ENDPOINT = "/api/ui/rag-dashboard/query"' in body
-    assert 'const DASHBOARD_EVIDENCE_ENDPOINT = "/api/ui/rag-dashboard/evidence"' in body
+    assert 'const DASHBOARD_QUERY_ENDPOINT = appUrl("/api/ui/rag-dashboard/query")' in body
+    assert 'const DASHBOARD_EVIDENCE_ENDPOINT = appUrl("/api/ui/rag-dashboard/evidence")' in body
     assert "DASHBOARD_QUERY_TIMEOUT_MS = 45000" in body
     assert 'class="filterCountBadge"' in body
     assert 'data-item-id="transport"' in body
@@ -566,12 +547,12 @@ def test_ask_dashboard_page_is_wired_to_backend_mock_endpoint() -> None:
     assert "fetch(DASHBOARD_QUERY_ENDPOINT" in body
     assert "renderDashboardFromEndpoint(data)" in body
     assert "openEvidencePreview" in body
-    assert 'const DASHBOARD_DATA_ENDPOINT = dashboardRoot?.dataset.dashboardEndpoint || "/api/ui/rag-dashboard/mock";' in body
+    assert 'const DASHBOARD_DATA_ENDPOINT = appUrl(dashboardRoot?.dataset.dashboardEndpoint || "/api/ui/rag-dashboard/mock")' in body
     assert "fetch(DASHBOARD_DATA_ENDPOINT" in body
     assert 'dashboardRoot.dataset.sourceStatus = "loaded"' in body
     assert "window.__municipalDashboardData = currentDashboardData" in body
     assert "window.__municipalDashboardState = dashboardState" in body
-    assert "DASHBOARD_INTERACTION_ENDPOINT = \"/api/ui/rag-dashboard/interaction\"" in body
+    assert 'DASHBOARD_INTERACTION_ENDPOINT = appUrl("/api/ui/rag-dashboard/interaction")' in body
     assert "applyDashboardInteraction(\"select_category\"" in body
     assert "applyDashboardInteraction(\"select_hot_topic\"" in body
     assert "applyDashboardInteraction(\"select_topic_tree_node\"" in body
@@ -636,7 +617,7 @@ def test_ask_dashboard_page_loads_backend_data_in_chromium(tmp_path) -> None:
         assert 'id="rag-dashboard"' in result.stdout
         assert 'data-source-status="loaded"' in result.stdout
         assert 'data-source-url="/api/ui/rag-dashboard/mock"' in result.stdout
-        assert "מה הוחלט לגבי תכנית רובע טו?" in result.stdout
+        assert CURRENT_QUESTION in result.stdout
         assert "נתוני לוח המחוונים נטענו מהשרת." in result.stdout
     finally:
         server.terminate()
@@ -648,16 +629,16 @@ def test_ask_dashboard_page_loads_backend_data_in_chromium(tmp_path) -> None:
 
 
 def test_rag_dashboard_evidence_endpoint_returns_artifact_native_evidence() -> None:
-    evidence = rag_dashboard_evidence("evidence_rova_tet_vav_protocol_1")
+    evidence = rag_dashboard_evidence("evidence_near_me_recent_decisions_1")
 
-    assert evidence["id"] == "evidence_rova_tet_vav_protocol_1"
+    assert evidence["id"] == "evidence_near_me_recent_decisions_1"
     assert evidence["source_type"] == "protocol"
-    assert evidence["source_title"] == "פרוטוקול מועצה 23.06.2024"
-    assert evidence["retrieval_artifact_id"] == "artifact_protocol_decision_unit_478"
-    assert evidence["artifact_kind"] == "decision_unit"
-    assert evidence["retrieval_set_id"] == "retrieval_set_rova_tet_vav_2024"
-    assert evidence["page_span"] == {"start": 7, "end": 7}
-    assert evidence["confidence_label"] == "גבוהה"
+    assert evidence["source_title"] == f"פרוטוקול תל אביב דיון בוועדת תכנון: איסוף החלטות סמוכות - {DEFAULT_TOPIC}"
+    assert evidence["retrieval_artifact_id"] == "artifact_near_me_recent_decisions_1"
+    assert evidence["artifact_kind"] == "agenda_item"
+    assert evidence["retrieval_set_id"] == "retrieval_set_near_me_recent_decisions_tel_aviv"
+    assert evidence["page_span"] == {"start": 3, "end": 3}
+    assert evidence["confidence_label"] == "בינונית"
 
 
 def test_rag_dashboard_interaction_updates_selection_state() -> None:
@@ -667,52 +648,91 @@ def test_rag_dashboard_interaction_updates_selection_state() -> None:
         RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_category", "id": "transport"}})
     )
     assert category_payload["state"]["selected_category_id"] == "transport"
+    assert category_payload["state"]["selected_topic_node_id"] == "topic_public_transport_budget_gap"
     assert category_payload["state"]["active_detail_drawer_mode"] == "category"
     assert next(row for row in category_payload["start_discovery_panel"]["categories"] if row["id"] == "transport")["selected"] is True
+    assert [row["id"] for row in category_payload["start_discovery_panel"]["hot_topics"]] == ["topic_public_transport_budget_gap", "topic_parking_and_roadwork_disruption"]
 
-    topic_payload = rag_dashboard_interaction(
-        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_hot_topic", "id": "topic_light_rail"}})
+    education_payload = rag_dashboard_interaction(
+        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_category", "id": "education"}})
     )
-    assert topic_payload["state"]["selected_topic_node_id"] == "topic_light_rail"
-    assert next(row for row in topic_payload["start_discovery_panel"]["hot_topics"] if row["id"] == "topic_light_rail")["selected"] is True
+    topic_payload = rag_dashboard_interaction(
+        RagDashboardInteractionRequest.model_validate({"state": education_payload["state"], "interaction": {"type": "select_hot_topic", "id": "topic_school_future_near_child"}})
+    )
+    assert topic_payload["state"]["current_question"] == CURRENT_QUESTION
+    assert topic_payload["state"]["selected_topic_node_id"] == "topic_school_future_near_child"
+    assert topic_payload["state"]["intent_resolution"]["geo"]["map_context"]["story"]["scenario_key"] == "school_future_near_child"
+    assert topic_payload["end_detail_drawer"]["question"] != CURRENT_QUESTION
+    assert next(row for row in topic_payload["start_discovery_panel"]["hot_topics"] if row["id"] == "topic_school_future_near_child")["selected"] is True
 
     tree_payload = rag_dashboard_interaction(
-        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_topic_tree_node", "id": "topic_master_plans"}})
+        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_topic_tree_node", "id": "topic_parcel_allocation_watch"}})
     )
-    assert tree_payload["state"]["selected_topic_node_id"] == "topic_master_plans"
+    assert tree_payload["state"]["selected_topic_node_id"] == "topic_parcel_allocation_watch"
+    assert tree_payload["state"]["intent_resolution"]["geo"]["map_context"]["story"]["scenario_key"] == "parcel_allocation_watch"
     assert tree_payload["state"]["active_detail_drawer_mode"] == "topicTree"
-    assert next(row for row in tree_payload["start_discovery_panel"]["focused_topic_tree_context"]["children"] if row["id"] == "topic_master_plans")["selected"] is True
+    assert next(row for row in tree_payload["start_discovery_panel"]["focused_topic_tree_context"]["children"] if row["id"] == "topic_parcel_allocation_watch")["selected"] is True
 
+    timeline_target = "event_near_me_recent_decisions_2024_06_24"
+    base_geo = base["state"]["intent_resolution"]["geo"]
     timeline_payload = rag_dashboard_interaction(
-        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_timeline_event", "id": "event_2024_07_02"}})
+        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_timeline_event", "id": timeline_target}})
     )
-    assert timeline_payload["state"]["selected_timeline_event_id"] == "event_2024_07_02"
-    assert timeline_payload["main_civic_workspace"]["timeline"]["selected_event_id"] == "event_2024_07_02"
-    assert next(row for row in timeline_payload["main_civic_workspace"]["timeline"]["events"] if row["id"] == "event_2024_07_02")["selected"] is True
+    assert timeline_payload["state"]["selected_timeline_event_id"] == timeline_target
+    assert timeline_payload["state"]["current_question"] == CURRENT_QUESTION
+    assert timeline_payload["main_civic_workspace"]["timeline"]["selected_event_id"] == timeline_target
+    assert next(row for row in timeline_payload["main_civic_workspace"]["timeline"]["events"] if row["id"] == timeline_target)["selected"] is True
+    assert timeline_payload["state"]["intent_resolution"]["geo"]["map_context"]["story"]["timeline_event_id"] == timeline_target
+    timeline_geo = timeline_payload["state"]["intent_resolution"]["geo"]
+    assert timeline_geo["focus_layer"] == base_geo["focus_layer"]
+    assert timeline_geo["govmap_layer_aliases"] == base_geo["govmap_layer_aliases"]
+    assert timeline_geo["map_context"]["progress"]["status"] == "green"
 
     map_payload = rag_dashboard_interaction(
-        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_map_entity", "id": "entity_rova_tet_vav_transit_route"}})
+        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_map_entity", "id": "entity_near_me_recent_decisions_resident_area"}})
     )
-    assert map_payload["state"]["selected_map_entity_id"] == "entity_rova_tet_vav_transit_route"
-    assert next(row for row in map_payload["main_civic_workspace"]["map"]["entities"] if row["id"] == "entity_rova_tet_vav_transit_route")["selected"] is True
+    assert map_payload["state"]["selected_map_entity_id"] == "entity_near_me_recent_decisions_resident_area"
+    assert next(row for row in map_payload["main_civic_workspace"]["map"]["entities"] if row["id"] == "entity_near_me_recent_decisions_resident_area")["selected"] is True
 
     evidence_payload = rag_dashboard_interaction(
-        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "open_evidence", "id": "evidence_rova_tet_vav_protocol_1"}})
+        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "open_evidence", "id": "evidence_near_me_recent_decisions_1"}})
     )
     assert evidence_payload["state"]["active_detail_drawer_mode"] == "evidencePreview"
-    assert evidence_payload["evidence_preview"]["id"] == "evidence_rova_tet_vav_protocol_1"
+    assert evidence_payload["evidence_preview"]["id"] == "evidence_near_me_recent_decisions_1"
+
+    selected_question = next(scenario["question"] for scenario in SCENARIOS if scenario["key"] == "school_future_near_child")
+    popular_payload = rag_dashboard_interaction(
+        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_popular_search", "id": selected_question}})
+    )
+    assert popular_payload["state"]["current_question"] == selected_question
+    assert popular_payload["state"]["municipality_id"] == "tel_aviv"
+    assert popular_payload["state"]["intent_resolution"]["geo"]["resident_layer_keys"]
+    assert "school" in popular_payload["state"]["intent_resolution"]["geo"]["govmap_layer_aliases"]
 
     filter_payload = rag_dashboard_interaction(
         RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "apply_filters", "id": "filters", "filters": {"category": "תחבורה"}}})
     )
     assert filter_payload["state"]["selected_category_id"] == "transport"
+    assert filter_payload["state"]["selected_topic_node_id"] == "topic_public_transport_budget_gap"
     assert next(row for row in filter_payload["start_discovery_panel"]["categories"] if row["id"] == "transport")["selected"] is True
+    assert [row["id"] for row in filter_payload["start_discovery_panel"]["hot_topics"]] == ["topic_public_transport_budget_gap", "topic_parking_and_roadwork_disruption"]
 
     filter_id_payload = rag_dashboard_interaction(
         RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "apply_filters", "id": "filters", "filters": {"category": "transport"}}})
     )
     assert filter_id_payload["state"]["selected_category_id"] == "transport"
     assert next(row for row in filter_id_payload["start_discovery_panel"]["categories"] if row["id"] == "transport")["selected"] is True
+
+    with pytest.raises(HTTPException) as hidden_topic_error:
+        rag_dashboard_interaction(
+            RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_hot_topic", "id": "topic_culture_accessibility_issue"}})
+        )
+    assert hidden_topic_error.value.status_code == 404
+
+    culture_payload = rag_dashboard_interaction(
+        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_category", "id": "culture"}})
+    )
+    assert [row["id"] for row in culture_payload["start_discovery_panel"]["hot_topics"]] == ["topic_sport_support_distribution", "topic_culture_accessibility_issue"]
 
 
 def test_rag_dashboard_interaction_rejects_unknown_ids() -> None:
@@ -730,11 +750,11 @@ def test_rag_dashboard_http_routes_are_exposed() -> None:
 
     mock_response = client.get("/api/ui/rag-dashboard/mock")
     assert mock_response.status_code == 200
-    assert mock_response.json()["state"]["selected_topic_node_id"] == "topic_rova_tet_vav_plan"
+    assert mock_response.json()["state"]["selected_topic_node_id"] == "topic_near_me_recent_decisions"
 
-    evidence_response = client.get("/api/ui/rag-dashboard/evidence/evidence_rova_tet_vav_protocol_1")
+    evidence_response = client.get("/api/ui/rag-dashboard/evidence/evidence_near_me_recent_decisions_1")
     assert evidence_response.status_code == 200
-    assert evidence_response.json()["id"] == "evidence_rova_tet_vav_protocol_1"
+    assert evidence_response.json()["id"] == "evidence_near_me_recent_decisions_1"
 
     missing_response = client.get("/api/ui/rag-dashboard/evidence/missing")
     assert missing_response.status_code == 404
@@ -742,10 +762,10 @@ def test_rag_dashboard_http_routes_are_exposed() -> None:
 
     interaction_response = client.post(
         "/api/ui/rag-dashboard/interaction",
-        json={"state": mock_response.json()["state"], "interaction": {"type": "select_timeline_event", "id": "event_2024_07_15"}},
+        json={"state": mock_response.json()["state"], "interaction": {"type": "select_timeline_event", "id": "event_near_me_recent_decisions_2024_07_16"}},
     )
     assert interaction_response.status_code == 200
-    assert interaction_response.json()["state"]["selected_timeline_event_id"] == "event_2024_07_15"
+    assert interaction_response.json()["state"]["selected_timeline_event_id"] == "event_near_me_recent_decisions_2024_07_16"
 
 
 def test_rag_dashboard_query_endpoint_adapts_ask_answer(monkeypatch) -> None:
@@ -792,6 +812,28 @@ def test_rag_dashboard_query_endpoint_adapts_ask_answer(monkeypatch) -> None:
     assert payload["main_civic_workspace"]["map"]["spatial_representation"] == "schematic"
     assert payload["main_civic_workspace"]["map"]["real_gis_available"] is False
     assert payload["main_civic_workspace"]["map"]["provenance"]["status"] == "schematic_only"
+
+
+def test_rag_dashboard_query_endpoint_returns_mikveh_gis_intent_when_answering_fails(monkeypatch) -> None:
+    def failing_run_ask(*, request, db):
+        raise HTTPException(status_code=503, detail="llm_unavailable")
+
+    monkeypatch.setattr(api_module, "_run_ask", failing_run_ask)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/ui/rag-dashboard/query",
+        json={"question": "מה הוחלט לגבי הקמה והפעלה של מקווה טהרה ברחוב ספיר ברובע י\"ז באשדוד?", "muni": "ashdod"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    validate_dashboard_payload(payload)
+    geo = payload["state"]["intent_resolution"]["geo"]
+    assert geo["intent"] == "public_service_facility_context"
+    assert geo["focus"]["address_query"] == "רחוב ספיר"
+    assert "mikve" in geo["govmap_layer_aliases"]
+    assert payload["state"]["selected_map_entity_id"] == "entity_gis_focus_place"
 
 
 def test_rag_dashboard_query_endpoint_returns_safe_error_state(monkeypatch) -> None:

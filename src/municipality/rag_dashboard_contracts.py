@@ -200,6 +200,7 @@ class TimelineEvent(StrictModel):
     selected: bool = False
     decision_ids: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
+    progress: dict[str, Any] | None = None
 
 
 class DashboardTimeline(StrictModel):
@@ -244,6 +245,8 @@ class DiscoveryRow(StrictModel):
     label: str
     count: int
     selected: bool = False
+    disabled: bool = False
+    disabled_reason: str | None = None
 
 
 class FocusedTopicNode(StrictModel):
@@ -251,6 +254,8 @@ class FocusedTopicNode(StrictModel):
     label: str
     count: int | None = None
     selected: bool = False
+    disabled: bool = False
+    disabled_reason: str | None = None
 
 
 class FocusedTopicTreeContext(StrictModel):
@@ -298,5 +303,6 @@ class RagDashboardPayload(StrictModel):
     end_detail_drawer: EndDetailDrawer
     contracts: DashboardContracts
     evidence: list[RagDashboardEvidence] = Field(default_factory=list)
+    gis_story_review: dict[str, Any] | None = None
     evidence_preview: RagDashboardEvidence | None = None
     interaction_result: dict[str, Any] | None = None

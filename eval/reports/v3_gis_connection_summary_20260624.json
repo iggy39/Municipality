@@ -1,0 +1,451 @@
+{
+  "schema_version": 1,
+  "layer_count": 16,
+  "layers": [
+    {
+      "layer_key": "neighborhoods_and_statistics",
+      "display_name_he": "שכונות, רובעים ואזורים סטטיסטיים",
+      "event_count": 227,
+      "connection_count": 262,
+      "ready_govmap_query_count": 244,
+      "blocked_govmap_query_count": 18,
+      "municipalities": {
+        "ashdod": 124,
+        "tel_aviv": 120,
+        "mock_unknown_municipality": 18
+      },
+      "linking_modes": {
+        "subject_event_layer_inference": 163,
+        "mock_municipality_context_completion": 57,
+        "named_facility_geocoding": 18,
+        "neighborhood_or_statistical_area": 16,
+        "citywide_context": 8
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 244,
+        "not_ready": 18
+      },
+      "govmap_aliases": [
+        "Neighborhood",
+        "STATISTIC_AREAS_2011",
+        "neighborhoods_area",
+        "soec",
+        "stat_area_2022"
+      ]
+    },
+    {
+      "layer_key": "public_buildings_assets",
+      "display_name_he": "מבני ציבור ונכסים עירוניים",
+      "event_count": 183,
+      "connection_count": 203,
+      "ready_govmap_query_count": 185,
+      "blocked_govmap_query_count": 18,
+      "municipalities": {
+        "tel_aviv": 105,
+        "ashdod": 80,
+        "mock_unknown_municipality": 18
+      },
+      "linking_modes": {
+        "subject_event_layer_inference": 116,
+        "mock_municipality_context_completion": 57,
+        "named_facility_geocoding": 30
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 185,
+        "not_ready": 18
+      },
+      "govmap_aliases": [
+        "public_institutions_survey"
+      ]
+    },
+    {
+      "layer_key": "public_transport_access",
+      "display_name_he": "תחבורה ציבורית ונגישות",
+      "event_count": 141,
+      "connection_count": 157,
+      "ready_govmap_query_count": 157,
+      "blocked_govmap_query_count": 0,
+      "municipalities": {
+        "ashdod": 92,
+        "tel_aviv": 65
+      },
+      "linking_modes": {
+        "subject_event_layer_inference": 139,
+        "named_facility_geocoding": 18
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 157
+      },
+      "govmap_aliases": [
+        "bus_stops",
+        "neta_lines",
+        "nta_metro_lines",
+        "nta_metro_stations",
+        "ravkav",
+        "red_line_sta",
+        "train_statoins"
+      ]
+    },
+    {
+      "layer_key": "municipal_boundaries",
+      "display_name_he": "גבולות רשות ותחומי אחריות",
+      "event_count": 149,
+      "connection_count": 149,
+      "ready_govmap_query_count": 131,
+      "blocked_govmap_query_count": 18,
+      "municipalities": {
+        "tel_aviv": 85,
+        "ashdod": 46,
+        "mock_unknown_municipality": 18
+      },
+      "linking_modes": {
+        "subject_event_layer_inference": 84,
+        "mock_municipality_context_completion": 65
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 131,
+        "not_ready": 18
+      },
+      "govmap_aliases": [
+        "clusterregion",
+        "geographic_committee_border",
+        "local_committees",
+        "regional_authorities"
+      ]
+    },
+    {
+      "layer_key": "demographic_equity",
+      "display_name_he": "דמוגרפיה, חברה ושוויון שירותים",
+      "event_count": 130,
+      "connection_count": 130,
+      "ready_govmap_query_count": 130,
+      "blocked_govmap_query_count": 0,
+      "municipalities": {
+        "ashdod": 69,
+        "tel_aviv": 61
+      },
+      "linking_modes": {
+        "subject_event_layer_inference": 130
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 130
+      },
+      "govmap_aliases": [
+        "STATISTIC_AREAS_2011",
+        "sex_age_religion",
+        "soec",
+        "stat_area_2022",
+        "workinghours_transport"
+      ]
+    },
+    {
+      "layer_key": "playgrounds_youth_space",
+      "display_name_he": "גני משחקים, פארקים ומרחבי נוער",
+      "event_count": 104,
+      "connection_count": 105,
+      "ready_govmap_query_count": 105,
+      "blocked_govmap_query_count": 0,
+      "municipalities": {
+        "ashdod": 65,
+        "tel_aviv": 40
+      },
+      "linking_modes": {
+        "subject_event_layer_inference": 103,
+        "citywide_context": 2
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 105
+      },
+      "govmap_aliases": [
+        "teva_ironi",
+        "teva_ironi_nek"
+      ]
+    },
+    {
+      "layer_key": "education_facilities",
+      "display_name_he": "בתי ספר וגני ילדים",
+      "event_count": 89,
+      "connection_count": 89,
+      "ready_govmap_query_count": 89,
+      "blocked_govmap_query_count": 0,
+      "municipalities": {
+        "ashdod": 62,
+        "tel_aviv": 27
+      },
+      "linking_modes": {
+        "subject_event_layer_inference": 89
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 89
+      },
+      "govmap_aliases": [
+        "edu_setl_board_schools",
+        "edu_setl_schools",
+        "kids_g",
+        "layer_210691",
+        "layer_210693",
+        "school"
+      ]
+    },
+    {
+      "layer_key": "resident_location",
+      "display_name_he": "כתובות ונקודת תושב",
+      "event_count": 83,
+      "connection_count": 83,
+      "ready_govmap_query_count": 65,
+      "blocked_govmap_query_count": 18,
+      "municipalities": {
+        "ashdod": 40,
+        "tel_aviv": 25,
+        "mock_unknown_municipality": 18
+      },
+      "linking_modes": {
+        "mock_municipality_context_completion": 57,
+        "subject_event_layer_inference": 26
+      },
+      "govmap_query_kinds": {
+        "govmap_search_only": 65,
+        "not_ready": 18
+      },
+      "govmap_aliases": []
+    },
+    {
+      "layer_key": "planning_land_use",
+      "display_name_he": "תכניות, ייעודי קרקע ומגרשי תב\"ע",
+      "event_count": 50,
+      "connection_count": 75,
+      "ready_govmap_query_count": 75,
+      "blocked_govmap_query_count": 0,
+      "municipalities": {
+        "tel_aviv": 51,
+        "ashdod": 24
+      },
+      "linking_modes": {
+        "subject_event_layer_inference": 40,
+        "named_facility_geocoding": 30,
+        "explicit_cadaster_reference": 5
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 70,
+        "govmap_layer_attribute_lookup": 5
+      },
+      "govmap_aliases": [
+        "add_projects_ur_muchraz",
+        "mehoziot_app_taba",
+        "mehoziot_app_yk",
+        "michrazim",
+        "michrazim_haluka",
+        "retzefmigrashim",
+        "tabaot",
+        "talar_prep",
+        "tama70",
+        "urbanrenewal_settlment"
+      ]
+    },
+    {
+      "layer_key": "culture_sport_leisure",
+      "display_name_he": "תרבות, ספורט ופנאי",
+      "event_count": 57,
+      "connection_count": 65,
+      "ready_govmap_query_count": 65,
+      "blocked_govmap_query_count": 0,
+      "municipalities": {
+        "tel_aviv": 33,
+        "ashdod": 32
+      },
+      "linking_modes": {
+        "subject_event_layer_inference": 35,
+        "named_facility_geocoding": 30
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 65
+      },
+      "govmap_aliases": [
+        "atractions",
+        "fieldschool",
+        "sport"
+      ]
+    },
+    {
+      "layer_key": "parcels_cadaster",
+      "display_name_he": "גושים, חלקות ובעלות",
+      "event_count": 45,
+      "connection_count": 45,
+      "ready_govmap_query_count": 45,
+      "blocked_govmap_query_count": 0,
+      "municipalities": {
+        "tel_aviv": 32,
+        "ashdod": 13
+      },
+      "linking_modes": {
+        "subject_event_layer_inference": 40,
+        "explicit_cadaster_reference": 5
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 40,
+        "govmap_layer_attribute_lookup": 5
+      },
+      "govmap_aliases": [
+        "PARCEL_ALL",
+        "SUB_GUSH_ALL",
+        "cadaster_notes",
+        "parcel_all",
+        "parcel_ownership_new",
+        "sub_gush_all",
+        "tazar"
+      ]
+    },
+    {
+      "layer_key": "roads_parking_public_works",
+      "display_name_he": "כבישים, חניה ועבודות בעיר",
+      "event_count": 28,
+      "connection_count": 31,
+      "ready_govmap_query_count": 31,
+      "blocked_govmap_query_count": 0,
+      "municipalities": {
+        "tel_aviv": 24,
+        "ashdod": 7
+      },
+      "linking_modes": {
+        "named_facility_geocoding": 18,
+        "subject_event_layer_inference": 8,
+        "citywide_context": 5
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 31
+      },
+      "govmap_aliases": [
+        "districts_new",
+        "ezorim",
+        "layer_156547",
+        "layer_211867",
+        "layer_211883",
+        "neta_segment",
+        "zchut_derech"
+      ]
+    },
+    {
+      "layer_key": "emergency_security_services",
+      "display_name_he": "חירום, ביטחון והצלה",
+      "event_count": 25,
+      "connection_count": 25,
+      "ready_govmap_query_count": 25,
+      "blocked_govmap_query_count": 0,
+      "municipalities": {
+        "ashdod": 24,
+        "tel_aviv": 1
+      },
+      "linking_modes": {
+        "subject_event_layer_inference": 21,
+        "citywide_context": 4
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 25
+      },
+      "govmap_aliases": [
+        "bombshelters",
+        "emergencyfuelstations",
+        "fire_stations",
+        "layer_210766",
+        "maagalbldg",
+        "maagalroads",
+        "mada_stations",
+        "police_yehida_location",
+        "situr_ironi"
+      ]
+    },
+    {
+      "layer_key": "environment_sanitation",
+      "display_name_he": "סביבה, פסולת, אוויר וניקיון",
+      "event_count": 16,
+      "connection_count": 16,
+      "ready_govmap_query_count": 16,
+      "blocked_govmap_query_count": 0,
+      "municipalities": {
+        "ashdod": 8,
+        "tel_aviv": 8
+      },
+      "linking_modes": {
+        "citywide_context": 8,
+        "subject_event_layer_inference": 8
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 16
+      },
+      "govmap_aliases": [
+        "aq_realtime",
+        "contaminated_soils",
+        "divuchim2021",
+        "hof_naki_update",
+        "hof_polygon",
+        "kartoniot",
+        "layer_211888",
+        "layer_227909",
+        "layer_227988",
+        "layer_230865",
+        "orange_trash",
+        "sviva_nitur_air",
+        "svivanoiseday",
+        "svivanoisenight"
+      ]
+    },
+    {
+      "layer_key": "welfare_health_services",
+      "display_name_he": "רווחה, בריאות ושירותים לאוכלוסיות",
+      "event_count": 12,
+      "connection_count": 12,
+      "ready_govmap_query_count": 12,
+      "blocked_govmap_query_count": 0,
+      "municipalities": {
+        "ashdod": 9,
+        "tel_aviv": 3
+      },
+      "linking_modes": {
+        "subject_event_layer_inference": 12
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 12
+      },
+      "govmap_aliases": [
+        "btl",
+        "clinicinsurance",
+        "clinics",
+        "defi",
+        "emergancy_hospitals",
+        "mechozotrevacha",
+        "mosdot_griatric",
+        "pharmacies",
+        "shil",
+        "tipat_halav",
+        "yad_sarah",
+        "young_ctr"
+      ]
+    },
+    {
+      "layer_key": "drainage_water_sewer",
+      "display_name_he": "ניקוז, מים וביוב",
+      "event_count": 4,
+      "connection_count": 4,
+      "ready_govmap_query_count": 4,
+      "blocked_govmap_query_count": 0,
+      "municipalities": {
+        "ashdod": 4
+      },
+      "linking_modes": {
+        "citywide_context": 4
+      },
+      "govmap_query_kinds": {
+        "geocode_then_spatial_layer_query": 4
+      },
+      "govmap_aliases": [
+        "igudan_pipex",
+        "layer_210700",
+        "layer_210763",
+        "pipelines",
+        "purified_drainage_pipes",
+        "purified_drainage_ponds",
+        "water_flow"
+      ]
+    }
+  ]
+}
