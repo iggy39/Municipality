@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 
@@ -3578,6 +3582,96 @@ def test_topic_subject_v3_exports_raw_metadata_blocks_and_research_records(tmp_p
     assert output_paths["v3_research_events_subjects_json"] == str(tmp_path / "v3_research_events_subjects.json")
 
 
+def test_topic_subject_v3_event_identity_ignores_model_generated_date_key() -> None:
+    artifact = _artifact_dataclass(
+        real_text="בתאריך 29.12.2025 ההסתייגות היא בנושא גני ילדים.",
+        topic_label_he="גני ילדים",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+    base_payload = {
+        "is_event": True,
+        "action_type_he": "הסתייגות",
+        "matter_he": "גני ילדים",
+        "outcome_is_decision": False,
+    }
+    dated_payload = {**base_payload, "event_key_he": "הסתייגות_גני_ילדים_20251229"}
+    clean_payload = {**base_payload, "event_key_he": "הסתייגות_גני_ילדים"}
+
+    dated_key = topic_subjects_module.topic_subject_v3_event_group_key(context=context, event_payload=dated_payload)
+    clean_key = topic_subjects_module.topic_subject_v3_event_group_key(context=context, event_payload=clean_payload)
+
+    assert dated_key == clean_key
+    assert "20251229" not in dated_key
+    assert topic_subjects_module.topic_subject_v3_event_id(context=context, event_payload=dated_payload) == topic_subjects_module.topic_subject_v3_event_id(context=context, event_payload=clean_payload)
+
+
+def test_persist_topic_subject_v3_result_saves_metadata_blocks(monkeypatch) -> None:
+    raw_text = "בתאריך 12.05.2026 אבקש לאשר שיפוץ ברחוב הרצל."
+    artifact = _artifact_dataclass(real_text=raw_text, topic_label_he="שיפוץ רחובות", source_ordinal=7)
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+    event = _v3_event_result(context=context, action_type="אישור", matter="שיפוץ ברחוב הרצל", confidence=0.91, outcome_quote="מאושר שיפוץ ברחוב הרצל")
+    captured: list[SimpleNamespace] = []
+
+    class CapturedModel(SimpleNamespace):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+
+    class FakeSession:
+        def add(self, row):  # type: ignore[no-untyped-def]
+            captured.append(row)
+
+        def flush(self) -> None:
+            return None
+
+    monkeypatch.setattr(topic_subjects_module, "TopicSubjectV3Event", CapturedModel)
+    monkeypatch.setattr(topic_subjects_module, "TopicSubjectV3RowQuality", CapturedModel)
+
+    topic_subjects_module.persist_topic_subject_v3_result(
+        session=FakeSession(),
+        run=SimpleNamespace(id=123, municipality_slug="test"),
+        events=[event],
+        row_quality_rows=[event.row_quality],
+    )
+
+    event_metadata = json.loads(captured[0].metadata_json)
+    row_metadata = json.loads(captured[1].metadata_json)
+
+    assert event_metadata["model_event_key_he"]
+    assert "2026" not in event_metadata["canonical_event_group_key"]
+    assert event_metadata["general_text_metadata"]["raw_text_before_cleaning_he"] == raw_text
+    assert event_metadata["event_metadata"]["action_type_he"] == "אישור"
+    assert event_metadata["subject_metadata"]["matter_he"] == "שיפוץ ברחוב הרצל"
+    assert event_metadata["raw_date_mentions"][0]["raw_text"] == "12.05.2026"
+    assert any("ברחוב הרצל" in item["raw_text"] for item in event_metadata["raw_geography_mentions"])
+    assert event_metadata["event_source_rows"][0]["artifact_id"] == artifact.artifact_id
+    assert row_metadata["general_text_metadata"]["source_ordinal"] == 7
+    assert row_metadata["raw_text_before_cleaning_he"] == raw_text
+    assert any("ברחוב הרצל" in item["raw_text"] for item in row_metadata["raw_geography_mentions"])
+
+
+def test_benchmark_outputs_include_research_events_subjects(tmp_path) -> None:
+    benchmark_module = _benchmark_topic_subject_v3_models_module()
+    raw_text = "בתאריך 12.05.2026 אבקש לאשר שיפוץ ברחוב הרצל."
+    artifact = _artifact_dataclass(real_text=raw_text, topic_label_he="שיפוץ רחובות", source_ordinal=7)
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+    event = _v3_event_result(context=context, action_type="אישור", matter="שיפוץ ברחוב הרצל", confidence=0.91, outcome_quote="מאושר שיפוץ ברחוב הרצל")
+
+    benchmark_module._write_outputs(
+        output_dir=tmp_path,
+        events=[event],
+        quality_rows=[event.row_quality],
+        samples=["test:7"],
+        selection_summary=[{"selected_rows": 1}],
+        model="primary",
+        small_model="primary",
+    )
+    records = json.loads((tmp_path / "v3_research_events_subjects.json").read_text(encoding="utf-8"))
+
+    assert records[0]["artifact_id"] == artifact.artifact_id
+    assert records[0]["general_text_metadata"]["date_mentions"][0]["raw_text"] == "12.05.2026"
+    assert any("ברחוב הרצל" in item["raw_text"] for item in records[0]["general_text_metadata"]["geography_mentions"])
+
+
 def test_topic_subject_v3_quote_window_keeps_objection_cue_after_matter() -> None:
     quote = topic_subjects_module.topic_subject_v3_quote_window_around_hint(
         text="סעיף81213/786/6 סעיף תקציבי שח' בתקציב המשפחתונים לנשים עובדות200,000 ההסתייגות היא בעניין קיצוץ של להלן",
@@ -3918,6 +4012,17 @@ def _v3_event_result(
         failure_reasons=[],
         row_quality=row_quality,
     )
+
+
+def _benchmark_topic_subject_v3_models_module():
+    module_path = Path("/Users/igor/Desktop/projects/Municipality/scripts/benchmark_topic_subject_v3_models.py")
+    spec = importlib.util.spec_from_file_location("benchmark_topic_subject_v3_models_test", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _artifact_dataclass(*, real_text: str, topic_label_he: str, artifact_id: str = "artifact-test", source_ordinal: int = 1, metadata: dict | None = None) -> TopicDecisionArtifact:

@@ -24,12 +24,14 @@ from municipality.topic_subjects import (  # noqa: E402
     OllamaTopicSubjectV3Client,
     PROVENANCE_V3,
     TopicSubjectResearchConfig,
+    TopicSubjectV3ResearchResult,
     build_topic_subject_v3_event_contexts,
     load_accepted_topic_artifacts,
     process_topic_subject_v3_context,
     topic_subject_v3_all_rows_report_markdown,
     topic_subject_v3_event_to_dict,
     topic_subject_v3_quality_report_markdown,
+    topic_subject_v3_research_records,
     topic_subject_v3_row_quality_to_dict,
 )
 from municipality.topic_decisions import DEFAULT_DICTA_MODEL, DEFAULT_OLLAMA_BASE_URL, TopicDecisionArtifact  # noqa: E402
@@ -532,8 +534,11 @@ def _write_outputs(
     model: str,
     small_model: str,
 ) -> None:
+    artifacts = [row.artifact for row in quality_rows]
+    research_result = TopicSubjectV3ResearchResult(run_id=None, topic_tree={}, artifacts=artifacts, events=events, row_quality_rows=quality_rows, elapsed_seconds=0.0)
     (output_dir / "v3_events.json").write_text(json.dumps([topic_subject_v3_event_to_dict(event) for event in events], ensure_ascii=False, indent=2), encoding="utf-8")
     (output_dir / "v3_quality_report.json").write_text(json.dumps([topic_subject_v3_row_quality_to_dict(row) for row in quality_rows], ensure_ascii=False, indent=2), encoding="utf-8")
+    (output_dir / "v3_research_events_subjects.json").write_text(json.dumps(topic_subject_v3_research_records(research_result), ensure_ascii=False, indent=2), encoding="utf-8")
     (output_dir / "v3_quality_report.md").write_text(topic_subject_v3_quality_report_markdown(quality_rows), encoding="utf-8")
     (output_dir / "v3_all_rows_report.md").write_text(topic_subject_v3_all_rows_report_markdown(quality_rows), encoding="utf-8")
     (output_dir / "v3_summary.json").write_text(

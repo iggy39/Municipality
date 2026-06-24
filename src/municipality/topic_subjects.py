@@ -2029,6 +2029,23 @@ def topic_subject_v3_subject_metadata(event_payload: dict[str, Any], fallback_te
     return metadata
 
 
+def topic_subject_v3_artifact_metadata_blocks(*, artifact: TopicDecisionArtifact, event_payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_provenance": topic_subject_v3_source_paths(artifact),
+        "source_document_version_id": artifact.source_document_version_id,
+        "source_ordinal": artifact.source_ordinal,
+        "page_span": {"start": artifact.start_page, "end": artifact.end_page},
+        "raw_date_mentions": topic_subject_v3_raw_date_mentions(artifact.real_text),
+        "raw_geography_mentions": topic_subject_v3_geography_mentions(artifact.real_text),
+        "general_text_metadata": topic_subject_v3_general_text_metadata(artifact),
+        "event_metadata": topic_subject_v3_event_metadata(event_payload, artifact.real_text),
+        "subject_metadata": topic_subject_v3_subject_metadata(event_payload, artifact.real_text),
+        "raw_text_before_cleaning_he": artifact.real_text,
+        "full_source_text_he": artifact.real_text,
+        "corrected_text_he": corrected_hebrew_text(artifact.real_text),
+    }
+
+
 def topic_subject_v3_upstream_subject_hint(artifact: TopicDecisionArtifact) -> dict[str, Any]:
     artifact_metadata = topic_subject_v3_artifact_metadata(artifact)
     step4_item = artifact_metadata.get("step4_item") if isinstance(artifact_metadata.get("step4_item"), dict) else {}
@@ -3924,9 +3941,9 @@ def topic_subject_v3_judge_action_disagreement_needs_review(*, event_payload: di
 
 
 def topic_subject_v3_event_group_key(*, context: TopicSubjectV3EventContext, event_payload: dict[str, Any]) -> str:
-    explicit = compact_text(event_payload.get("event_key_he"))
-    if explicit:
-        return normalize_for_search(explicit)
+    # Model-generated event_key_he is useful debug text, but it often absorbs
+    # protocol dates, page numbers, or section numbers. Event identity must be
+    # based on the extracted municipal action and matter instead.
     parts = [
         event_payload.get("action_type_he"),
         event_payload.get("other_action_type_he"),
@@ -3934,6 +3951,9 @@ def topic_subject_v3_event_group_key(*, context: TopicSubjectV3EventContext, eve
         event_payload.get("matter_he"),
         event_payload.get("subject_summary_he"),
     ]
+    if bool(event_payload.get("outcome_is_decision")):
+        outcome = event_payload.get("outcome") if isinstance(event_payload.get("outcome"), dict) else {}
+        parts.extend([outcome.get("outcome_type"), outcome.get("outcome_label_he")])
     key = normalize_for_search(" | ".join(compact_text(part) for part in parts if compact_text(part)))
     return key or normalize_for_search(context.target_artifact.artifact_id)
 
@@ -4573,6 +4593,13 @@ def persist_topic_subject_v3_result(
                     "context_artifact_ids": [row.artifact_id for row in event.context.rows],
                     "upstream_subject_hint_policy": "strong_context_hint_only_not_source_evidence",
                     "upstream_subject_hint": topic_subject_v3_upstream_subject_hint(event.context.target_artifact),
+                    **topic_subject_v3_artifact_metadata_blocks(artifact=artifact, event_payload=payload),
+                    "anchor_source_text_he": artifact.real_text,
+                    "anchor_raw_text_before_cleaning_he": artifact.real_text,
+                    "full_source_text_he": topic_subject_v3_full_event_text(event),
+                    "event_source_rows": topic_subject_v3_event_source_rows(event),
+                    "model_event_key_he": compact_text(payload.get("event_key_he")),
+                    "canonical_event_group_key": topic_subject_v3_event_group_key(context=event.context, event_payload=payload),
                 },
                 ensure_ascii=False,
             ),
@@ -4614,7 +4641,13 @@ def persist_topic_subject_v3_result(
                 ground_truth_he=row_quality.ground_truth_he,
                 reason_for_failure=row_quality.reason_for_failure or None,
                 quality_status=row_quality.quality_status,
-                metadata_json=json.dumps(row_quality.metadata, ensure_ascii=False),
+                metadata_json=json.dumps(
+                    {
+                        **row_quality.metadata,
+                        **topic_subject_v3_artifact_metadata_blocks(artifact=artifact, event_payload=row_quality.model_prediction),
+                    },
+                    ensure_ascii=False,
+                ),
             )
         )
     session.flush()
