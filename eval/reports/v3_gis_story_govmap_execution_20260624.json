@@ -1,0 +1,2357 @@
+{
+  "source": {
+    "story_count": 1,
+    "link_count": 259,
+    "live_execution": true,
+    "max_queries_per_story": 8,
+    "radius_m": 3000.0
+  },
+  "provider": "govmap",
+  "status_counts": {
+    "loaded_real_geometry": 4
+  },
+  "stories": [
+    {
+      "story_id": "story_77c58c0747fb9c9a",
+      "title_he": "תרבות, ספורט ופנאי: לאומנויות, סופה, למעלה",
+      "municipality_slug": "ashdod",
+      "traffic_light": "red",
+      "query_count": 4,
+      "candidate_plan_count": 4,
+      "queries": [
+        {
+          "event_id": "topic_subject_v3_event_acbc990cd8c0cf95",
+          "artifact_id": "json_900000_47_s0007_01_d27dd6d6d6c5",
+          "layer_key": "public_buildings_assets",
+          "layer_display_name_he": "מבני ציבור ונכסים עירוניים",
+          "candidate_confidence_label": "medium",
+          "search_text": "המשכן לאומנויות הבמה אשדוד",
+          "query_kind": "geocode_then_spatial_layer_query",
+          "map_layer_aliases": [
+            "public_institutions_survey"
+          ],
+          "real_gis_query": {
+            "provider": "govmap",
+            "status": "ready",
+            "executable": true,
+            "query_kind": "geocode_then_spatial_layer_query",
+            "blocked_reasons": [],
+            "municipality_slug": "ashdod",
+            "municipality_label_he": "אשדוד",
+            "search_text": "המשכן לאומנויות הבמה אשדוד",
+            "alternate_search_texts": [
+              "המשכן לאומנויות הבמה ashdod",
+              "ashdod"
+            ],
+            "search_datatypes": [
+              "address",
+              "street",
+              "settlement"
+            ],
+            "map_layer_aliases": [
+              "public_institutions_survey"
+            ],
+            "endpoints": [
+              {
+                "method": "POST",
+                "url": "https://www.govmap.gov.il/api/search-service/api-search"
+              },
+              {
+                "method": "POST",
+                "url": "https://www.govmap.gov.il/api/spatial-analysis/layer-features-by-location"
+              }
+            ],
+            "payload_templates": {
+              "search": {
+                "searchText": "המשכן לאומנויות הבמה אשדוד",
+                "language": "he",
+                "maxResults": 5,
+                "isAccurate": true,
+                "layers": [
+                  "address",
+                  "street",
+                  "settlement"
+                ],
+                "apiKey": "${GOVMAP_API_KEY}"
+              },
+              "search_fallbacks": [
+                {
+                  "searchText": "המשכן לאומנויות הבמה ashdod",
+                  "language": "he",
+                  "maxResults": 5,
+                  "isAccurate": true,
+                  "layers": [
+                    "address",
+                    "street",
+                    "settlement"
+                  ],
+                  "apiKey": "${GOVMAP_API_KEY}"
+                },
+                {
+                  "searchText": "ashdod",
+                  "language": "he",
+                  "maxResults": 5,
+                  "isAccurate": true,
+                  "layers": [
+                    "address",
+                    "street",
+                    "settlement"
+                  ],
+                  "apiKey": "${GOVMAP_API_KEY}"
+                }
+              ],
+              "features_by_location_after_search": {
+                "apiToken": "${GOVMAP_API_KEY}",
+                "data": {
+                  "geometry": "POINT(${itm_x} ${itm_y})",
+                  "radius": 3000,
+                  "layers": [
+                    {
+                      "name": "public_institutions_survey",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "execution_note_he": "אפשר להריץ חיפוש GovMap, אך מקור המיקום/השכבה עדיין מסומן כהסקה או מוקאפ ולכן התוצאה חייבת אימות ידני."
+          },
+          "status": "loaded_real_geometry",
+          "center": {
+            "x": 167655.36,
+            "y": 635701.63,
+            "source_text": "ashdod",
+            "search_scope": "unfiltered",
+            "provider": "govmap_search",
+            "match_quality": "alternate_unfiltered_geocode"
+          },
+          "center_source": "govmap_search",
+          "geocode_match_quality": "alternate_unfiltered_geocode",
+          "geocode_provider": "govmap_search",
+          "feature_count": 12,
+          "features": [
+            {
+              "layer_alias": "public_institutions_survey",
+              "id": "33",
+              "attributes": {
+                "objectid": 33
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "public_institutions_survey",
+              "id": "38",
+              "attributes": {
+                "objectid": 38
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "public_institutions_survey",
+              "id": "49",
+              "attributes": {
+                "objectid": 49
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "public_institutions_survey",
+              "id": "575",
+              "attributes": {
+                "objectid": 575
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "public_institutions_survey",
+              "id": "664",
+              "attributes": {
+                "objectid": 664
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "public_institutions_survey",
+              "id": "675",
+              "attributes": {
+                "objectid": 675
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "public_institutions_survey",
+              "id": "703",
+              "attributes": {
+                "objectid": 703
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "public_institutions_survey",
+              "id": "824",
+              "attributes": {
+                "objectid": 824
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "public_institutions_survey",
+              "id": "828",
+              "attributes": {
+                "objectid": 828
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "public_institutions_survey",
+              "id": "862",
+              "attributes": {
+                "objectid": 862
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "public_institutions_survey",
+              "id": "887",
+              "attributes": {
+                "objectid": 887
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "public_institutions_survey",
+              "id": "896",
+              "attributes": {
+                "objectid": 896
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            }
+          ],
+          "search_attempts": [
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "ashdod",
+              "search_scope": "unfiltered",
+              "status": "found",
+              "result_count": 10000
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה אשדוד",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה אשדוד, ישראל",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה אשדוד, Israel",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה אשדוד",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה אשדוד, ישראל",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה אשדוד, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה אשדוד",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה אשדוד, ישראל",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה אשדוד, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה אשדוד",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה אשדוד, ישראל",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה אשדוד, Israel",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה ashdod",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה ashdod, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה ashdod",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה ashdod, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה ashdod",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה ashdod, ישראל",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה ashdod",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה ashdod, ישראל",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            }
+          ]
+        },
+        {
+          "event_id": "topic_subject_v3_event_acbc990cd8c0cf95",
+          "artifact_id": "json_900000_47_s0007_01_d27dd6d6d6c5",
+          "layer_key": "culture_sport_leisure",
+          "layer_display_name_he": "תרבות, ספורט ופנאי",
+          "candidate_confidence_label": "medium",
+          "search_text": "המשכן לאומנויות הבמה אשדוד",
+          "query_kind": "geocode_then_spatial_layer_query",
+          "map_layer_aliases": [
+            "sport",
+            "atractions",
+            "fieldschool"
+          ],
+          "real_gis_query": {
+            "provider": "govmap",
+            "status": "ready",
+            "executable": true,
+            "query_kind": "geocode_then_spatial_layer_query",
+            "blocked_reasons": [],
+            "municipality_slug": "ashdod",
+            "municipality_label_he": "אשדוד",
+            "search_text": "המשכן לאומנויות הבמה אשדוד",
+            "alternate_search_texts": [
+              "המשכן לאומנויות הבמה ashdod",
+              "ashdod"
+            ],
+            "search_datatypes": [
+              "address",
+              "street",
+              "settlement"
+            ],
+            "map_layer_aliases": [
+              "sport",
+              "atractions",
+              "fieldschool"
+            ],
+            "endpoints": [
+              {
+                "method": "POST",
+                "url": "https://www.govmap.gov.il/api/search-service/api-search"
+              },
+              {
+                "method": "POST",
+                "url": "https://www.govmap.gov.il/api/spatial-analysis/layer-features-by-location"
+              }
+            ],
+            "payload_templates": {
+              "search": {
+                "searchText": "המשכן לאומנויות הבמה אשדוד",
+                "language": "he",
+                "maxResults": 5,
+                "isAccurate": true,
+                "layers": [
+                  "address",
+                  "street",
+                  "settlement"
+                ],
+                "apiKey": "${GOVMAP_API_KEY}"
+              },
+              "search_fallbacks": [
+                {
+                  "searchText": "המשכן לאומנויות הבמה ashdod",
+                  "language": "he",
+                  "maxResults": 5,
+                  "isAccurate": true,
+                  "layers": [
+                    "address",
+                    "street",
+                    "settlement"
+                  ],
+                  "apiKey": "${GOVMAP_API_KEY}"
+                },
+                {
+                  "searchText": "ashdod",
+                  "language": "he",
+                  "maxResults": 5,
+                  "isAccurate": true,
+                  "layers": [
+                    "address",
+                    "street",
+                    "settlement"
+                  ],
+                  "apiKey": "${GOVMAP_API_KEY}"
+                }
+              ],
+              "features_by_location_after_search": {
+                "apiToken": "${GOVMAP_API_KEY}",
+                "data": {
+                  "geometry": "POINT(${itm_x} ${itm_y})",
+                  "radius": 3000,
+                  "layers": [
+                    {
+                      "name": "sport",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "atractions",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "fieldschool",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "execution_note_he": "אפשר להריץ חיפוש GovMap, אך מקור המיקום/השכבה עדיין מסומן כהסקה או מוקאפ ולכן התוצאה חייבת אימות ידני."
+          },
+          "status": "loaded_real_geometry",
+          "center": {
+            "x": 167655.36,
+            "y": 635701.63,
+            "source_text": "ashdod",
+            "search_scope": "unfiltered",
+            "provider": "govmap_search",
+            "match_quality": "alternate_unfiltered_geocode"
+          },
+          "center_source": "govmap_search",
+          "geocode_match_quality": "alternate_unfiltered_geocode",
+          "geocode_provider": "govmap_search",
+          "feature_count": 12,
+          "features": [
+            {
+              "layer_alias": "sport",
+              "id": "68864305",
+              "attributes": {
+                "objectid": 68864305
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "sport",
+              "id": "68864369",
+              "attributes": {
+                "objectid": 68864369
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "sport",
+              "id": "68864385",
+              "attributes": {
+                "objectid": 68864385
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "sport",
+              "id": "68864401",
+              "attributes": {
+                "objectid": 68864401
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "sport",
+              "id": "68864529",
+              "attributes": {
+                "objectid": 68864529
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "sport",
+              "id": "68864545",
+              "attributes": {
+                "objectid": 68864545
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "sport",
+              "id": "68864609",
+              "attributes": {
+                "objectid": 68864609
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "sport",
+              "id": "68864625",
+              "attributes": {
+                "objectid": 68864625
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "sport",
+              "id": "68864641",
+              "attributes": {
+                "objectid": 68864641
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "sport",
+              "id": "68864705",
+              "attributes": {
+                "objectid": 68864705
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "sport",
+              "id": "68864721",
+              "attributes": {
+                "objectid": 68864721
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "sport",
+              "id": "68864737",
+              "attributes": {
+                "objectid": 68864737
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            }
+          ],
+          "search_attempts": [
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "ashdod",
+              "search_scope": "unfiltered",
+              "status": "found",
+              "result_count": 10000
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה אשדוד",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה אשדוד, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה אשדוד, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה אשדוד",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה אשדוד, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה אשדוד, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה אשדוד",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה אשדוד, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה אשדוד, Israel",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה אשדוד",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה אשדוד, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה אשדוד, Israel",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה ashdod",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה ashdod, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה ashdod",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה ashdod, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה ashdod",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה ashdod, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה ashdod, Israel",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה ashdod",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה ashdod, ישראל",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            }
+          ]
+        },
+        {
+          "event_id": "topic_subject_v3_event_acbc990cd8c0cf95",
+          "artifact_id": "json_900000_47_s0007_01_d27dd6d6d6c5",
+          "layer_key": "public_transport_access",
+          "layer_display_name_he": "תחבורה ציבורית ונגישות",
+          "candidate_confidence_label": "medium",
+          "search_text": "המשכן לאומנויות הבמה אשדוד",
+          "query_kind": "geocode_then_spatial_layer_query",
+          "map_layer_aliases": [
+            "ravkav",
+            "train_statoins",
+            "bus_stops",
+            "neta_lines",
+            "red_line_sta",
+            "nta_metro_lines",
+            "nta_metro_stations"
+          ],
+          "real_gis_query": {
+            "provider": "govmap",
+            "status": "ready",
+            "executable": true,
+            "query_kind": "geocode_then_spatial_layer_query",
+            "blocked_reasons": [],
+            "municipality_slug": "ashdod",
+            "municipality_label_he": "אשדוד",
+            "search_text": "המשכן לאומנויות הבמה אשדוד",
+            "alternate_search_texts": [
+              "המשכן לאומנויות הבמה ashdod",
+              "ashdod"
+            ],
+            "search_datatypes": [
+              "address",
+              "street",
+              "settlement"
+            ],
+            "map_layer_aliases": [
+              "ravkav",
+              "train_statoins",
+              "bus_stops",
+              "neta_lines",
+              "red_line_sta",
+              "nta_metro_lines",
+              "nta_metro_stations"
+            ],
+            "endpoints": [
+              {
+                "method": "POST",
+                "url": "https://www.govmap.gov.il/api/search-service/api-search"
+              },
+              {
+                "method": "POST",
+                "url": "https://www.govmap.gov.il/api/spatial-analysis/layer-features-by-location"
+              }
+            ],
+            "payload_templates": {
+              "search": {
+                "searchText": "המשכן לאומנויות הבמה אשדוד",
+                "language": "he",
+                "maxResults": 5,
+                "isAccurate": true,
+                "layers": [
+                  "address",
+                  "street",
+                  "settlement"
+                ],
+                "apiKey": "${GOVMAP_API_KEY}"
+              },
+              "search_fallbacks": [
+                {
+                  "searchText": "המשכן לאומנויות הבמה ashdod",
+                  "language": "he",
+                  "maxResults": 5,
+                  "isAccurate": true,
+                  "layers": [
+                    "address",
+                    "street",
+                    "settlement"
+                  ],
+                  "apiKey": "${GOVMAP_API_KEY}"
+                },
+                {
+                  "searchText": "ashdod",
+                  "language": "he",
+                  "maxResults": 5,
+                  "isAccurate": true,
+                  "layers": [
+                    "address",
+                    "street",
+                    "settlement"
+                  ],
+                  "apiKey": "${GOVMAP_API_KEY}"
+                }
+              ],
+              "features_by_location_after_search": {
+                "apiToken": "${GOVMAP_API_KEY}",
+                "data": {
+                  "geometry": "POINT(${itm_x} ${itm_y})",
+                  "radius": 3000,
+                  "layers": [
+                    {
+                      "name": "ravkav",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "train_statoins",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "bus_stops",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "neta_lines",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "red_line_sta",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "nta_metro_lines",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "nta_metro_stations",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "execution_note_he": "אפשר להריץ חיפוש GovMap, אך מקור המיקום/השכבה עדיין מסומן כהסקה או מוקאפ ולכן התוצאה חייבת אימות ידני."
+          },
+          "status": "loaded_real_geometry",
+          "center": {
+            "x": 167655.36,
+            "y": 635701.63,
+            "source_text": "ashdod",
+            "search_scope": "unfiltered",
+            "provider": "govmap_search",
+            "match_quality": "alternate_unfiltered_geocode"
+          },
+          "center_source": "govmap_search",
+          "geocode_match_quality": "alternate_unfiltered_geocode",
+          "geocode_provider": "govmap_search",
+          "feature_count": 12,
+          "features": [
+            {
+              "layer_alias": "ravkav",
+              "id": "14862431",
+              "attributes": {
+                "objectid": 14862431
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "ravkav",
+              "id": "14862432",
+              "attributes": {
+                "objectid": 14862432
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "ravkav",
+              "id": "14862591",
+              "attributes": {
+                "objectid": 14862591
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "ravkav",
+              "id": "14862592",
+              "attributes": {
+                "objectid": 14862592
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "ravkav",
+              "id": "14862594",
+              "attributes": {
+                "objectid": 14862594
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "ravkav",
+              "id": "14862606",
+              "attributes": {
+                "objectid": 14862606
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "ravkav",
+              "id": "14863008",
+              "attributes": {
+                "objectid": 14863008
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "ravkav",
+              "id": "14863069",
+              "attributes": {
+                "objectid": 14863069
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "ravkav",
+              "id": "14863076",
+              "attributes": {
+                "objectid": 14863076
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "ravkav",
+              "id": "14863077",
+              "attributes": {
+                "objectid": 14863077
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "ravkav",
+              "id": "14863084",
+              "attributes": {
+                "objectid": 14863084
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "ravkav",
+              "id": "14863093",
+              "attributes": {
+                "objectid": 14863093
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            }
+          ],
+          "search_attempts": [
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "ashdod",
+              "search_scope": "unfiltered",
+              "status": "found",
+              "result_count": 10000
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה אשדוד",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה אשדוד, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה אשדוד, Israel",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה אשדוד",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה אשדוד, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה אשדוד, Israel",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה אשדוד",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה אשדוד, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה אשדוד, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה אשדוד",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה אשדוד, ישראל",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה אשדוד, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה ashdod",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה ashdod, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה ashdod",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה ashdod, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה ashdod",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה ashdod, ישראל",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה ashdod",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה ashdod, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            }
+          ]
+        },
+        {
+          "event_id": "topic_subject_v3_event_acbc990cd8c0cf95",
+          "artifact_id": "json_900000_47_s0007_01_d27dd6d6d6c5",
+          "layer_key": "emergency_security_services",
+          "layer_display_name_he": "חירום, ביטחון והצלה",
+          "candidate_confidence_label": "medium",
+          "search_text": "המשכן לאומנויות הבמה אשדוד",
+          "query_kind": "geocode_then_spatial_layer_query",
+          "map_layer_aliases": [
+            "situr_ironi",
+            "bombshelters",
+            "layer_210766",
+            "fire_stations",
+            "police_yehida_location",
+            "mada_stations",
+            "emergencyfuelstations",
+            "maagalbldg",
+            "maagalroads"
+          ],
+          "real_gis_query": {
+            "provider": "govmap",
+            "status": "ready",
+            "executable": true,
+            "query_kind": "geocode_then_spatial_layer_query",
+            "blocked_reasons": [],
+            "municipality_slug": "ashdod",
+            "municipality_label_he": "אשדוד",
+            "search_text": "המשכן לאומנויות הבמה אשדוד",
+            "alternate_search_texts": [
+              "המשכן לאומנויות הבמה ashdod",
+              "ashdod"
+            ],
+            "search_datatypes": [
+              "address",
+              "street",
+              "settlement"
+            ],
+            "map_layer_aliases": [
+              "situr_ironi",
+              "bombshelters",
+              "layer_210766",
+              "fire_stations",
+              "police_yehida_location",
+              "mada_stations",
+              "emergencyfuelstations",
+              "maagalbldg",
+              "maagalroads"
+            ],
+            "endpoints": [
+              {
+                "method": "POST",
+                "url": "https://www.govmap.gov.il/api/search-service/api-search"
+              },
+              {
+                "method": "POST",
+                "url": "https://www.govmap.gov.il/api/spatial-analysis/layer-features-by-location"
+              }
+            ],
+            "payload_templates": {
+              "search": {
+                "searchText": "המשכן לאומנויות הבמה אשדוד",
+                "language": "he",
+                "maxResults": 5,
+                "isAccurate": true,
+                "layers": [
+                  "address",
+                  "street",
+                  "settlement"
+                ],
+                "apiKey": "${GOVMAP_API_KEY}"
+              },
+              "search_fallbacks": [
+                {
+                  "searchText": "המשכן לאומנויות הבמה ashdod",
+                  "language": "he",
+                  "maxResults": 5,
+                  "isAccurate": true,
+                  "layers": [
+                    "address",
+                    "street",
+                    "settlement"
+                  ],
+                  "apiKey": "${GOVMAP_API_KEY}"
+                },
+                {
+                  "searchText": "ashdod",
+                  "language": "he",
+                  "maxResults": 5,
+                  "isAccurate": true,
+                  "layers": [
+                    "address",
+                    "street",
+                    "settlement"
+                  ],
+                  "apiKey": "${GOVMAP_API_KEY}"
+                }
+              ],
+              "features_by_location_after_search": {
+                "apiToken": "${GOVMAP_API_KEY}",
+                "data": {
+                  "geometry": "POINT(${itm_x} ${itm_y})",
+                  "radius": 3000,
+                  "layers": [
+                    {
+                      "name": "situr_ironi",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "bombshelters",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "layer_210766",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "fire_stations",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "police_yehida_location",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "mada_stations",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "emergencyfuelstations",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "maagalbldg",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    },
+                    {
+                      "name": "maagalroads",
+                      "fields": [
+                        "objectid",
+                        "name",
+                        "shem",
+                        "SHEM",
+                        "address"
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "execution_note_he": "אפשר להריץ חיפוש GovMap, אך מקור המיקום/השכבה עדיין מסומן כהסקה או מוקאפ ולכן התוצאה חייבת אימות ידני."
+          },
+          "status": "loaded_real_geometry",
+          "center": {
+            "x": 167655.36,
+            "y": 635701.63,
+            "source_text": "ashdod",
+            "search_scope": "unfiltered",
+            "provider": "govmap_search",
+            "match_quality": "alternate_unfiltered_geocode"
+          },
+          "center_source": "govmap_search",
+          "geocode_match_quality": "alternate_unfiltered_geocode",
+          "geocode_provider": "govmap_search",
+          "feature_count": 12,
+          "features": [
+            {
+              "layer_alias": "situr_ironi",
+              "id": "34",
+              "attributes": {
+                "address": "הראשונים 5"
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "bombshelters",
+              "id": "837332",
+              "attributes": {
+                "objectid": 837332
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "bombshelters",
+              "id": "837845",
+              "attributes": {
+                "objectid": 837845
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "bombshelters",
+              "id": "837846",
+              "attributes": {
+                "objectid": 837846
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "bombshelters",
+              "id": "837847",
+              "attributes": {
+                "objectid": 837847
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "bombshelters",
+              "id": "837848",
+              "attributes": {
+                "objectid": 837848
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "bombshelters",
+              "id": "837849",
+              "attributes": {
+                "objectid": 837849
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "bombshelters",
+              "id": "837850",
+              "attributes": {
+                "objectid": 837850
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "bombshelters",
+              "id": "837851",
+              "attributes": {
+                "objectid": 837851
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "bombshelters",
+              "id": "837852",
+              "attributes": {
+                "objectid": 837852
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "bombshelters",
+              "id": "837853",
+              "attributes": {
+                "objectid": 837853
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            },
+            {
+              "layer_alias": "bombshelters",
+              "id": "837854",
+              "attributes": {
+                "objectid": 837854
+              },
+              "raw_keys": [
+                "attributes",
+                "id",
+                "idFieldName"
+              ]
+            }
+          ],
+          "search_attempts": [
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה אשדוד",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה אשדוד",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאומנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאמנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "המשכן לאומנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "משכן לאמנויות הבמה ashdod",
+              "search_scope": "unfiltered",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "ashdod",
+              "search_scope": "typed",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "govmap",
+              "search_text": "ashdod",
+              "search_scope": "unfiltered",
+              "status": "found",
+              "result_count": 10000
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה אשדוד",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה אשדוד, ישראל",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה אשדוד, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה אשדוד",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה אשדוד, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה אשדוד, Israel",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה אשדוד",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה אשדוד, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה אשדוד, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה אשדוד",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה אשדוד, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה אשדוד, Israel",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה ashdod",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה ashdod, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאומנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה ashdod",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה ashdod, ישראל",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאמנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה ashdod",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה ashdod, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "המשכן לאומנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה ashdod",
+              "status": "empty",
+              "result_count": 0
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה ashdod, ישראל",
+              "status": "error",
+              "error": "HTTPStatusError"
+            },
+            {
+              "provider": "osm_nominatim",
+              "search_text": "משכן לאמנויות הבמה ashdod, Israel",
+              "status": "error",
+              "error": "HTTPStatusError"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

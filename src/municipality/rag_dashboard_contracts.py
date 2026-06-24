@@ -201,6 +201,16 @@ class TimelineEvent(StrictModel):
     decision_ids: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     progress: dict[str, Any] | None = None
+    date_is_mock: bool = False
+    date_source: str | None = None
+    real_fields: list[str] = Field(default_factory=list)
+    mock_fields: list[str] = Field(default_factory=list)
+    inferred_fields: list[str] = Field(default_factory=list)
+    provenance_label_he: str | None = None
+    provenance_detail_he: str | None = None
+    gis_layer_keys: list[str] = Field(default_factory=list)
+    ready_govmap_query_count: int = 0
+    blocked_govmap_query_count: int = 0
 
 
 class DashboardTimeline(StrictModel):
@@ -224,6 +234,7 @@ class DashboardState(StrictModel):
     selected_topic_node_id: str | None = None
     selected_map_entity_id: str | None = None
     selected_timeline_event_id: str | None = None
+    selected_gis_story_id: str | None = None
     selected_evidence_id: str | None = None
     current_answer_id: str | None = None
     active_detail_drawer_mode: str

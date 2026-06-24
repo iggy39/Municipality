@@ -142,12 +142,17 @@ def test_rag_dashboard_mock_endpoint_returns_contract_shaped_payload() -> None:
     assert payload["evidence"][0]["page_span"] == {"start": 3, "end": 3}
     assert payload["ui_copy"]["popular_searches"]["choices"] == POPULAR_QUESTIONS
     assert len(payload["ui_copy"]["popular_searches"]["choices"]) == 24
+    story_choices = payload["ui_copy"]["popular_searches"]["story_choices"]
+    assert len(story_choices) == 18
+    assert len(set(story_choices)) == 18
     story_review = payload["gis_story_review"]
     assert story_review["status"] == "loaded"
     assert story_review["summary"]["strong_story_count"] == 9
     assert story_review["summary"]["needs_review_count"] == 9
     assert [lane["id"] for lane in story_review["lanes"]] == ["strong_story", "needs_review"]
     assert [len(lane["stories"]) for lane in story_review["lanes"]] == [9, 9]
+    assert len(story_review["popular_story_searches"]) == 18
+    assert len({row["story_id"] for row in story_review["popular_story_searches"]}) == 18
     assert all(story["traffic_light"] in {"red", "yellow", "green"} for lane in story_review["lanes"] for story in lane["stories"])
 
 
@@ -708,6 +713,34 @@ def test_rag_dashboard_interaction_updates_selection_state() -> None:
     assert popular_payload["state"]["municipality_id"] == "tel_aviv"
     assert popular_payload["state"]["intent_resolution"]["geo"]["resident_layer_keys"]
     assert "school" in popular_payload["state"]["intent_resolution"]["geo"]["govmap_layer_aliases"]
+
+    first_story = base["gis_story_review"]["lanes"][0]["stories"][0]
+    story_payload = rag_dashboard_interaction(
+        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_popular_search", "id": first_story["story_query"]}})
+    )
+    assert story_payload["state"]["current_question"] == first_story["story_query"]
+    assert story_payload["state"]["search_intent"] == "protocol_gis_story_lookup"
+    assert story_payload["state"]["selected_gis_story_id"] == first_story["story_id"]
+    assert story_payload["state"]["selected_map_entity_id"] == f"entity_{first_story['story_id']}_focus"
+    assert story_payload["state"]["intent_resolution"]["geo"]["map_context"]["story"]["source"] == "generated_protocol_gis_story"
+    assert story_payload["main_civic_workspace"]["map"]["entities"][0]["id"] == f"entity_{first_story['story_id']}_municipality_context"
+    assert story_payload["main_civic_workspace"]["map"]["entities"][1]["id"] == f"entity_{first_story['story_id']}_focus"
+    assert story_payload["main_civic_workspace"]["map_context"]["layers"]
+    assert story_payload["main_civic_workspace"]["timeline"]["events"]
+    assert all(not row["id"].startswith("event_near_me_recent_decisions_") for row in story_payload["main_civic_workspace"]["timeline"]["events"])
+    assert all("date_is_mock" in row and "date_source" in row and "mock_fields" in row for row in story_payload["main_civic_workspace"]["timeline"]["events"])
+    assert all("real_fields" in row and "inferred_fields" in row for row in story_payload["main_civic_workspace"]["timeline"]["events"])
+    assert any(row["date_is_mock"] is True for row in story_payload["main_civic_workspace"]["timeline"]["events"])
+    assert next(row for lane in story_payload["gis_story_review"]["lanes"] for row in lane["stories"] if row["story_id"] == first_story["story_id"])["selected"] is True
+
+    story_event_id = story_payload["main_civic_workspace"]["timeline"]["events"][0]["id"]
+    story_event_progress = story_payload["main_civic_workspace"]["timeline"]["events"][0]["progress"]
+    story_event_payload = rag_dashboard_interaction(
+        RagDashboardInteractionRequest.model_validate({"state": story_payload["state"], "interaction": {"type": "select_timeline_event", "id": story_event_id}})
+    )
+    assert story_event_payload["state"]["selected_timeline_event_id"] == story_event_id
+    assert story_event_payload["main_civic_workspace"]["timeline"]["selected_event_id"] == story_event_id
+    assert story_event_payload["main_civic_workspace"]["map_context"]["progress"] == story_event_progress
 
     filter_payload = rag_dashboard_interaction(
         RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "apply_filters", "id": "filters", "filters": {"category": "תחבורה"}}})

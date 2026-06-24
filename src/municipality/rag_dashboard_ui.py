@@ -1011,10 +1011,27 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       cursor: not-allowed;
     }
 
+    .residentGovMapLayerList label.isStoryActivated {
+      border-color: rgba(37, 99, 235, 0.45);
+      background: #eff6ff;
+    }
+
     .residentGovMapLayerKind {
       color: #7c4a03;
       font-size: 9px;
       font-weight: 850;
+    }
+
+    .storyActivatedBadge {
+      display: inline-flex;
+      width: fit-content;
+      margin-top: 3px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: #dbeafe;
+      color: #1d4ed8;
+      font-size: 10px;
+      font-weight: 900;
     }
 
     .govMapCatalogLayerList {
@@ -1889,7 +1906,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
     }
 
     .timelineCard {
-      min-height: 78px;
+      min-height: 116px;
       border: 1px solid #dfe6ef;
       border-radius: 7px;
       background: #fff;
@@ -1910,6 +1927,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
     .timelineCard[data-progress-status="red"] { border-block-start: 4px solid #dc2626; }
     .timelineCard[data-progress-status="yellow"] { border-block-start: 4px solid #f59e0b; }
     .timelineCard[data-progress-status="green"] { border-block-start: 4px solid #16a34a; }
+    .timelineCard[data-date-is-mock="true"] { background: linear-gradient(180deg, #fff7ed 0%, #fff 72%); }
 
     .timelineDate {
       display: block;
@@ -1942,6 +1960,36 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
+
+    .timelineProvenance {
+      display: grid;
+      gap: 2px;
+      margin-top: 5px;
+      color: #475569;
+      font-size: 9px;
+      line-height: 1.2;
+    }
+
+    .timelineProvenanceLine {
+      display: block;
+      padding: 2px 4px;
+      border-radius: 999px;
+      background: rgba(241, 245, 249, 0.86);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .timelineProvenanceLine strong {
+      color: #0f172a;
+      font-weight: 900;
+    }
+
+    .timelineCard[data-date-is-mock="true"] .timelineProvenanceLine.mock strong { color: #b45309; }
+    .timelineProvenanceLine.inferred strong { color: #2563eb; }
+
+    .storyLayerMarker circle { filter: drop-shadow(0 5px 8px rgba(15, 23, 42, 0.18)); }
+    .storyLayerMarker text { paint-order: stroke; stroke: rgba(255,255,255,0.9); stroke-width: 3px; stroke-linejoin: round; }
 
     .timelineRail {
       position: relative;
@@ -2002,7 +2050,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
     .timelineArrow.next { right: 0; }
 
     .gisStoryReviewPanel {
-      padding: 14px;
+      padding: 0 0 12px;
       background:
         radial-gradient(circle at 92% 12%, rgba(22, 163, 74, 0.13), transparent 28%),
         radial-gradient(circle at 8% 18%, rgba(245, 158, 11, 0.15), transparent 30%),
@@ -2012,10 +2060,11 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
     .gisStoryReviewTop {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr);
       align-items: start;
       gap: 12px;
       margin-bottom: 12px;
+      padding: 12px 10px 0;
     }
 
     .gisStoryReviewEyebrow {
@@ -2046,7 +2095,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       display: flex;
       gap: 6px;
       flex-wrap: wrap;
-      justify-content: flex-end;
+      justify-content: flex-start;
     }
 
     .gisStoryStat {
@@ -2077,8 +2126,9 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
     .gisStoryLanes {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: 1fr;
       gap: 10px;
+      padding-inline: 6px;
     }
 
     .gisStoryLane {
@@ -2130,7 +2180,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
     .gisStoryList {
       display: grid;
       gap: 8px;
-      max-height: 510px;
+      max-height: 330px;
       margin: 0;
       padding: 10px;
       list-style: none;
@@ -2146,7 +2196,11 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       background: #fff;
       padding: 10px 10px 9px;
       box-shadow: 0 8px 18px rgba(15, 23, 42, 0.045);
+      cursor: pointer;
     }
+
+    .gisStoryCard:hover { border-color: #94a3b8; transform: translateY(-1px); }
+    .gisStoryCard.isSelected { border-color: #2563eb; background: #eff6ff; box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.11); }
 
     .gisStoryCard::before {
       content: "";
@@ -2220,7 +2274,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
     .gisStoryFoot {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: 1fr 1fr;
       gap: 4px;
       color: #475569;
       font-size: 10px;
@@ -2545,6 +2599,8 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       right: 500px;
       z-index: 10;
       width: 310px;
+      max-height: calc(100vh - 112px);
+      overflow-y: auto;
       padding: 12px;
       border: 1px solid var(--line);
       border-radius: 10px;
@@ -2554,6 +2610,8 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
     }
 
     .popularPopover h2 { margin: 0 0 8px; font-size: 16px; }
+    .popularStoryTitle { margin: 12px 0 7px; color: #475569; font-size: 12px; font-weight: 900; }
+    .popularStoryTitle:first-of-type { margin-top: 4px; }
 
     .popularChoice {
       width: 100%;
@@ -2565,6 +2623,9 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       padding-inline: 10px;
       cursor: pointer;
     }
+
+    .popularChoice + .popularChoice { margin-top: 6px; }
+    .popularChoice.storyChoice { border-color: #f59e0b; background: #fffbeb; font-weight: 800; }
 
     .assistiveStatus {
       position: fixed;
@@ -2924,6 +2985,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
               <path data-map-entity-id="entity_rova_tet_vav_selected_area" data-map-tooltip-title="רובע טו" tabindex="0" role="button" aria-label="רובע טו" d="M336 330 377 238 455 250 518 287 491 344 426 341 404 392 362 367 366 346Z" fill="rgba(111,70,217,0.20)" stroke="#6f46d9" stroke-width="2.2" />
               <rect data-map-entity-id="entity_rova_tet_vav_selected_area" data-map-tooltip-title="רובע טו" x="414" y="292" width="78" height="34" rx="9" fill="#6f46d9" filter="url(#mapShadow)" />
               <text data-map-entity-id="entity_rova_tet_vav_selected_area" data-map-tooltip-title="רובע טו" id="map-selected-label" x="453" y="314" fill="#fff" font-size="17" font-weight="800" text-anchor="middle" direction="rtl">רובע טו</text>
+              <g id="story-layer-markers" aria-label="Activated GIS context layers"></g>
 
               <g fill="#1f2937" font-size="17" font-weight="850" text-anchor="middle" direction="rtl">
                 <text id="map-area-north" data-map-label="true" data-base-font-size="17" x="590" y="44">צפון העיר</text>
@@ -3144,36 +3206,6 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           </div>
         </section>
 
-        <section id="gis-story-review-panel" class="gisStoryReviewPanel panelCard" aria-labelledby="gis-story-review-title">
-          <div class="gisStoryReviewTop">
-            <div>
-              <p class="gisStoryReviewEyebrow">GIS Story Review</p>
-              <h2 id="gis-story-review-title" class="gisStoryReviewTitle">סיפורי GIS לפרוטוקולים</h2>
-              <p id="gis-story-review-subtitle" class="gisStoryReviewSubtitle">9 סיפורים חזקים מול 9 סיפורים שדורשים בדיקה לפני הצגה לתושב.</p>
-            </div>
-            <div class="gisStoryReviewStats" aria-label="סיכום סיפורי GIS">
-              <div class="gisStoryStat"><strong id="gis-story-total">0</strong><span>סיפורים</span></div>
-              <div class="gisStoryStat"><strong id="gis-story-strong-count">0</strong><span>חזקים</span></div>
-              <div class="gisStoryStat"><strong id="gis-story-review-count">0</strong><span>בדיקה</span></div>
-            </div>
-          </div>
-          <div class="gisStoryLanes">
-            <section class="gisStoryLane" data-lane="strong_story" aria-labelledby="gis-story-strong-title">
-              <div class="gisStoryLaneHeader">
-                <h3><span id="gis-story-strong-title">מוכן לדמו</span> <span id="gis-story-strong-lane-count" class="gisStoryLaneCount">0</span></h3>
-                <p id="gis-story-strong-desc">קשרים חזקים בין כמה אירועי פרוטוקול, שכבות GIS וסטטוס התקדמות.</p>
-              </div>
-              <ul id="gis-story-strong-list" class="gisStoryList"></ul>
-            </section>
-            <section class="gisStoryLane" data-lane="needs_review" aria-labelledby="gis-story-needs-title">
-              <div class="gisStoryLaneHeader">
-                <h3><span id="gis-story-needs-title">דורש בדיקה</span> <span id="gis-story-needs-lane-count" class="gisStoryLaneCount">0</span></h3>
-                <p id="gis-story-needs-desc">קבוצות אפשריות, אבל חסר תאריך אמיתי, מקור נוסף, או ודאות נושאית מספקת.</p>
-              </div>
-              <ul id="gis-story-needs-list" class="gisStoryList"></ul>
-            </section>
-          </div>
-        </section>
       </section>
 
       <aside class="startDiscoveryPanel panelCard" aria-label="גילוי נושאים">
@@ -3206,6 +3238,37 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             <li><button class="discoveryRow topicRow" type="button"><span class="rowLabel">תכנית מתאר חדשה</span><span class="countPill">11</span></button></li>
           </ul>
           <button class="showMoreButton flat" type="button">הצג עוד <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path d="m8 10 4 4 4-4" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+        </section>
+
+        <section id="gis-story-review-panel" class="gisStoryReviewPanel discoverySection" aria-labelledby="gis-story-review-title">
+          <div class="gisStoryReviewTop">
+            <div>
+              <p class="gisStoryReviewEyebrow">GIS Story Review</p>
+              <h2 id="gis-story-review-title" class="gisStoryReviewTitle">סיפורי GIS לפרוטוקולים</h2>
+              <p id="gis-story-review-subtitle" class="gisStoryReviewSubtitle">9 סיפורים חזקים מול 9 סיפורים שדורשים בדיקה לפני הצגה לתושב.</p>
+            </div>
+            <div class="gisStoryReviewStats" aria-label="סיכום סיפורי GIS">
+              <div class="gisStoryStat"><strong id="gis-story-total">0</strong><span>סיפורים</span></div>
+              <div class="gisStoryStat"><strong id="gis-story-strong-count">0</strong><span>חזקים</span></div>
+              <div class="gisStoryStat"><strong id="gis-story-review-count">0</strong><span>בדיקה</span></div>
+            </div>
+          </div>
+          <div class="gisStoryLanes">
+            <section class="gisStoryLane" data-lane="strong_story" aria-labelledby="gis-story-strong-title">
+              <div class="gisStoryLaneHeader">
+                <h3><span id="gis-story-strong-title">מוכן לדמו</span> <span id="gis-story-strong-lane-count" class="gisStoryLaneCount">0</span></h3>
+                <p id="gis-story-strong-desc">קשרים חזקים בין כמה אירועי פרוטוקול, שכבות GIS וסטטוס התקדמות.</p>
+              </div>
+              <ul id="gis-story-strong-list" class="gisStoryList"></ul>
+            </section>
+            <section class="gisStoryLane" data-lane="needs_review" aria-labelledby="gis-story-needs-title">
+              <div class="gisStoryLaneHeader">
+                <h3><span id="gis-story-needs-title">דורש בדיקה</span> <span id="gis-story-needs-lane-count" class="gisStoryLaneCount">0</span></h3>
+                <p id="gis-story-needs-desc">קבוצות אפשריות, אבל חסר תאריך אמיתי, מקור נוסף, או ודאות נושאית מספקת.</p>
+              </div>
+              <ul id="gis-story-needs-list" class="gisStoryList"></ul>
+            </section>
+          </div>
         </section>
 
         <section class="discoverySection" aria-labelledby="tree-title">
@@ -3304,6 +3367,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       const filterModal = document.getElementById("filter-modal");
       const popularButton = document.getElementById("popular-searches-button");
       const popularPopover = document.getElementById("popular-popover");
+      const gisStoryReviewPanel = document.getElementById("gis-story-review-panel");
       const mapExampleSelect = document.getElementById("map-example-select");
       const dashboardRoot = document.getElementById("rag-dashboard");
       const APP_PATH_PREFIX = (() => {
@@ -3690,6 +3754,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           }
           cards[idx].hidden = false;
           cards[idx].dataset.progressStatus = event.progress?.status || "";
+          cards[idx].dataset.dateIsMock = event.date_is_mock === true ? "true" : "false";
           cards[idx].classList.toggle("selected", event.selected === true);
           cards[idx].setAttribute("aria-current", event.selected === true ? "true" : "false");
           cards[idx].dataset.eventId = event.id || "";
@@ -3705,6 +3770,34 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           if (sub) {
             sub.textContent = event.summary || "";
           }
+          let provenance = cards[idx].querySelector(".timelineProvenance");
+          if (!provenance) {
+            provenance = document.createElement("span");
+            provenance.className = "timelineProvenance";
+            cards[idx].appendChild(provenance);
+          }
+          const mockFields = Array.isArray(event.mock_fields) ? event.mock_fields.filter(Boolean) : [];
+          const realFields = Array.isArray(event.real_fields) ? event.real_fields.filter(Boolean) : [];
+          const inferredFields = Array.isArray(event.inferred_fields) ? event.inferred_fields.filter(Boolean) : [];
+          const fieldLabel = (field) => ({ source_text: "source text", evidence_quotes: "quotes", action_type: "action", matter: "matter", date: "date", progress_status: "traffic light", gis_layers: "GIS layers", govmap_query_links: "GovMap query links" }[field] || field);
+          const layerCount = Array.isArray(event.gis_layer_keys) ? event.gis_layer_keys.length : 0;
+          const queryCount = Number(event.ready_govmap_query_count || 0);
+          const lines = [
+            { kind: "real", label: "Real", value: realFields.length ? realFields.map(fieldLabel).join(", ") : "none" },
+            { kind: "mock", label: "Mock", value: mockFields.length ? mockFields.map(fieldLabel).join(", ") : "none" },
+            { kind: "inferred", label: "Inferred", value: [inferredFields.map(fieldLabel).join(", "), layerCount ? `${layerCount} layers` : "", queryCount ? `${queryCount} ready queries` : ""].filter(Boolean).join(" · ") || "none" },
+          ];
+          provenance.replaceChildren(...lines.map((line) => {
+            const item = document.createElement("span");
+            item.className = `timelineProvenanceLine ${line.kind}`;
+            const strong = document.createElement("strong");
+            strong.textContent = `${line.label}: `;
+            const value = document.createElement("span");
+            value.textContent = line.value;
+            item.append(strong, value);
+            item.title = `${line.label}: ${line.value}`;
+            return item;
+          }));
         }
       };
 
@@ -3713,8 +3806,13 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       const createGisStoryCard = (story) => {
         const item = document.createElement("li");
         item.className = "gisStoryCard";
+        item.classList.toggle("isSelected", story.selected === true);
         item.dataset.storyId = story.story_id || "";
+        item.dataset.storyQuery = story.story_query || "";
         item.dataset.traffic = story.traffic_light || "yellow";
+        item.tabIndex = 0;
+        item.setAttribute("role", "button");
+        item.setAttribute("aria-pressed", story.selected === true ? "true" : "false");
 
         const top = document.createElement("div");
         top.className = "gisStoryCardTop";
@@ -4114,6 +4212,56 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         demographic_equity: "דמוגרפיה ושוויון"
       }[layerKey] || layerKey || "שכבה");
 
+      const renderStoryLayerMarkers = (layers) => {
+        const group = document.getElementById("story-layer-markers");
+        if (!group) return;
+        const rows = (Array.isArray(layers) ? layers : []).filter((layer) => Number(layer?.count || 0) > 0).slice(0, 4);
+        group.replaceChildren();
+        if (!rows.length) return;
+        const svgNs = "http://www.w3.org/2000/svg";
+        const colors = ["#2563eb", "#16a34a", "#f59e0b", "#dc2626"];
+        const positions = [[642, 118], [707, 202], [650, 405], [778, 488]];
+        const header = document.createElementNS(svgNs, "text");
+        header.setAttribute("x", "746");
+        header.setAttribute("y", "72");
+        header.setAttribute("fill", "#0f172a");
+        header.setAttribute("font-size", "13");
+        header.setAttribute("font-weight", "900");
+        header.setAttribute("text-anchor", "middle");
+        header.textContent = "Activated GIS context layers";
+        group.appendChild(header);
+        rows.forEach((layer, index) => {
+          const marker = document.createElementNS(svgNs, "g");
+          marker.classList.add("storyLayerMarker");
+          marker.dataset.storyLayer = layer.layer_key || "story_layer";
+          marker.setAttribute("transform", `translate(${positions[index][0]} ${positions[index][1]})`);
+          const title = document.createElementNS(svgNs, "title");
+          const labelText = layer.display_name_he || mapContextLayerLabel(layer.layer_key);
+          title.textContent = `${labelText}: context only, not verified geometry`;
+          const circle = document.createElementNS(svgNs, "circle");
+          circle.setAttribute("r", "18");
+          circle.setAttribute("fill", colors[index % colors.length]);
+          circle.setAttribute("opacity", "0.92");
+          const count = document.createElementNS(svgNs, "text");
+          count.setAttribute("y", "5");
+          count.setAttribute("fill", "#fff");
+          count.setAttribute("font-size", "13");
+          count.setAttribute("font-weight", "900");
+          count.setAttribute("text-anchor", "middle");
+          count.textContent = String(layer.count || 0);
+          const label = document.createElementNS(svgNs, "text");
+          label.setAttribute("x", "0");
+          label.setAttribute("y", "35");
+          label.setAttribute("fill", "#0f172a");
+          label.setAttribute("font-size", "11");
+          label.setAttribute("font-weight", "850");
+          label.setAttribute("text-anchor", "middle");
+          label.textContent = labelText.length > 18 ? `${labelText.slice(0, 18)}…` : labelText;
+          marker.append(title, circle, count, label);
+          group.appendChild(marker);
+        });
+      };
+
       const renderDashboardMapContext = (mapContext) => {
         if (!mapContext || typeof mapContext !== "object") {
           return;
@@ -4129,11 +4277,12 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         setText("#progress-meta", [progress.protocol_date_label, progress.label_he].filter(Boolean).join(" · "));
         setText("#progress-title", progress.title_he || "סטטוס התקדמות");
         const layers = Array.isArray(mapContext.layers) ? mapContext.layers : [];
+        renderStoryLayerMarkers(layers);
         const summary = document.getElementById("map-layer-summary");
         if (summary) {
           const rows = layers
             .filter((layer) => Number(layer?.count || 0) > 0 || ["not_found", "not_ingested", "not_enabled", "municipal_license_under_review", "context_only"].includes(layer?.status))
-            .map((layer) => ({ key: layer.layer_key || "layer", label: mapContextLayerLabel(layer.layer_key), count: Number(layer.count || 0), status: layer.status || "unknown" }));
+            .map((layer) => ({ key: layer.layer_key || "layer", label: layer.display_name_he || mapContextLayerLabel(layer.layer_key), count: Number(layer.count || 0), status: layer.status || "unknown" }));
           summary.replaceChildren(...rows.map((row) => {
             const item = document.createElement("li");
             item.className = "mapLayerSummaryRow";
@@ -4157,7 +4306,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             const item = document.createElement("li");
             const label = document.createElement("span");
             const count = document.createElement("strong");
-            label.textContent = mapContextLayerLabel(layer.layer_key);
+            label.textContent = layer.display_name_he || mapContextLayerLabel(layer.layer_key);
             count.textContent = String(layer.count || 0);
             item.append(label, count);
             return item;
@@ -5297,14 +5446,31 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         return true;
       };
 
-      const applyQuestionGovMapLayerSelection = (payload = window.__municipalDashboardGisMap) => {
-        const aliases = new Set((payload?.govmap?.question_visible_layers || []).map((alias) => String(alias || "").trim()).filter(Boolean));
-        const layerKeys = new Set((payload?.govmap?.question_resident_layer_keys || []).map((key) => String(key || "").trim()).filter(Boolean));
+      const applyQuestionGovMapLayerSelection = (payload = window.__municipalDashboardGisMap, explicitMapContext = null) => {
+        const storyMapContext = explicitMapContext || currentDashboardData?.main_civic_workspace?.map_context || dashboardState?.intent_resolution?.geo?.map_context || null;
+        const storyLayers = Array.isArray(storyMapContext?.layers) ? storyMapContext.layers : [];
+        const storyAliases = new Set(storyLayers.flatMap((layer) => Array.isArray(layer?.govmap_aliases) ? layer.govmap_aliases : []).map((alias) => String(alias || "").trim()).filter(Boolean));
+        const storyLayerKeys = new Set(storyLayers.map((layer) => String(layer?.layer_key || "").trim()).filter(Boolean));
+        const aliases = new Set([...(payload?.govmap?.question_visible_layers || []), ...storyAliases].map((alias) => String(alias || "").trim()).filter(Boolean));
+        const layerKeys = new Set([...(payload?.govmap?.question_resident_layer_keys || []), ...storyLayerKeys].map((key) => String(key || "").trim()).filter(Boolean));
         if (!aliases.size && !layerKeys.size) return false;
         for (const input of document.querySelectorAll("[data-resident-govmap-layer-toggle]")) {
           const alias = String(input.dataset.residentGovmapLayerToggle || "").trim();
           if (aliases.has(alias)) {
             input.checked = true;
+            const label = input.closest("label");
+            label?.classList.toggle("isStoryActivated", storyAliases.has(alias));
+            if (label && storyAliases.has(alias) && !label.querySelector(".storyActivatedBadge")) {
+              const badge = document.createElement("span");
+              badge.className = "storyActivatedBadge";
+              badge.textContent = "Activated by selected story";
+              label.querySelector(".residentGovMapLayerText")?.appendChild(badge);
+            }
+            const groupItem = input.closest(".residentGovMapGroupItem");
+            const expand = groupItem?.querySelector("[data-resident-govmap-expand]");
+            if (storyAliases.has(alias) && expand && expand.getAttribute("aria-expanded") !== "true") {
+              expand.click();
+            }
           }
         }
         for (const input of document.querySelectorAll("[data-resident-govmap-layer-group-toggle]")) {
@@ -5427,21 +5593,10 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         if (!marker || !name) {
           return false;
         }
-        const houseWkt = marker.house_display_wkt;
-        if (houseWkt) {
-          return displayGovMapPolygonWkt({
-            wkt: houseWkt,
-            name,
-            tooltip: marker.label || "כתובת",
-            outlineColor: [91, 33, 182, 1],
-            outlineWidth: 2,
-            fillColor: [255, 255, 255, 0.96],
-          });
-        }
         return displayGovMapPointWkt({
           wkt: marker.display_wkt,
           name,
-          tooltip: marker.label || "כתובת",
+          tooltip: marker.label || "נקודת עוגן",
         });
       };
 
@@ -6459,6 +6614,8 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           }
         }
         renderDashboardMapContext(mapContext);
+        applyQuestionGovMapLayerSelection(window.__municipalDashboardGisMap, mapContext);
+        window.__updateGovMapIframeUrl?.();
 
         setText("#timeline-title", timelineCopy.title);
         setAttr(".timelineArrow.prev", "aria-label", timelineCopy.previous_label);
@@ -6505,9 +6662,29 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
         setText("#popular-title", popularCopy.title);
         const choiceValues = Array.isArray(popularCopy.choices) ? popularCopy.choices : [];
-        if (popularPopover && choiceValues.length) {
+        const storyChoiceValues = Array.isArray(popularCopy.story_choices) ? popularCopy.story_choices : [];
+        if (popularPopover && (choiceValues.length || storyChoiceValues.length)) {
           const title = popularPopover.querySelector("#popular-title");
           popularPopover.replaceChildren(...[title].filter(Boolean));
+          if (storyChoiceValues.length) {
+            const storyTitle = document.createElement("h3");
+            storyTitle.className = "popularStoryTitle";
+            storyTitle.textContent = popularCopy.story_title || "Protocol GIS Stories";
+            popularPopover.appendChild(storyTitle);
+            for (const value of storyChoiceValues) {
+              const button = document.createElement("button");
+              button.className = "popularChoice storyChoice";
+              button.type = "button";
+              button.textContent = value;
+              popularPopover.appendChild(button);
+            }
+          }
+          if (choiceValues.length) {
+            const questionTitle = document.createElement("h3");
+            questionTitle.className = "popularStoryTitle";
+            questionTitle.textContent = "שאלות תושבים";
+            popularPopover.appendChild(questionTitle);
+          }
           for (const value of choiceValues) {
             const button = document.createElement("button");
             button.className = "popularChoice";
@@ -6529,6 +6706,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           dashboardRoot.dataset.sourceUrl = DASHBOARD_DATA_ENDPOINT;
           dashboardRoot.dataset.selectedCategoryId = dashboardState.selected_category_id || "";
           dashboardRoot.dataset.selectedTopicNodeId = dashboardState.selected_topic_node_id || "";
+          dashboardRoot.dataset.selectedGisStoryId = dashboardState.selected_gis_story_id || "";
           dashboardRoot.dataset.selectedTimelineEventId = dashboardState.selected_timeline_event_id || "";
           dashboardRoot.dataset.selectedMapEntityId = dashboardState.selected_map_entity_id || "";
           dashboardRoot.dataset.detailDrawerMode = dashboardState.active_detail_drawer_mode || "";
@@ -7399,6 +7577,20 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const card = event.target.closest(".timelineCard");
         if (card?.dataset.eventId) {
           applyDashboardInteraction("select_timeline_event", card.dataset.eventId);
+        }
+      });
+      gisStoryReviewPanel?.addEventListener("click", (event) => {
+        const card = event.target.closest(".gisStoryCard");
+        if (card?.dataset.storyId) {
+          applyDashboardInteraction("select_gis_story", card.dataset.storyId);
+        }
+      });
+      gisStoryReviewPanel?.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const card = event.target.closest(".gisStoryCard");
+        if (card?.dataset.storyId) {
+          event.preventDefault();
+          applyDashboardInteraction("select_gis_story", card.dataset.storyId);
         }
       });
       mapFrame?.addEventListener("click", (event) => {

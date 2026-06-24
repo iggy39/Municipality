@@ -5,12 +5,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+from municipality.resident_gis_registry import load_resident_gis_registry
+
 
 TEL_AVIV_MUNICIPALITY_ID = "tel_aviv"
 TEL_AVIV_MUNICIPALITY_CODE = "5000"
 DEFAULT_RESIDENT_ADDRESS = "דיזנגוף 99"
 DEFAULT_SCENARIO_KEY = "near_me_recent_decisions"
 GIS_STORY_REPORT_PATH = Path(__file__).resolve().parents[2] / "eval" / "reports" / "v3_gis_stories_all_artifacts_20260624.json"
+GIS_STORY_GOVMAP_EXECUTION_PATH = Path(__file__).resolve().parents[2] / "eval" / "reports" / "v3_gis_story_govmap_execution_20260624.json"
 
 
 CATEGORY_LABELS = {
@@ -1094,11 +1097,12 @@ def _discovery_panel(top_scenario: dict[str, Any], selected_topic_node_id: str) 
     }
 
 
-def _gis_story_review_panel() -> dict[str, Any]:
+def _gis_story_review_panel(selected_story_id: str | None = None) -> dict[str, Any]:
     report = _load_gis_story_report()
-    stories = [row for row in report.get("stories", []) if isinstance(row, dict)]
-    strong = [row for row in stories if row.get("human_judgement", {}).get("judgement") == "strong_story"][:9]
-    needs_review = [row for row in stories if row.get("human_judgement", {}).get("judgement") == "needs_review"][:9]
+    stories = _gis_story_rows(report)
+    strong = _gis_story_lane_rows(stories, "strong_story")
+    needs_review = _gis_story_lane_rows(stories, "needs_review")
+    story_searches = [_gis_story_search_row(row) for row in [*strong, *needs_review]]
     return {
         "status": "loaded" if stories else "missing_story_report",
         "source_path": str(GIS_STORY_REPORT_PATH),
@@ -1111,20 +1115,21 @@ def _gis_story_review_panel() -> dict[str, Any]:
             "mock_seed_only_count": len([row for row in stories if row.get("human_judgement", {}).get("judgement") == "mock_seed_only"]),
             "traffic_light_counts": dict(report.get("traffic_light_counts") or {}),
         },
+        "popular_story_searches": story_searches,
         "lanes": [
             {
                 "id": "strong_story",
                 "title_he": "מוכן לדמו",
                 "count": len(strong),
                 "description_he": "קשרים חזקים בין כמה אירועי פרוטוקול, שכבות GIS וסטטוס התקדמות.",
-                "stories": [_gis_story_card(row) for row in strong],
+                "stories": [_gis_story_card(row, selected_story_id=selected_story_id) for row in strong],
             },
             {
                 "id": "needs_review",
                 "title_he": "דורש בדיקה",
                 "count": len(needs_review),
                 "description_he": "קבוצות אפשריות, אבל חסר תאריך אמיתי, מקור נוסף, או ודאות נושאית מספקת.",
-                "stories": [_gis_story_card(row) for row in needs_review],
+                "stories": [_gis_story_card(row, selected_story_id=selected_story_id) for row in needs_review],
             },
         ],
     }
@@ -1138,13 +1143,244 @@ def _load_gis_story_report() -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {"stories": [], "story_count": 0, "traffic_light_counts": {}}
 
 
-def _gis_story_card(story: dict[str, Any]) -> dict[str, Any]:
+def _load_gis_story_govmap_execution_report() -> dict[str, Any]:
+    try:
+        payload = json.loads(GIS_STORY_GOVMAP_EXECUTION_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"stories": []}
+    return payload if isinstance(payload, dict) else {"stories": []}
+
+
+def _gis_story_govmap_execution_by_id(story_id: str | None) -> dict[str, Any] | None:
+    story_id = str(story_id or "")
+    if not story_id:
+        return None
+    report = _load_gis_story_govmap_execution_report()
+    return next((row for row in report.get("stories", []) if isinstance(row, dict) and str(row.get("story_id") or "") == story_id), None)
+
+
+def _gis_story_rows(report: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    payload = report if isinstance(report, dict) else _load_gis_story_report()
+    return [row for row in payload.get("stories", []) if isinstance(row, dict)]
+
+
+def _gis_story_lane_rows(stories: list[dict[str, Any]], judgement: str) -> list[dict[str, Any]]:
+    return [row for row in stories if row.get("human_judgement", {}).get("judgement") == judgement][:9]
+
+
+def _gis_story_search_row(story: dict[str, Any]) -> dict[str, Any]:
+    title = str(story.get("title_he") or "סיפור GIS")
+    judgement = str(story.get("human_judgement", {}).get("judgement") or "")
+    query_prefix = "מה התקדם בסיפור" if judgement == "strong_story" else "הצג לבדיקה את הסיפור"
+    query = f"{query_prefix}: {title}?"
+    return {
+        "query": query,
+        "story_id": str(story.get("story_id") or ""),
+        "title_he": title,
+        "judgement": judgement,
+        "traffic_light": str(story.get("traffic_light") or "yellow"),
+    }
+
+
+def _gis_story_by_id(story_id: str | None) -> dict[str, Any] | None:
+    story_id = str(story_id or "")
+    if not story_id:
+        return None
+    return next((row for row in _gis_story_rows() if str(row.get("story_id") or "") == story_id), None)
+
+
+def _gis_story_by_query(query: str | None) -> dict[str, Any] | None:
+    query = str(query or "")
+    for row in _gis_story_rows():
+        if _gis_story_search_row(row)["query"] == query:
+            return row
+    return None
+
+
+def _popular_story_questions() -> list[str]:
+    stories = _gis_story_rows()
+    return [_gis_story_search_row(row)["query"] for row in [*_gis_story_lane_rows(stories, "strong_story"), *_gis_story_lane_rows(stories, "needs_review")]]
+
+
+def _story_location_label(story: dict[str, Any]) -> str:
+    labels = [str(value) for value in (story.get("location_labels") or []) if str(value or "").strip()]
+    if labels:
+        return labels[0]
+    return str(story.get("municipality_slug") or "רשות לא מזוהה")
+
+
+def _story_layer_rows(story: dict[str, Any]) -> list[dict[str, Any]]:
+    summary = story.get("gis_summary") if isinstance(story.get("gis_summary"), dict) else {}
+    rows = summary.get("top_layers") if isinstance(summary.get("top_layers"), list) else []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _resident_layer_group_payload(layer_key: str) -> dict[str, Any] | None:
+    try:
+        group = load_resident_gis_registry().layer_by_key.get(layer_key)
+    except Exception:
+        return None
+    return group.to_payload() if group else None
+
+
+def _story_layer_govmap_aliases(layer_key: str) -> list[str]:
+    group = _resident_layer_group_payload(layer_key)
+    if not group:
+        return []
+    aliases = [str(value) for value in group.get("govmap_aliases", []) if str(value or "").strip()]
+    aliases.extend(str(row.get("alias") or "") for row in group.get("govmap_layers", []) if isinstance(row, dict) and str(row.get("alias") or "").strip())
+    return list(dict.fromkeys(aliases))
+
+
+def _story_map_entities(story: dict[str, Any]) -> list[dict[str, Any]]:
+    story_id = str(story.get("story_id") or "gis_story")
+    title = str(story.get("title_he") or "סיפור GIS")
+    location = _story_location_label(story)
+    protocols = [str(value) for value in (story.get("source_protocols") or []) if str(value or "")]
+    layers = _story_layer_rows(story)
+    evidence_refs = protocols[:3]
+    entities = [
+        {
+            "id": f"entity_{story_id}_municipality_context",
+            "label": f"הקשר עירוני: {location}",
+            "entity_type": {"code": "GIS_STORY_MUNICIPALITY", "label_he": "הקשר עירוני", "vocabulary": "municipal-entity-type:v1"},
+            "spatial_representation": "schematic",
+            "schematic_shape": {"kind": "polygon", "coordinates": [[336, 330], [377, 238], [455, 250], [518, 287], [491, 344], [426, 341], [404, 392]]},
+            "real_geometry": None,
+            "geometry_provenance": None,
+            "confidence_label": "בינונית",
+            "uncertainty_reasons": ["אין גיאומטריה מאומתת בדשבורד; זהו הקשר GIS סכמטי לפי סיפור הפרוטוקולים."],
+            "active_from": None,
+            "active_to": None,
+            "activity_score": int(story.get("event_count") or 0),
+            "is_recent_high_activity": bool(story.get("traffic_light") == "red"),
+            "topic_ids": [story_id],
+            "decision_ids": protocols,
+            "evidence_refs": evidence_refs,
+            "selected": False,
+        },
+        {
+            "id": f"entity_{story_id}_focus",
+            "label": f"מוקד סיפור: {title}",
+            "entity_type": {"code": "GIS_STORY_FOCUS", "label_he": "מוקד סיפור GIS", "vocabulary": "municipal-entity-type:v1"},
+            "spatial_representation": "schematic",
+            "schematic_shape": {"kind": "point", "coordinates": [[468, 302]]},
+            "real_geometry": None,
+            "geometry_provenance": None,
+            "confidence_label": "בינונית",
+            "uncertainty_reasons": ["מוקד מפה סכמטי; השכבות מוצגות כהקשר ולא כהוכחת מיקום היסטורית."],
+            "active_from": None,
+            "active_to": None,
+            "activity_score": int(story.get("source_protocol_count") or len(protocols) or 1),
+            "is_recent_high_activity": True,
+            "topic_ids": [story_id],
+            "decision_ids": protocols,
+            "evidence_refs": evidence_refs,
+            "selected": True,
+        },
+    ]
+    for index, layer in enumerate(layers[:3]):
+        label = str(layer.get("display_name_he") or layer.get("layer_key") or "שכבת GIS")
+        entities.append(
+            {
+                "id": f"entity_{story_id}_layer_{index + 1}",
+                "label": f"שכבה קשורה: {label}",
+                "entity_type": {"code": "GIS_STORY_LAYER", "label_he": "שכבת GIS", "vocabulary": "municipal-entity-type:v1"},
+                "spatial_representation": "schematic",
+                "schematic_shape": {"kind": "point", "coordinates": [[410 + (index * 42), 245 + (index * 35)]]},
+                "real_geometry": None,
+                "geometry_provenance": None,
+                "confidence_label": "בינונית",
+                "uncertainty_reasons": ["שכבה מקושרת מהסיפור; ללא גיאומטריה מאומתת בדשבורד."],
+                "active_from": None,
+                "active_to": None,
+                "activity_score": int(layer.get("event_count") or 0),
+                "is_recent_high_activity": False,
+                "topic_ids": [story_id],
+                "decision_ids": protocols,
+                "evidence_refs": evidence_refs,
+                "selected": False,
+            }
+        )
+    return entities
+
+
+def _story_map_context(story: dict[str, Any], progress: dict[str, Any], execution: dict[str, Any] | None = None) -> dict[str, Any]:
+    story_id = str(story.get("story_id") or "")
+    title = str(story.get("title_he") or "סיפור GIS")
+    location = _story_location_label(story)
+    summary = story.get("gis_summary") if isinstance(story.get("gis_summary"), dict) else {}
+    layers = [
+        {
+            "layer_key": str(row.get("layer_key") or "story_layer"),
+            "status": "story_linked_context",
+            "count": int(row.get("event_count") or 0),
+            "display_name_he": str(row.get("display_name_he") or row.get("layer_key") or "שכבת GIS"),
+            "govmap_aliases": _story_layer_govmap_aliases(str(row.get("layer_key") or "")),
+            "activation_source": "selected_story",
+        }
+        for row in _story_layer_rows(story)
+    ]
+    execution_queries = [row for row in (execution or {}).get("queries", []) if isinstance(row, dict)]
+    execution_status_counts: dict[str, int] = {}
+    for row in execution_queries:
+        status = str(row.get("status") or "unknown")
+        execution_status_counts[status] = execution_status_counts.get(status, 0) + 1
+    execution_summary = {
+        "status": "available" if execution else "missing_execution_artifact",
+        "source_path": str(GIS_STORY_GOVMAP_EXECUTION_PATH),
+        "query_count": len(execution_queries),
+        "status_counts": execution_status_counts,
+        "loaded_real_geometry_count": execution_status_counts.get("loaded_real_geometry", 0),
+        "empty_query_count": execution_status_counts.get("query_ready_but_empty", 0),
+        "not_executed_count": execution_status_counts.get("not_executed_live_disabled", 0),
+        "fallback_geocode_count": len([row for row in execution_queries if str(row.get("geocode_match_quality") or "").startswith("alternate_") or str(row.get("geocode_match_quality") or "") == "external_open_data_candidate"]),
+    }
+    execution_caveat = (
+        f"GovMap execution artifact: {execution_summary['loaded_real_geometry_count']} שכבות/שאילתות עם תוצאות, {execution_summary['empty_query_count']} ריקות, {execution_summary['not_executed_count']} לא הורצו, {execution_summary['fallback_geocode_count']} עם גיאוקוד fallback ולא התאמה מדויקת."
+        if execution
+        else "אין עדיין ארטיפקט הרצה אמיתי ל-GovMap עבור הסיפור הנבחר; המפה מציגה הקשר סכמטי בלבד."
+    )
+    return {
+        "status": "generated_protocol_gis_story",
+        "municipality_code": str(story.get("municipality_slug") or ""),
+        "municipality_id": str(story.get("municipality_slug") or ""),
+        "resident_context": {"address": location, "label_he": "רשות / מוקד סיפור"},
+        "layers": layers,
+        "story": {
+            "source": "generated_protocol_gis_story",
+            "selected_gis_story_id": story_id,
+            "story_title_he": title,
+            "traffic_light": story.get("traffic_light"),
+            "progression": story.get("progression"),
+            "question": _gis_story_search_row(story)["query"],
+            "map_stability": "story_context_layers_without_verified_geometry",
+        },
+        "story_anchor": {
+            "label_he": location,
+            "marker_kind": "circle",
+            "resolution_status": "city_level_fallback" if execution_summary.get("fallback_geocode_count") else "story_context",
+            "exact_facility_resolved": False if execution_summary.get("fallback_geocode_count") else None,
+        },
+        "real_gis_execution": execution_summary,
+        "progress": progress,
+        "caveats": [
+            execution_caveat,
+            f"סיפור GIS מתוך פרוטוקולי V3 עבור {location}: השכבות מקושרות מהאירועים, אך המפה כאן סכמטית ואינה גיאומטריה מאומתת.",
+            f"שאילתות GovMap מוכנות: {int(summary.get('ready_govmap_query_count') or 0)}; חסומות: {int(summary.get('blocked_govmap_query_count') or 0)}.",
+        ],
+    }
+
+
+def _gis_story_card(story: dict[str, Any], *, selected_story_id: str | None = None) -> dict[str, Any]:
     timeline_events = [row for row in story.get("timeline_events", []) if isinstance(row, dict)]
     first_event = timeline_events[0] if timeline_events else {}
     latest_event = timeline_events[-1] if timeline_events else {}
     judge = story.get("human_judgement") if isinstance(story.get("human_judgement"), dict) else {}
+    story_id = str(story.get("story_id") or "")
     return {
-        "story_id": str(story.get("story_id") or ""),
+        "story_id": story_id,
+        "story_query": _gis_story_search_row(story)["query"],
         "title_he": str(story.get("title_he") or "סיפור ללא כותרת"),
         "municipality_slug": str(story.get("municipality_slug") or ""),
         "traffic_light": str(story.get("traffic_light") or "yellow"),
@@ -1158,17 +1394,68 @@ def _gis_story_card(story: dict[str, Any]) -> dict[str, Any]:
         "mock_warning": bool(story.get("has_mock_completion")),
         "judge_confidence": str(judge.get("confidence") or ""),
         "judge_reason": str(judge.get("reason") or ""),
+        "selected": bool(story_id and story_id == str(selected_story_id or "")),
     }
 
 
-def build_mock_rag_dashboard_payload(question: str | None = None, selected_event_id: str | None = None, selected_topic_node_id: str | None = None) -> dict[str, Any]:
+def _gis_story_timeline_events(story: dict[str, Any], selected_event_id: str | None = None) -> list[dict[str, Any]]:
+    raw_events = [row for row in story.get("timeline_events", []) if isinstance(row, dict)]
+    selected_ids = {str(selected_event_id or "")}
+    visible = raw_events[-5:] if len(raw_events) > 5 else raw_events
+    if not selected_ids or not next((row for row in visible if str(row.get("id") or "") in selected_ids), None):
+        selected_ids = {str((visible[-1] if visible else {}).get("id") or "")}
+    out: list[dict[str, Any]] = []
+    for row in visible:
+        event_id = str(row.get("id") or row.get("event_id") or "")
+        mock_fields = [str(value) for value in (row.get("mock_fields") or [])]
+        real_fields = ["source_text", "evidence_quotes", "action_type", "matter"]
+        if not row.get("date_is_mock"):
+            real_fields.insert(0, "date")
+        inferred_fields = ["progress_status"]
+        if row.get("gis_layer_keys"):
+            inferred_fields.append("gis_layers")
+        if int(row.get("ready_govmap_query_count") or 0) or int(row.get("blocked_govmap_query_count") or 0):
+            inferred_fields.append("govmap_query_links")
+        out.append(
+            {
+                "id": event_id,
+                "date": str(row.get("date") or ""),
+                "date_label": str(row.get("date_label") or row.get("date") or ""),
+                "title": str(row.get("title") or row.get("event_status") or "אירוע"),
+                "summary": str(row.get("summary") or row.get("matter_he") or ""),
+                "selected": event_id in selected_ids,
+                "decision_ids": [str(row.get("artifact_id") or event_id)],
+                "evidence_refs": [str(row.get("artifact_id") or event_id)],
+                "progress": dict(row.get("progress") or {"status": row.get("traffic_light") or "yellow"}),
+                "date_is_mock": bool(row.get("date_is_mock")),
+                "date_source": str(row.get("date_source") or ""),
+                "real_fields": real_fields,
+                "mock_fields": mock_fields,
+                "inferred_fields": inferred_fields,
+                "provenance_label_he": "תאריך מוקאפ" if row.get("date_is_mock") else "תאריך מהמקור",
+                "provenance_detail_he": f"מקור תאריך: {row.get('date_source') or 'לא ידוע'}",
+                "gis_layer_keys": [str(value) for value in (row.get("gis_layer_keys") or [])],
+                "ready_govmap_query_count": int(row.get("ready_govmap_query_count") or 0),
+                "blocked_govmap_query_count": int(row.get("blocked_govmap_query_count") or 0),
+            }
+        )
+    return out
+
+
+def build_mock_rag_dashboard_payload(question: str | None = None, selected_event_id: str | None = None, selected_topic_node_id: str | None = None, selected_gis_story_id: str | None = None) -> dict[str, Any]:
     """Return a Tel Aviv resident mock payload shaped like the future dashboard API."""
 
-    top_scenario = _scenario_for_question(question or CURRENT_QUESTION)
+    current_question = str(question or CURRENT_QUESTION)
+    selected_story = _gis_story_by_id(selected_gis_story_id)
+    if selected_story is None:
+        selected_story = _gis_story_by_query(current_question)
+    selected_gis_story_id = str(selected_story.get("story_id") or "") if selected_story else None
+    top_scenario = _scenario_for_question(current_question)
     selected_topic_node_id = selected_topic_node_id or f"topic_{top_scenario['key']}"
     scenario = _scenario_for_topic_selection(top_scenario, selected_topic_node_id)
     selected_topic_node_id = f"topic_{scenario['key']}" if selected_topic_node_id not in SCENARIO_KEY_BY_TOPIC_ID and scenario is not top_scenario else selected_topic_node_id
-    selected_event_id = selected_event_id if selected_event_id in {_event_id(str(scenario["key"]), date_value) for date_value, _, _ in TIMELINE_TEMPLATES} else _default_event_id(scenario)
+    if not selected_story:
+        selected_event_id = selected_event_id if selected_event_id in {_event_id(str(scenario["key"]), date_value) for date_value, _, _ in TIMELINE_TEMPLATES} else _default_event_id(scenario)
     evidence = _evidence_rows(scenario)
     decisions = _decisions(scenario)
     entities = _map_entities(scenario, selected_event_id)
@@ -1179,6 +1466,24 @@ def build_mock_rag_dashboard_payload(question: str | None = None, selected_event
     story["active_mini_question"] = scenario["question"]
     story["selected_topic_node_id"] = selected_topic_node_id
     progress = geo_intent["geo"]["map_context"].get("progress") or {}
+    timeline_events = _timeline_events(scenario, selected_event_id)
+    timeline_selected_event_id = selected_event_id
+    selected_story_card = _gis_story_card(selected_story, selected_story_id=selected_gis_story_id) if selected_story else None
+    selected_map_entity_id = f"entity_{scenario['key']}_focus"
+    if selected_story:
+        story_timeline = _gis_story_timeline_events(selected_story, selected_event_id)
+        if story_timeline:
+            timeline_events = story_timeline
+            timeline_selected_event_id = next((row["id"] for row in story_timeline if row.get("selected")), story_timeline[-1]["id"])
+            selected_timeline_event = next((row for row in story_timeline if row.get("id") == timeline_selected_event_id), story_timeline[-1])
+            progress = selected_timeline_event.get("progress") or progress
+            entities = _story_map_entities(selected_story)
+            selected_map_entity_id = f"entity_{selected_gis_story_id}_focus"
+            geo_intent["geo"]["map_context"] = _story_map_context(selected_story, progress, _gis_story_govmap_execution_by_id(selected_gis_story_id))
+            geo_intent["geo"]["focus"] = {"focus_type": "municipality_or_story", "confidence_label": "בינונית", "place_query": _story_location_label(selected_story), "matched_text": _story_location_label(selected_story)}
+            geo_intent["geo"]["resident_layer_keys"] = [row["layer_key"] for row in geo_intent["geo"]["map_context"].get("layers", [])]
+            geo_intent["geo"]["govmap_layer_aliases"] = [alias for row in geo_intent["geo"]["map_context"].get("layers", []) for alias in row.get("govmap_aliases", []) if alias]
+            geo_intent["geo"]["focus_layer"] = (geo_intent["geo"]["resident_layer_keys"] or [""])[0]
     topics = [
         _topic_node(topic_id=f"topic_root_{scenario['category']}", label=CATEGORY_LABELS.get(scenario["category"], "שירותים עירוניים"), primary_category_id=scenario["category"], mention_count=120, decision_count=18, child_ids=[f"topic_{scenario['key']}"], depth=0),
         _topic_node(topic_id=f"topic_{scenario['key']}", label=scenario["topic"], primary_category_id=scenario["category"], mention_count=24, decision_count=5, parent_id=f"topic_root_{scenario['category']}", depth=1),
@@ -1189,22 +1494,23 @@ def build_mock_rag_dashboard_payload(question: str | None = None, selected_event
             "municipality_brand": "עירייה",
             "header": {"search_aria_label": "שאלת חיפוש", "search_submit_label": "חיפוש", "popular_searches_button": "חיפושים פופולריים", "filters_button": "מסננים", "admin_button": "מנהל", "admin_aria_label": "מנהל"},
             "answer_drawer": {"close_label": "סגירת תשובה", "title": "תשובה", "question_prefix": "שאלה:", "brief_title": "תקציר", "confidence_label": "ביטחון התשובה:", "decisions_title": "החלטות עיקריות", "related_topics_title": "נושאים קשורים", "limitations_title": "מגבלות", "source_link_label": "מקור"},
-            "map": {"title": f"מפת סיפור GIS: {scenario['topic']}", "description": f"כתובת: {_address_with_city(scenario)}. סטטוס נבחר: {progress.get('label_he', '')}", "provenance_label": "מפה סכמטית בלבד", "provenance_description": "שכבות GovMap נטענות כהקשר עדכני וקבוע לנושא; ציר הזמן הוא דוגמת פרוטוקולים ולא היסטוריית GIS רשמית.", "sea_label": "חוף הים", "legend_title": "מקרא", "control_labels": ["מרכז מפה", "התקרבות", "התרחקות", "שכבות מפה"], "area_labels": ["צפון העיר", "מרכז העיר", "מערב העיר", "מזרח העיר", "דרום העיר"], "marker_labels": ["תחנת תחבורה ציבורית", "פארק", "מבנה ציבור"]},
+            "map": {"title": f"מפת סיפור GIS: {selected_story_card['title_he'] if selected_story_card else scenario['topic']}", "description": (f"מוקד: {_story_location_label(selected_story)}. סטטוס סיפור: {progress.get('label_he', '')}. המפה סכמטית והשכבות הן הקשר GIS." if selected_story else f"כתובת: {_address_with_city(scenario)}. סטטוס נבחר: {progress.get('label_he', '')}"), "provenance_label": "מפה סכמטית בלבד", "provenance_description": "שכבות GovMap נטענות כהקשר עדכני וקבוע לנושא; ציר הזמן הוא דוגמת פרוטוקולים ולא היסטוריית GIS רשמית.", "sea_label": "חוף הים", "legend_title": "מקרא", "control_labels": ["מרכז מפה", "התקרבות", "התרחקות", "שכבות מפה"], "area_labels": ["צפון העיר", "מרכז העיר", "מערב העיר", "מזרח העיר", "דרום העיר"], "marker_labels": ["תחנת תחבורה ציבורית", "פארק", "מבנה ציבור"]},
             "timeline": {"title": "ציר זמן", "previous_label": "אירוע קודם", "next_label": "אירוע הבא"},
             "start_discovery_panel": {"categories_title": "קטגוריות", "hot_topics_title": "נושאים בולטים", "topic_tree_title": "עץ נושאים", "show_more_label": "הצג עוד", "show_full_tree_label": "הצג כל העץ"},
             "filter_modal": {"title": "סינון תוצאות", "close_label": "סגירת מסננים", "sections": ["אזור", "טווח זמן", "קטגוריה", "סוגי מקורות", "ודאות"], "reset_label": "איפוס", "apply_label": "החל סינון", "options": {"area": ["כל העיר", "מרכז תל אביב"], "time_range": ["2024", "כל השנים"], "category": ["תכנון ובנייה", "תחבורה", "חינוך", "רווחה", "סביבה"], "source_types": ["פרוטוקולים ונספחים", "פרוטוקולים"], "confidence": ["גבוהה ובינונית", "כל הרמות"]}},
-            "popular_searches": {"title": "חיפושים פופולריים", "choices": POPULAR_QUESTIONS},
+            "popular_searches": {"title": "חיפושים פופולריים", "choices": POPULAR_QUESTIONS, "story_title": "סיפורי פרוטוקולים", "story_choices": _popular_story_questions()},
         },
         "state": {
             "municipality_id": TEL_AVIV_MUNICIPALITY_ID,
-            "current_question": top_scenario["question"],
-            "search_intent": scenario["intent"],
+            "current_question": current_question,
+            "search_intent": "protocol_gis_story_lookup" if selected_story else scenario["intent"],
             "intent_resolution": geo_intent,
             "selected_time_range": {"start": TIMELINE_TEMPLATES[0][0], "end": TIMELINE_TEMPLATES[-1][0]},
             "selected_category_id": scenario["category"],
             "selected_topic_node_id": selected_topic_node_id,
-            "selected_map_entity_id": f"entity_{scenario['key']}_focus",
-            "selected_timeline_event_id": selected_event_id,
+            "selected_gis_story_id": selected_gis_story_id,
+            "selected_map_entity_id": selected_map_entity_id,
+            "selected_timeline_event_id": timeline_selected_event_id,
             "current_answer_id": f"answer_{scenario['key']}",
             "active_detail_drawer_mode": "answer",
             "confidence_filter": "medium_and_high",
@@ -1218,7 +1524,7 @@ def build_mock_rag_dashboard_payload(question: str | None = None, selected_event
             "login_state": "anonymous",
         },
         "start_discovery_panel": _discovery_panel(top_scenario, selected_topic_node_id),
-        "gis_story_review": _gis_story_review_panel(),
+        "gis_story_review": _gis_story_review_panel(selected_gis_story_id),
         "main_civic_workspace": {
             "map": {
                 "spatial_representation": "schematic",
@@ -1230,15 +1536,15 @@ def build_mock_rag_dashboard_payload(question: str | None = None, selected_event
                 "legend": [{"id": "selected_area", "label": "אזור נבחר"}, {"id": "neighborhood_boundary", "label": "שכונה / גבול עירוני"}, {"id": "story_focus", "label": "מוקד ציר זמן"}, {"id": "protocol_context", "label": "הקשר פרוטוקול"}],
                 "real_gis_available": False,
             },
-            "timeline": {"selected_event_id": selected_event_id, "events": _timeline_events(scenario, selected_event_id)},
+            "timeline": {"selected_event_id": timeline_selected_event_id, "events": timeline_events},
             "map_context": geo_intent["geo"]["map_context"],
         },
         "end_detail_drawer": {
             "mode": "answer",
             "answer_id": f"answer_{scenario['key']}",
             "title": "תשובה",
-            "question": scenario["question"],
-            "brief": f"{_display_brief(scenario)} ציר הזמן מציג חמישה שלבי פרוטוקול; המפה נשארת קבועה לנושא והאירועים משנים רק את סטטוס ההתקדמות.",
+            "question": current_question if selected_story_card else scenario["question"],
+            "brief": f"{selected_story_card['title_he']}: הסיפור שנבחר מתוך פרוטוקולי V3 מוצג כציר זמן ביקורתי עם רמזור התקדמות." if selected_story_card else f"{_display_brief(scenario)} ציר הזמן מציג חמישה שלבי פרוטוקול; המפה נשארת קבועה לנושא והאירועים משנים רק את סטטוס ההתקדמות.",
             "confidence_label": "בינונית",
             "decisions": decisions,
             "related_topics": related,
@@ -1270,6 +1576,7 @@ def apply_mock_rag_dashboard_interaction(*, state: dict[str, Any] | None, intera
         return None
 
     current_question = str((state or {}).get("current_question") or CURRENT_QUESTION)
+    selected_gis_story_id = str((state or {}).get("selected_gis_story_id") or "")
     top_scenario = _scenario_for_question(current_question)
     selected_topic_node_id = str((state or {}).get("selected_topic_node_id") or f"topic_{top_scenario['key']}")
     scenario = _scenario_for_topic_selection(top_scenario, selected_topic_node_id)
@@ -1278,13 +1585,29 @@ def apply_mock_rag_dashboard_interaction(*, state: dict[str, Any] | None, intera
         selected_event_id = _default_event_id(scenario)
 
     if interaction_type == "select_popular_search":
-        if interaction_id not in SCENARIO_BY_QUESTION:
+        selected_story = _gis_story_by_query(interaction_id)
+        if selected_story is not None:
+            current_question = interaction_id
+            selected_gis_story_id = str(selected_story.get("story_id") or "")
+            selected_event_id = ""
+        elif interaction_id not in SCENARIO_BY_QUESTION:
             return None
-        top_scenario = SCENARIO_BY_QUESTION[interaction_id]
-        scenario = top_scenario
-        selected_topic_node_id = f"topic_{scenario['key']}"
-        selected_event_id = _default_event_id(scenario)
+        else:
+            selected_gis_story_id = ""
+            top_scenario = SCENARIO_BY_QUESTION[interaction_id]
+            current_question = top_scenario["question"]
+            scenario = top_scenario
+            selected_topic_node_id = f"topic_{scenario['key']}"
+            selected_event_id = _default_event_id(scenario)
+    elif interaction_type == "select_gis_story":
+        selected_story = _gis_story_by_id(interaction_id)
+        if selected_story is None:
+            return None
+        selected_gis_story_id = str(selected_story.get("story_id") or "")
+        current_question = _gis_story_search_row(selected_story)["query"]
+        selected_event_id = ""
     elif interaction_type == "select_category":
+        selected_gis_story_id = ""
         selected_key = _first_scenario_key_for_category(interaction_id)
         if not selected_key:
             return None
@@ -1292,6 +1615,7 @@ def apply_mock_rag_dashboard_interaction(*, state: dict[str, Any] | None, intera
         scenario = SCENARIO_BY_KEY[selected_key]
         selected_event_id = _default_event_id(scenario)
     elif interaction_type in {"select_hot_topic", "select_topic_tree_node"}:
+        selected_gis_story_id = ""
         validation_payload = build_mock_rag_dashboard_payload(question=top_scenario["question"], selected_event_id=selected_event_id, selected_topic_node_id=selected_topic_node_id)
         rows = validation_payload["start_discovery_panel"]["hot_topics"] if interaction_type == "select_hot_topic" else validation_payload["start_discovery_panel"]["focused_topic_tree_context"]["children"]
         enabled_ids = {row["id"] for row in rows if not row.get("disabled")}
@@ -1301,11 +1625,16 @@ def apply_mock_rag_dashboard_interaction(*, state: dict[str, Any] | None, intera
         scenario = _scenario_for_topic_selection(top_scenario, selected_topic_node_id)
         selected_event_id = _default_event_id(scenario)
     elif interaction_type == "select_timeline_event":
-        valid_event_ids = {_event_id(str(scenario["key"]), date_value) for date_value, _, _ in TIMELINE_TEMPLATES}
+        if selected_gis_story_id:
+            selected_story = _gis_story_by_id(selected_gis_story_id)
+            valid_event_ids = {str(row.get("id") or "") for row in (selected_story or {}).get("timeline_events", []) if isinstance(row, dict)}
+        else:
+            valid_event_ids = {_event_id(str(scenario["key"]), date_value) for date_value, _, _ in TIMELINE_TEMPLATES}
         if interaction_id not in valid_event_ids:
             return None
         selected_event_id = interaction_id
     elif interaction_type == "apply_filters":
+        selected_gis_story_id = ""
         filters = interaction.get("filters") if isinstance(interaction.get("filters"), dict) else {}
         selected_key = _first_scenario_key_for_category(_category_id_from_filter(filters.get("category")))
         if selected_key:
@@ -1313,7 +1642,7 @@ def apply_mock_rag_dashboard_interaction(*, state: dict[str, Any] | None, intera
             scenario = SCENARIO_BY_KEY[selected_key]
             selected_event_id = _default_event_id(scenario)
 
-    payload = build_mock_rag_dashboard_payload(question=top_scenario["question"], selected_event_id=selected_event_id, selected_topic_node_id=selected_topic_node_id)
+    payload = build_mock_rag_dashboard_payload(question=current_question, selected_event_id=selected_event_id, selected_topic_node_id=selected_topic_node_id, selected_gis_story_id=selected_gis_story_id)
     next_state = dict(payload["state"])
     if isinstance(state, dict):
         for key in ("confidence_filter", "source_type_filter", "filter_modal_open", "active_filter_count", "active_filter_summary", "popular_searches_open", "login_state"):
@@ -1345,6 +1674,10 @@ def apply_mock_rag_dashboard_interaction(*, state: dict[str, Any] | None, intera
     elif interaction_type == "select_timeline_event":
         next_state["selected_timeline_event_id"] = selected_event_id
         next_state["active_detail_drawer_mode"] = "timelineEvent"
+    elif interaction_type == "select_gis_story":
+        next_state["selected_gis_story_id"] = selected_gis_story_id
+        next_state["current_question"] = current_question
+        next_state["active_detail_drawer_mode"] = "answer"
     elif interaction_type == "select_map_entity":
         if interaction_id not in entity_ids:
             return None
@@ -1371,7 +1704,8 @@ def apply_mock_rag_dashboard_interaction(*, state: dict[str, Any] | None, intera
         next_state["active_filter_count"] = 0
         next_state["active_filter_summary"] = {}
     elif interaction_type == "select_popular_search":
-        next_state["current_question"] = top_scenario["question"]
+        next_state["current_question"] = current_question
+        next_state["selected_gis_story_id"] = selected_gis_story_id or None
         next_state["cached_answer_id"] = f"cached_answer_{scenario['key']}"
         next_state["active_detail_drawer_mode"] = "answer"
     else:
