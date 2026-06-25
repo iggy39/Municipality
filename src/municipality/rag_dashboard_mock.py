@@ -1232,6 +1232,77 @@ def _story_layer_govmap_aliases(layer_key: str) -> list[str]:
     return list(dict.fromkeys(aliases))
 
 
+# External/open-data geocoding candidates are useful evidence, but not exact GovMap geometry.
+_AUTO_ACTIVATED_STORY_GEOCODE_MATCHES = {"primary_typed_geocode", "primary_unfiltered_geocode"}
+
+
+def _clean_story_gis_text(value: Any) -> str:
+    return " ".join(str(value or "").replace("_", " ").split()).strip().lower()
+
+
+def _story_municipality_terms(story: dict[str, Any]) -> set[str]:
+    terms = {_clean_story_gis_text(story.get("municipality_slug"))}
+    terms.update(_clean_story_gis_text(value) for value in (story.get("location_labels") or []))
+    return {term for term in terms if term}
+
+
+def _story_center_is_city_only(story: dict[str, Any], value: Any) -> bool:
+    text = _clean_story_gis_text(value)
+    return bool(text and text in _story_municipality_terms(story))
+
+
+def _story_execution_specific_queries(execution: dict[str, Any] | None, story: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return executed queries that resolved a story-specific center, not a city fallback."""
+
+    out: list[dict[str, Any]] = []
+    for query in [row for row in (execution or {}).get("queries", []) if isinstance(row, dict)]:
+        if str(query.get("status") or "") != "loaded_real_geometry":
+            continue
+        if str(query.get("geocode_match_quality") or "") not in _AUTO_ACTIVATED_STORY_GEOCODE_MATCHES:
+            continue
+        search_text = str(query.get("search_text") or "").strip()
+        center = query.get("center") if isinstance(query.get("center"), dict) else {}
+        if not search_text or _story_center_is_city_only(story, search_text) or _story_center_is_city_only(story, center.get("source_text")):
+            continue
+        out.append(query)
+    return out
+
+
+def _story_execution_focus(execution: dict[str, Any] | None, story: dict[str, Any]) -> dict[str, Any] | None:
+    for query in _story_execution_specific_queries(execution, story):
+        center = query.get("center") if isinstance(query.get("center"), dict) else {}
+        if not (str(query.get("search_text") or "").strip() and center.get("x") is not None and center.get("y") is not None):
+            continue
+        return {
+            "search_text": str(query.get("search_text") or "").strip(),
+            "center": dict(center),
+            "geocode_match_quality": str(query.get("geocode_match_quality") or ""),
+            "geocode_provider": str(query.get("geocode_provider") or ""),
+        }
+    return None
+
+
+def _story_execution_feature_aliases_by_layer(execution: dict[str, Any] | None, story: dict[str, Any]) -> dict[str, list[str]]:
+    """Return aliases from executed story-specific GovMap queries only."""
+
+    out: dict[str, list[str]] = {}
+    for query in _story_execution_specific_queries(execution, story):
+        layer_key = str(query.get("layer_key") or "").strip()
+        if not layer_key:
+            continue
+        aliases: list[str] = []
+        for feature in query.get("features", []) or []:
+            if isinstance(feature, dict) and str(feature.get("layer_alias") or "").strip():
+                aliases.append(str(feature.get("layer_alias") or "").strip())
+        query_aliases = [str(alias).strip() for alias in query.get("map_layer_aliases", []) if str(alias or "").strip()]
+        if not aliases and len(query_aliases) == 1:
+            # A single-alias loaded query is safe to auto-activate even if the feature payload omitted layer_alias.
+            aliases = query_aliases
+        if aliases:
+            out[layer_key] = list(dict.fromkeys([*out.get(layer_key, []), *aliases]))
+    return out
+
+
 def _story_map_entities(story: dict[str, Any]) -> list[dict[str, Any]]:
     story_id = str(story.get("story_id") or "gis_story")
     title = str(story.get("title_he") or "סיפור GIS")
@@ -1310,16 +1381,38 @@ def _story_map_context(story: dict[str, Any], progress: dict[str, Any], executio
     title = str(story.get("title_he") or "סיפור GIS")
     location = _story_location_label(story)
     summary = story.get("gis_summary") if isinstance(story.get("gis_summary"), dict) else {}
+    execution_focus = _story_execution_focus(execution, story)
+    execution_aliases_by_layer = _story_execution_feature_aliases_by_layer(execution, story)
+    layer_rows = list(_story_layer_rows(story))
+    seen_layer_keys = {str(row.get("layer_key") or "") for row in layer_rows}
+    execution_layer_labels = {
+        str(row.get("layer_key") or ""): str(row.get("layer_display_name_he") or row.get("layer_key") or "שכבת GIS")
+        for row in _story_execution_specific_queries(execution, story)
+        if str(row.get("layer_key") or "")
+    }
+    for layer_key, aliases in execution_aliases_by_layer.items():
+        if layer_key in seen_layer_keys or not aliases:
+            continue
+        group = _resident_layer_group_payload(layer_key) or {}
+        layer_rows.append(
+            {
+                "layer_key": layer_key,
+                "display_name_he": str(group.get("display_name_he") or execution_layer_labels.get(layer_key) or layer_key),
+                "event_count": 1,
+            }
+        )
+        seen_layer_keys.add(layer_key)
     layers = [
         {
             "layer_key": str(row.get("layer_key") or "story_layer"),
             "status": "story_linked_context",
             "count": int(row.get("event_count") or 0),
             "display_name_he": str(row.get("display_name_he") or row.get("layer_key") or "שכבת GIS"),
-            "govmap_aliases": _story_layer_govmap_aliases(str(row.get("layer_key") or "")),
-            "activation_source": "selected_story",
+            "govmap_aliases": execution_aliases_by_layer.get(str(row.get("layer_key") or ""), []),
+            "context_govmap_aliases": _story_layer_govmap_aliases(str(row.get("layer_key") or "")),
+            "activation_source": "real_govmap_execution" if execution_aliases_by_layer.get(str(row.get("layer_key") or "")) else "story_context_not_auto_activated",
         }
-        for row in _story_layer_rows(story)
+        for row in layer_rows
     ]
     execution_queries = [row for row in (execution or {}).get("queries", []) if isinstance(row, dict)]
     execution_status_counts: dict[str, int] = {}
@@ -1332,9 +1425,11 @@ def _story_map_context(story: dict[str, Any], progress: dict[str, Any], executio
         "query_count": len(execution_queries),
         "status_counts": execution_status_counts,
         "loaded_real_geometry_count": execution_status_counts.get("loaded_real_geometry", 0),
+        "story_specific_loaded_real_geometry_count": len(_story_execution_specific_queries(execution, story)),
         "empty_query_count": execution_status_counts.get("query_ready_but_empty", 0),
         "not_executed_count": execution_status_counts.get("not_executed_live_disabled", 0),
         "fallback_geocode_count": len([row for row in execution_queries if str(row.get("geocode_match_quality") or "").startswith("alternate_") or str(row.get("geocode_match_quality") or "") == "external_open_data_candidate"]),
+        "activated_govmap_alias_count": len({alias for aliases in execution_aliases_by_layer.values() for alias in aliases}),
     }
     execution_caveat = (
         f"GovMap execution artifact: {execution_summary['loaded_real_geometry_count']} שכבות/שאילתות עם תוצאות, {execution_summary['empty_query_count']} ריקות, {execution_summary['not_executed_count']} לא הורצו, {execution_summary['fallback_geocode_count']} עם גיאוקוד fallback ולא התאמה מדויקת."
@@ -1357,10 +1452,13 @@ def _story_map_context(story: dict[str, Any], progress: dict[str, Any], executio
             "map_stability": "story_context_layers_without_verified_geometry",
         },
         "story_anchor": {
-            "label_he": location,
+            "label_he": str((execution_focus or {}).get("search_text") or location),
             "marker_kind": "circle",
-            "resolution_status": "city_level_fallback" if execution_summary.get("fallback_geocode_count") else "story_context",
-            "exact_facility_resolved": False if execution_summary.get("fallback_geocode_count") else None,
+            "resolution_status": "story_specific_executed" if execution_focus else ("city_level_fallback_or_unresolved" if execution else "story_context"),
+            "exact_facility_resolved": True if execution_focus else False if execution else None,
+            "center": (execution_focus or {}).get("center"),
+            "geocode_match_quality": (execution_focus or {}).get("geocode_match_quality"),
+            "geocode_provider": (execution_focus or {}).get("geocode_provider"),
         },
         "real_gis_execution": execution_summary,
         "progress": progress,
@@ -1479,8 +1577,24 @@ def build_mock_rag_dashboard_payload(question: str | None = None, selected_event
             progress = selected_timeline_event.get("progress") or progress
             entities = _story_map_entities(selected_story)
             selected_map_entity_id = f"entity_{selected_gis_story_id}_focus"
-            geo_intent["geo"]["map_context"] = _story_map_context(selected_story, progress, _gis_story_govmap_execution_by_id(selected_gis_story_id))
-            geo_intent["geo"]["focus"] = {"focus_type": "municipality_or_story", "confidence_label": "בינונית", "place_query": _story_location_label(selected_story), "matched_text": _story_location_label(selected_story)}
+            selected_execution = _gis_story_govmap_execution_by_id(selected_gis_story_id)
+            execution_focus = _story_execution_focus(selected_execution, selected_story)
+            geo_intent["geo"]["map_context"] = _story_map_context(selected_story, progress, selected_execution)
+            if execution_focus:
+                center = execution_focus.get("center") if isinstance(execution_focus.get("center"), dict) else {}
+                geo_intent["geo"]["focus"] = {
+                    "focus_type": "story_specific_executed_govmap_center",
+                    "confidence_label": "גבוהה" if str(execution_focus.get("geocode_match_quality") or "").startswith("primary_") else "בינונית",
+                    "place_query": str(execution_focus.get("search_text") or ""),
+                    "address_query": str(execution_focus.get("search_text") or ""),
+                    "matched_text": str(execution_focus.get("search_text") or ""),
+                    "center_x": center.get("x"),
+                    "center_y": center.get("y"),
+                    "geocode_match_quality": execution_focus.get("geocode_match_quality"),
+                    "geocode_provider": execution_focus.get("geocode_provider"),
+                }
+            else:
+                geo_intent["geo"]["focus"] = {"focus_type": "story_without_specific_executed_govmap_center", "confidence_label": "נמוכה", "place_query": "", "matched_text": _story_location_label(selected_story)}
             geo_intent["geo"]["resident_layer_keys"] = [row["layer_key"] for row in geo_intent["geo"]["map_context"].get("layers", [])]
             geo_intent["geo"]["govmap_layer_aliases"] = [alias for row in geo_intent["geo"]["map_context"].get("layers", []) for alias in row.get("govmap_aliases", []) if alias]
             geo_intent["geo"]["focus_layer"] = (geo_intent["geo"]["resident_layer_keys"] or [""])[0]

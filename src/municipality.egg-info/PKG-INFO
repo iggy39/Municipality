@@ -4,9 +4,16 @@ Version: 0.1.0
 Summary: Municipality discovery and versioned raw archive pipeline
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
+Requires-Dist: alembic>=1.14
 Requires-Dist: beautifulsoup4>=4.12
 Requires-Dist: fastapi>=0.115
 Requires-Dist: httpx>=0.28
+Requires-Dist: openai>=1.0
+Requires-Dist: psycopg[binary]>=3.2
+Requires-Dist: PyMuPDF>=1.24
+Requires-Dist: pyproj>=3.7
+Requires-Dist: pyshp>=2.3
+Requires-Dist: PyYAML>=6.0
 Requires-Dist: sqlalchemy>=2.0
 Requires-Dist: uvicorn>=0.34
 Provides-Extra: dev
@@ -20,7 +27,7 @@ Implementation scaffold for Milestone M1 (discovery and versioned raw archive).
 ## Development
 
 - Install dev dependencies: `pip install -e ".[dev]"`
-- Enable git hooks once per clone: `pre-commit install`
-- Run all hooks manually: `pre-commit run --all-files`
+- Enable git hooks once per clone: `python -m pre_commit install`
+- Run all hooks manually: `python -m pre_commit run --all-files`
 
 The pre-commit hook enforces the Hebrew direction guard (`tests/unit/test_hebrew_direction_guard.py`) to prevent reversed Hebrew text regressions.

@@ -3,8 +3,17 @@ from __future__ import annotations
 import json
 
 import httpx
+from pyproj import Transformer
 
 from municipality.govmap_client import DEFAULT_GOVMAP_CENTER_X, DEFAULT_GOVMAP_CENTER_Y, DEFAULT_GOVMAP_LEVEL, GOVMAP_DASHBOARD_LAYERS, GOVMAP_DEFAULT_VISIBLE_LAYER_ALIASES, GovMapClient, build_govmap_dashboard_payload
+
+
+def _polygon_wkt_extent_m(wkt: str) -> tuple[float, float]:
+    body = wkt[wkt.find("((") + 2 : wkt.rfind("))")]
+    points = [tuple(float(part) for part in raw.strip().split()[:2]) for raw in body.split(",") if raw.strip()]
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return max(xs) - min(xs), max(ys) - min(ys)
 
 
 def test_govmap_client_sends_authorized_origin_and_spatial_payload() -> None:
@@ -83,6 +92,20 @@ def test_build_govmap_dashboard_payload_degrades_without_live_calls(monkeypatch)
     assert "PARCEL_ALL" in payload["govmap"]["visible_layers"]
     assert "address" not in payload["govmap"]["visible_layers"]
     assert payload["govmap"]["level"] == DEFAULT_GOVMAP_LEVEL
+    assert payload["query"]["selected_area_radius_m"] == 300.0
+    assert payload["govmap"]["selected_area_radius_m"] == 300.0
+    assert payload["govmap"]["selected_area"]["feature_type"] == "address_radius_selected_area"
+    assert payload["govmap"]["selected_area"]["radius_m"] == 300.0
+    assert payload["govmap"]["selected_area"]["display_wkt"].startswith("POLYGON")
+    assert payload["govmap"]["selected_area"]["geometry"]["type"] == "Polygon"
+    assert payload["govmap"]["address_marker"]["feature_type"] == "address_marker"
+    assert payload["govmap"]["address_marker"]["display_wkt"].startswith("POINT")
+    assert payload["govmap"]["address_marker"]["house_display_wkt"].startswith("POLYGON")
+    house_width_m, house_height_m = _polygon_wkt_extent_m(payload["govmap"]["address_marker"]["house_display_wkt"])
+    assert 8.0 <= house_width_m <= 9.0
+    assert 6.0 <= house_height_m <= 6.8
+    assert payload["govmap"]["address_marker"]["geometry_kind"] == "house_marker"
+    assert payload["govmap"]["address_marker"]["geometry"]["type"] == "Point"
     assert "z=8" in payload["govmap"]["iframe_url"]
     assert payload["visual_context"]["mode"] == "govmap_native"
     assert payload["basemap"]["display_status"] == "official"
@@ -113,6 +136,40 @@ def test_build_govmap_dashboard_payload_resolves_municipality_center(monkeypatch
     assert captured_spatial_body["data"]["geometry"] == "POINT(167655.36 635701.63)"
 
 
+def test_address_focus_does_not_recenter_to_selected_focus_feature(monkeypatch) -> None:
+    monkeypatch.setenv("GOVMAP_DASHBOARD_LIVE", "1")
+    address_x = 180000.0
+    address_y = 660000.0
+    focus_x = 181500.0
+    focus_y = 661500.0
+    focus_mercator_x, focus_mercator_y = Transformer.from_crs("EPSG:2039", "EPSG:3857", always_xy=True).transform(focus_x, focus_y)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content.decode("utf-8"))
+        if str(request.url).endswith("/api/search-service/api-search"):
+            return httpx.Response(200, json={"results": [{"type": "address", "centroid": f"POINT ({address_x} {address_y})", "originalText": "דיזנגוף 99"}]})
+        if str(request.url).endswith("/api/spatial-analysis/select-feature-on-map"):
+            layer_name = body.get("layer", {}).get("layerName")
+            if layer_name == "mikve":
+                return httpx.Response(200, json=[{"objectid": 479, "wkt": f"POINT ({focus_mercator_x} {focus_mercator_y})"}])
+            return httpx.Response(200, json=[])
+        return httpx.Response(200, json={"layers": {}})
+
+    client = GovMapClient(api_key="test-token", origin="https://horizonscanninglab.org", transport=httpx.MockTransport(handler))
+
+    payload = build_govmap_dashboard_payload(radius_m=3000, profile="question", address="דיזנגוף 99 תל אביב", focus_layer="mikve", client=client)
+
+    assert payload["query"]["center_source"] == "address_search"
+    assert payload["query"]["center_x"] == address_x
+    assert payload["query"]["center_y"] == address_y
+    assert payload["govmap"]["center"]["x"] == address_x
+    assert payload["govmap"]["center"]["y"] == address_y
+    assert abs(payload["govmap"]["selected_focus_feature"]["govmap_center"]["x"] - focus_x) < 0.01
+    assert abs(payload["govmap"]["selected_focus_feature"]["govmap_center"]["y"] - focus_y) < 0.01
+    assert payload["govmap"]["level"] == 10
+    assert "z=10" in payload["govmap"]["iframe_url"]
+
+
 def test_initial_govmap_payload_is_metadata_only(monkeypatch) -> None:
     monkeypatch.setenv("GOVMAP_DASHBOARD_LIVE", "1")
     captured_spatial_layers: list[str] = []
@@ -139,7 +196,7 @@ def test_initial_govmap_payload_is_metadata_only(monkeypatch) -> None:
     assert all(layer["default_visible"] is False for group in payload["govmap"]["resident_layer_groups"] for layer in group["layers"])
 
 
-def test_selected_govmap_neighborhood_includes_itm_display_wkt(monkeypatch) -> None:
+def test_selected_govmap_area_is_address_circle_and_neighborhood_is_boundary(monkeypatch) -> None:
     monkeypatch.setenv("GOVMAP_DASHBOARD_LIVE", "1")
     selected_wkt = "MULTIPOLYGON Z (((3871846.291 3772177.428 0,3871853.642 3772180.344 0,3871852.561 3772177.648 0,3871846.291 3772177.428 0)))"
 
@@ -155,8 +212,19 @@ def test_selected_govmap_neighborhood_includes_itm_display_wkt(monkeypatch) -> N
     payload = build_govmap_dashboard_payload(radius_m=3000, profile="initial", client=client)
 
     selected_area = payload["govmap"]["selected_area"]
-    assert selected_area["wkt"] == selected_wkt
+    assert selected_area["feature_type"] == "address_radius_selected_area"
+    assert selected_area["source_id"] == "govmap:address_radius"
+    assert selected_area["radius_m"] == 300.0
     assert selected_area["display_srid"] == "2039"
-    assert selected_area["display_wkt"].startswith("MULTIPOLYGON")
-    assert "3871846" not in selected_area["display_wkt"]
-    assert " Z " not in selected_area["display_wkt"]
+    assert selected_area["display_wkt"].startswith("POLYGON")
+    assert selected_area["geometry"]["type"] == "Polygon"
+    assert payload["parcel"] == selected_area
+    assert payload["govmap"]["address_marker"]["display_wkt"].startswith("POINT")
+    assert payload["govmap"]["address_marker"]["house_display_wkt"].startswith("POLYGON")
+
+    boundary = payload["govmap"]["neighborhood_boundary"]
+    assert boundary["wkt"] == selected_wkt
+    assert boundary["display_srid"] == "2039"
+    assert boundary["display_wkt"].startswith("MULTIPOLYGON")
+    assert "3871846" not in boundary["display_wkt"]
+    assert " Z " not in boundary["display_wkt"]

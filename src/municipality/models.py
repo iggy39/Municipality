@@ -813,6 +813,12 @@ class TopicSubject(Base):
     subject_child_label_norm: Mapped[str] = mapped_column(Text, nullable=False)
     subject_object_he: Mapped[str | None] = mapped_column(Text, nullable=True)
     subject_details_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_root_label_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_root_label_norm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_child_label_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_child_label_norm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_matter_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_details_he: Mapped[str | None] = mapped_column(Text, nullable=True)
     artifact_role: Mapped[str | None] = mapped_column(String(64), nullable=True)
     topic_relevance: Mapped[str | None] = mapped_column(String(64), nullable=True)
     event_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
@@ -867,11 +873,136 @@ class TopicSubjectQualityReport(Base):
     subject_child_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
     subject_object_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
     subject_details_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_root_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_child_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_matter_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_details_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
     decision_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
     my_judgment: Mapped[str] = mapped_column(Text, nullable=False)
     ground_truth: Mapped[str] = mapped_column(Text, nullable=False)
     reason_for_failure: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TopicSubjectV3Run(Base):
+    __tablename__ = "topic_subject_v3_run"
+    __table_args__ = (
+        Index("ix_topic_subject_v3_run_municipality", "municipality_slug", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    municipality_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    write_mode: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source_artifact_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    event_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    candidate_subject_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    candidate_decision_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TopicSubjectV3Event(Base):
+    __tablename__ = "topic_subject_v3_event"
+    __table_args__ = (
+        UniqueConstraint("run_id", "event_id", name="uq_topic_subject_v3_event_run_event"),
+        Index("ix_topic_subject_v3_event_run", "run_id"),
+        Index("ix_topic_subject_v3_event_labels", "action_type_norm", "action_subtype_norm"),
+        Index("ix_topic_subject_v3_event_decision", "outcome_is_decision", "outcome_label_norm"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("topic_subject_v3_run.id"), nullable=False)
+    municipality_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    event_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source_document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
+    source_document_version_id: Mapped[int] = mapped_column(ForeignKey("document_version.id"), nullable=False)
+    anchor_artifact_id: Mapped[str | None] = mapped_column(String(64), ForeignKey("retrieval_artifact.artifact_id"), nullable=True)
+    anchor_semantic_node_id: Mapped[int | None] = mapped_column(ForeignKey("semantic_node.id"), nullable=True)
+    source_ordinal_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_ordinal_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_page_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    action_type_he: Mapped[str] = mapped_column(Text, nullable=False)
+    action_type_norm: Mapped[str] = mapped_column(Text, nullable=False)
+    action_subtype_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_subtype_norm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    other_action_type_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    other_action_type_norm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_type_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    action_type_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    matter_he: Mapped[str] = mapped_column(Text, nullable=False)
+    matter_norm: Mapped[str] = mapped_column(Text, nullable=False)
+    action_details_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_quote_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    subject_summary_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    what_text_is_about_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome_is_decision: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    outcome_label_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome_label_norm: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome_summary_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome_quote_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    validation_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalized_event_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extraction_payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judge_payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_refs_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TopicSubjectV3RowQuality(Base):
+    __tablename__ = "topic_subject_v3_row_quality"
+    __table_args__ = (
+        UniqueConstraint("run_id", "artifact_id", "semantic_node_id", name="uq_topic_subject_v3_row_run_artifact"),
+        Index("ix_topic_subject_v3_row_run", "run_id"),
+        Index("ix_topic_subject_v3_row_event", "run_id", "event_id"),
+        Index("ix_topic_subject_v3_row_status", "quality_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("topic_subject_v3_run.id"), nullable=False)
+    municipality_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_id: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    artifact_id: Mapped[str] = mapped_column(String(64), ForeignKey("retrieval_artifact.artifact_id"), nullable=False)
+    semantic_node_id: Mapped[int] = mapped_column(ForeignKey("semantic_node.id"), nullable=False)
+    source_document_id: Mapped[int] = mapped_column(ForeignKey("document.id"), nullable=False)
+    source_document_version_id: Mapped[int] = mapped_column(ForeignKey("document_version.id"), nullable=False)
+    source_ordinal: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_page_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_topic_label_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    real_text: Mapped[str] = mapped_column(Text, nullable=False)
+    corrected_text_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_role: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_role: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    topic_relevance: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    action_type_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_subtype_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    other_action_type_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    matter_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action_details_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome_by_dicta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_prediction_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judge_prediction_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prediction_comparison: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judge_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ground_truth_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason_for_failure: Mapped[str | None] = mapped_column(Text, nullable=True)
+    quality_status: Mapped[str] = mapped_column(String(32), nullable=False)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 

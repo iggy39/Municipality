@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -47,6 +47,9 @@ from municipality.models import (
     SemanticNode,
     DecisionSemanticLink,
     SourceSite,
+    TopicSubject,
+    TopicSubjectQualityReport,
+    TopicSubjectRun,
     Vote,
 )
 from municipality.pipeline import PipelineService
@@ -79,6 +82,7 @@ from municipality.rag_dashboard_mock import (
 from municipality.rag_dashboard_ui import render_rag_dashboard_page
 from municipality.search import search_thresholds_snapshot
 from municipality.semantic_canonicalization import SemanticCanonicalizer
+from municipality.subject_browser_ui import render_subject_browser_page
 
 
 def _default_html_fetcher(url: str) -> str:
@@ -174,6 +178,53 @@ MUNICIPALITY_CODE_TO_SLUG = {
     "5000": "tel_aviv",
     "9000": "beer_sheva",
     "0831": "yeruham",
+}
+TOPIC_SUBJECT_DISPLAY_RULES = {
+    ("שאילתה", ""): ("council_inquiry", "שאילתות מועצה", None),
+    ("מענה לשאילתה", ""): ("council_inquiry_response", "מענים לשאילתות", None),
+    ("בקשה", "בקשת מידע"): ("request_information", "שאילתות מועצה", None),
+    ("בקשה", "בקשת אישור"): ("request_approval", "בקשות אישור", None),
+    ("בקשה", "בקשת דיון"): ("request_discussion", "בקשות דיון", None),
+    ("בקשה", "בקשה להאצלת סמכויות"): ("request_approval", "בקשות אישור", "האצלת סמכויות"),
+    ("הצעה לסדר יום", ""): ("agenda_proposal", "הצעות לסדר יום", None),
+    ("אישור החלטה", ""): ("decision_approval", "אישורי החלטות", None),
+    ("אישור החלטה", "אישור החלטת ועדה"): ("decision_approval", "אישורי החלטות", "החלטת ועדה"),
+    ("אישור פרוטוקול", ""): ("protocol_approval", "אישורי פרוטוקולים", None),
+    ("המלצה", ""): ("committee_recommendation", "המלצות ועדה", None),
+    ("דיווח", ""): ("report_review", "דיווחים וסקירות", None),
+    ("דיווח", "סקירה"): ("report_review", "דיווחים וסקירות", "סקירה"),
+    ("הנחיה", "הנחיה לפעול"): ("follow_up_instruction", "הנחיות / משימות המשך", "פעולה"),
+    ("הנחיה", "הנחיה לתיאום מפגש"): ("follow_up_instruction", "הנחיות / משימות המשך", "תיאום מפגש"),
+}
+TOPIC_SUBJECT_DISPLAY_ORDER = {
+    "council_inquiry": 8,
+    "council_inquiry_response": 9,
+    "request_information": 10,
+    "request_approval": 20,
+    "request_discussion": 30,
+    "agenda_proposal": 40,
+    "decision_approval": 50,
+    "protocol_approval": 60,
+    "committee_recommendation": 70,
+    "report_review": 80,
+    "follow_up_instruction": 90,
+}
+TOPIC_SUBJECT_ENGLISH_LABELS = {
+    ("שאילתה", ""): "Council inquiry",
+    ("מענה לשאילתה", ""): "Response to council inquiry",
+    ("בקשה", "בקשת מידע"): "Council inquiry",
+    ("בקשה", "בקשת אישור"): "Request for approval",
+    ("בקשה", "בקשת דיון"): "Request for discussion",
+    ("בקשה", "בקשה להאצלת סמכויות"): "Request to delegate signing authority",
+    ("הצעה לסדר יום", ""): "Agenda proposal",
+    ("אישור החלטה", ""): "Decision approval",
+    ("אישור החלטה", "אישור החלטת ועדה"): "Committee decision approval",
+    ("אישור פרוטוקול", ""): "Protocol approval",
+    ("המלצה", ""): "Committee recommendation",
+    ("דיווח", ""): "Report",
+    ("דיווח", "סקירה"): "Review report",
+    ("הנחיה", "הנחיה לפעול"): "Follow-up instruction",
+    ("הנחיה", "הנחיה לתיאום מפגש"): "Instruction to coordinate a meeting",
 }
 
 
@@ -3726,8 +3777,8 @@ def rag_dashboard_evidence(evidence_id: str, db=Depends(get_db)) -> dict[str, An
 
 
 @app.get("/api/ui/rag-dashboard/gis-map")
-def rag_dashboard_gis_map(gush: str = "7103", helka: str = "43", radius_m: float = 3000.0, example: str = "tel_aviv_parcel", profile: str = "initial", provider: str | None = None, municipality: str | None = None, address: str | None = None, center_x: float | None = None, center_y: float | None = None, db=Depends(get_db)) -> dict[str, Any]:
-    return build_dashboard_gis_map_payload(db, gush=gush, helka=helka, radius_m=radius_m, example=example, profile=profile, provider=provider, municipality=municipality, address=address, center_x=center_x, center_y=center_y)
+def rag_dashboard_gis_map(gush: str = "7103", helka: str = "43", radius_m: float = 3000.0, example: str = "tel_aviv_parcel", profile: str = "initial", provider: str | None = None, municipality: str | None = None, address: str | None = None, center_x: float | None = None, center_y: float | None = None, focus_layer: str | None = None, timeline_event_id: str | None = None, db=Depends(get_db)) -> dict[str, Any]:
+    return build_dashboard_gis_map_payload(db, gush=gush, helka=helka, radius_m=radius_m, example=example, profile=profile, provider=provider, municipality=municipality, address=address, center_x=center_x, center_y=center_y, focus_layer=focus_layer, timeline_event_id=timeline_event_id)
 
 
 @app.get("/api/ui/rag-dashboard/gis-buildings")
@@ -3812,6 +3863,7 @@ def rag_dashboard_query(request: RagDashboardQueryRequest, db=Depends(get_db)) -
             municipality_id=effective_muni or request.muni,
             error_code=str(exc.detail or "dashboard_query_failed"),
             message_he="שירות התשובות לא הצליח להפיק תשובה כרגע.",
+            geo_intent_resolution=geo_intent_payload,
         )
     except Exception as exc:  # noqa: BLE001 - dashboard query should render a safe error state.
         return build_dashboard_error_payload(
@@ -3819,6 +3871,7 @@ def rag_dashboard_query(request: RagDashboardQueryRequest, db=Depends(get_db)) -
             municipality_id=effective_muni or request.muni,
             error_code=exc.__class__.__name__,
             message_he="שירות התשובות לא זמין כרגע.",
+            geo_intent_resolution=geo_intent_payload,
         )
     return build_dashboard_payload_from_ask_result(
         question=request.question,
@@ -3879,6 +3932,449 @@ def _dashboard_filter_semantic_label(filters: dict[str, Any]) -> str | None:
     if raw in labels:
         return labels[raw]
     return raw if raw and raw not in {"כל הקטגוריות", "הכול"} else None
+
+
+def _latest_topic_subject_run(*, db, municipality_slug: str, run_id: int | None = None) -> TopicSubjectRun | None:
+    if run_id is not None:
+        return db.execute(select(TopicSubjectRun).where(TopicSubjectRun.id == run_id)).scalar_one_or_none()
+
+    completed_write = db.execute(
+        select(TopicSubjectRun)
+        .where(TopicSubjectRun.municipality_slug == municipality_slug)
+        .where(TopicSubjectRun.status == "completed")
+        .where(TopicSubjectRun.write_mode.is_(True))
+        .order_by(TopicSubjectRun.started_at.desc(), TopicSubjectRun.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if completed_write is not None:
+        return completed_write
+
+    return db.execute(
+        select(TopicSubjectRun)
+        .where(TopicSubjectRun.municipality_slug == municipality_slug)
+        .where(TopicSubjectRun.status == "completed")
+        .order_by(TopicSubjectRun.started_at.desc(), TopicSubjectRun.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _topic_subject_run_payload(run: TopicSubjectRun) -> dict[str, Any]:
+    return {
+        "id": run.id,
+        "municipality": run.municipality_slug,
+        "model_provider": run.model_provider,
+        "model_name": run.model_name,
+        "status": run.status,
+        "write_mode": bool(run.write_mode),
+        "source_artifact_count": run.source_artifact_count,
+        "extraction_count": run.extraction_count,
+        "candidate_subject_count": run.candidate_subject_count,
+        "candidate_decision_count": run.candidate_decision_count,
+        "failed_count": run.failed_count,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+    }
+
+
+def _topic_subject_stored_label(*, root: str | None, child: str | None) -> str:
+    root_label = str(root or "").strip()
+    child_label = str(child or "").strip()
+    return f"{root_label} / {child_label}" if child_label else root_label
+
+
+def _topic_subject_display_payload(*, root: str | None, child: str | None) -> dict[str, Any]:
+    root_label = str(root or "").strip()
+    child_label = str(child or "").strip()
+    stored_label = _topic_subject_stored_label(root=root_label, child=child_label)
+    rule = TOPIC_SUBJECT_DISPLAY_RULES.get((root_label, child_label))
+    if rule is None:
+        fallback_key = "stored_" + re.sub(r"[^0-9A-Za-z_]+", "_", stored_label).strip("_")
+        rule = (fallback_key or "stored_unknown", stored_label or "לא מסווג", child_label or None)
+    group_key, group_label, subgroup_label = rule
+    return {
+        "group_key": group_key,
+        "group_label_he": group_label,
+        "subgroup_label_he": subgroup_label,
+        "stored_label_he": stored_label,
+        "stored_root_label_he": root_label,
+        "stored_child_label_he": child_label,
+    }
+
+
+def _topic_subject_quality_flags(subject: TopicSubject) -> list[str]:
+    flags: list[str] = []
+    if subject.topic_relevance == "topic_suspect":
+        flags.append("topic_suspect")
+    if subject.subject_status == "candidate_decision_rejected":
+        flags.append("decision_rejected_subject_kept")
+    if subject.row_role and subject.row_role != "action_anchor":
+        flags.append(f"row_role:{subject.row_role}")
+    if subject.anchor_status and subject.anchor_status != "validated_anchor":
+        flags.append(f"anchor_status:{subject.anchor_status}")
+    return flags
+
+
+def _topic_subject_rows(*, db, run_id: int, include_linked_details: bool) -> list[TopicSubject]:
+    stmt = select(TopicSubject).where(TopicSubject.run_id == run_id)
+    if not include_linked_details:
+        stmt = stmt.where(TopicSubject.row_role == "action_anchor").where(TopicSubject.anchor_status == "validated_anchor")
+    return list(
+        db.execute(
+            stmt.order_by(
+                TopicSubject.source_document_version_id.asc(),
+                TopicSubject.source_ordinal.asc(),
+                TopicSubject.subject_index.asc(),
+                TopicSubject.id.asc(),
+            )
+        ).scalars()
+    )
+
+
+def _topic_subject_quality_key(run_id: int, artifact_id: str, semantic_node_id: int) -> tuple[int, str, int]:
+    return int(run_id), str(artifact_id), int(semantic_node_id)
+
+
+def _topic_subject_prediction_en_from_parts(*, root: str | None, child: str | None, object_text: str | None) -> str:
+    root_label = str(root or "").strip()
+    child_label = str(child or "").strip()
+    action_label = TOPIC_SUBJECT_ENGLISH_LABELS.get((root_label, child_label))
+    if action_label is None:
+        stored_label = _topic_subject_stored_label(root=root_label, child=child_label)
+        action_label = f"Subject action: {stored_label}" if stored_label else "Subject action"
+    clean_object = str(object_text or "").strip()
+    if not clean_object:
+        return action_label
+    preposition = "about" if action_label in {"Council inquiry", "Response to council inquiry", "Agenda proposal", "Report", "Review report", "Committee recommendation"} else "for"
+    return f"{action_label} {preposition} {clean_object}"
+
+
+def _topic_subject_action_root(subject: TopicSubject) -> str | None:
+    return subject.action_root_label_he or subject.subject_root_label_he
+
+
+def _topic_subject_action_child(subject: TopicSubject) -> str | None:
+    return subject.action_child_label_he if subject.action_child_label_he is not None else subject.subject_child_label_he
+
+
+def _topic_subject_matter(subject: TopicSubject) -> str | None:
+    return subject.subject_matter_he or subject.subject_object_he
+
+
+def _quality_action_root(quality: TopicSubjectQualityReport | None) -> str | None:
+    if quality is None:
+        return None
+    return quality.action_root_by_dicta or quality.subject_root_by_dicta
+
+
+def _quality_action_child(quality: TopicSubjectQualityReport | None) -> str | None:
+    if quality is None:
+        return None
+    return quality.action_child_by_dicta if quality.action_child_by_dicta is not None else quality.subject_child_by_dicta
+
+
+def _quality_subject_matter(quality: TopicSubjectQualityReport | None) -> str | None:
+    if quality is None:
+        return None
+    return quality.subject_matter_by_dicta or quality.subject_object_by_dicta
+
+
+def _quality_action_details(quality: TopicSubjectQualityReport | None) -> str | None:
+    if quality is None:
+        return None
+    return quality.action_details_by_dicta or quality.subject_details_by_dicta
+
+
+def _topic_subject_agent_prediction_en(subject: TopicSubject, quality: TopicSubjectQualityReport | None = None) -> str:
+    return _topic_subject_prediction_en_from_parts(
+        root=_topic_subject_action_root(subject),
+        child=_topic_subject_action_child(subject),
+        object_text=_topic_subject_matter(subject) or _quality_subject_matter(quality),
+    )
+
+
+def _topic_subject_audit_payload(subject: TopicSubject, quality: TopicSubjectQualityReport | None) -> dict[str, Any]:
+    return {
+        "agent_subject_prediction_en": _topic_subject_agent_prediction_en(subject, quality),
+        "full_source_text_he": quality.real_text if quality is not None else None,
+        "ground_truth_subject_he": quality.ground_truth if quality is not None else None,
+        "ground_truth_note_he": quality.ground_truth if quality is not None else None,
+        "judge_prediction": {
+            "root_label_he": _topic_subject_action_root(subject),
+            "child_label_he": _topic_subject_action_child(subject),
+            "object_he": _topic_subject_matter(subject) or _quality_subject_matter(quality),
+            "note_he": quality.ground_truth if quality is not None else None,
+            "judgment": quality.my_judgment if quality is not None else None,
+        },
+        "my_judgment": quality.my_judgment if quality is not None else None,
+        "reason_for_failure": quality.reason_for_failure if quality is not None else None,
+        "model_prediction": {
+            "root_label_he": _quality_action_root(quality),
+            "child_label_he": _quality_action_child(quality),
+            "object_he": _quality_subject_matter(quality),
+            "details_he": _quality_action_details(quality),
+            "decision_he": quality.decision_by_dicta if quality is not None else None,
+        },
+    }
+
+
+def _topic_subject_linked_detail_payload(quality: TopicSubjectQualityReport) -> dict[str, Any]:
+    return {
+        "artifact_id": quality.artifact_id,
+        "event_id": quality.event_id,
+        "linked_event_id": quality.linked_event_id,
+        "topic_label_he": quality.topic_label_he,
+        "row_role": quality.row_role,
+        "anchor_status": quality.anchor_status,
+        "status": quality.status,
+        "agent_subject_prediction_en": _topic_subject_prediction_en_from_parts(
+            root=_quality_action_root(quality),
+            child=_quality_action_child(quality),
+            object_text=_quality_subject_matter(quality),
+        ),
+        "full_source_text_he": quality.real_text,
+        "ground_truth_subject_he": quality.ground_truth,
+        "ground_truth_note_he": quality.ground_truth,
+        "judge_prediction": {
+            "root_label_he": _quality_action_root(quality),
+            "child_label_he": _quality_action_child(quality),
+            "object_he": _quality_subject_matter(quality),
+            "note_he": quality.ground_truth,
+            "judgment": quality.my_judgment,
+        },
+        "my_judgment": quality.my_judgment,
+        "model_prediction": {
+            "root_label_he": _quality_action_root(quality),
+            "child_label_he": _quality_action_child(quality),
+            "object_he": _quality_subject_matter(quality),
+            "details_he": _quality_action_details(quality),
+            "decision_he": quality.decision_by_dicta,
+        },
+    }
+
+
+def _topic_subject_item_payload(
+    subject: TopicSubject,
+    document: Document | None = None,
+    document_version: DocumentVersion | None = None,
+    quality: TopicSubjectQualityReport | None = None,
+    linked_details: list[TopicSubjectQualityReport] | None = None,
+) -> dict[str, Any]:
+    display = _topic_subject_display_payload(root=_topic_subject_action_root(subject), child=_topic_subject_action_child(subject))
+    source_path = _resolve_document_version_source_pdf_path(
+        document_version_id=int(subject.source_document_version_id or 0),
+        storage_uri=str(document_version.storage_uri or "") if document_version is not None else "",
+        document_url=str(document.canonical_url or "") if document is not None else "",
+    )
+    return {
+        "id": subject.id,
+        "artifact_id": subject.artifact_id,
+        "event_id": subject.event_id,
+        "display": display,
+        "stored": {
+            "root_label_he": _topic_subject_action_root(subject),
+            "child_label_he": _topic_subject_action_child(subject),
+            "label_he": display["stored_label_he"],
+        },
+        "topic": {
+            "label_he": subject.topic_label_he,
+            "root_topic_id": subject.root_topic_id,
+            "child_topic_id": subject.child_topic_id,
+            "relevance": subject.topic_relevance,
+        },
+        "subject": {
+            "object_he": _topic_subject_matter(subject),
+            "summary_he": subject.subject_summary_he,
+            "details_he": subject.action_details_he or subject.subject_details_he,
+            "what_text_is_about_he": subject.what_text_is_about_he,
+            "status": subject.subject_status,
+            "confidence": subject.confidence,
+        },
+        "decision": {
+            "is_decision": bool(subject.is_decision),
+            "label_he": subject.decision_label_he,
+            "summary_he": subject.decision_summary_he,
+            "source_quote_he": subject.decision_source_quote_he,
+        },
+        "source": {
+            "kind": subject.source_kind,
+            "document_id": subject.source_document_id,
+            "document_version_id": subject.source_document_version_id,
+            "document_title": document.title_he if document is not None else subject.source_title,
+            "document_url": document.canonical_url if document is not None else None,
+            "document_file_path": str(source_path.resolve()) if source_path is not None else None,
+            "document_full_path": str(source_path.resolve()) if source_path is not None else None,
+            "title": subject.source_title,
+            "ordinal": subject.source_ordinal,
+            "page_start": subject.source_page_start,
+            "page_end": subject.source_page_end,
+        },
+        "quality": {
+            "validation_status": subject.validation_status,
+            "row_role": subject.row_role,
+            "anchor_status": subject.anchor_status,
+            "flags": _topic_subject_quality_flags(subject),
+        },
+        "audit": _topic_subject_audit_payload(subject, quality),
+        "linked_details": [
+            _topic_subject_linked_detail_payload(detail)
+            for detail in (linked_details or [])
+        ],
+    }
+
+
+@app.get("/api/topic-subjects/groups")
+def topic_subject_groups(
+    muni: str = "ashdod",
+    run_id: int | None = None,
+    include_linked_details: bool = False,
+    db=Depends(get_db),
+) -> dict[str, Any]:
+    run = _latest_topic_subject_run(db=db, municipality_slug=muni, run_id=run_id)
+    if run is None or run.municipality_slug != muni:
+        raise HTTPException(status_code=404, detail="topic_subject_run_not_found")
+
+    rows = _topic_subject_rows(db=db, run_id=run.id, include_linked_details=include_linked_details)
+    groups: dict[str, dict[str, Any]] = {}
+    for subject in rows:
+        display = _topic_subject_display_payload(root=_topic_subject_action_root(subject), child=_topic_subject_action_child(subject))
+        group = groups.setdefault(
+            display["group_key"],
+            {
+                "group_key": display["group_key"],
+                "label_he": display["group_label_he"],
+                "count": 0,
+                "decision_count": 0,
+                "topic_suspect_count": 0,
+                "stored_labels": {},
+                "subgroups": {},
+                "sample_subjects": [],
+            },
+        )
+        group["count"] += 1
+        group["decision_count"] += 1 if subject.is_decision else 0
+        group["topic_suspect_count"] += 1 if subject.topic_relevance == "topic_suspect" else 0
+        stored_labels = group["stored_labels"]
+        stored_labels[display["stored_label_he"]] = int(stored_labels.get(display["stored_label_he"], 0)) + 1
+        if display["subgroup_label_he"]:
+            subgroups = group["subgroups"]
+            subgroups[display["subgroup_label_he"]] = int(subgroups.get(display["subgroup_label_he"], 0)) + 1
+        if len(group["sample_subjects"]) < 3:
+            group["sample_subjects"].append(
+                {
+                    "id": subject.id,
+                    "artifact_id": subject.artifact_id,
+                    "topic_label_he": subject.topic_label_he,
+                    "object_he": _topic_subject_matter(subject),
+                    "is_decision": bool(subject.is_decision),
+                    "quality_flags": _topic_subject_quality_flags(subject),
+                }
+            )
+
+    group_payloads = sorted(
+        groups.values(),
+        key=lambda group: (TOPIC_SUBJECT_DISPLAY_ORDER.get(str(group["group_key"]), 10_000), -int(group["count"]), str(group["label_he"])),
+    )
+    return {
+        "run": _topic_subject_run_payload(run),
+        "filters": {
+            "municipality": muni,
+            "include_linked_details": include_linked_details,
+        },
+        "count": sum(int(group["count"]) for group in group_payloads),
+        "group_count": len(group_payloads),
+        "groups": group_payloads,
+    }
+
+
+@app.get("/api/topic-subjects")
+def topic_subject_items(
+    muni: str = "ashdod",
+    display_group: str | None = None,
+    run_id: int | None = None,
+    include_linked_details: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+    db=Depends(get_db),
+) -> dict[str, Any]:
+    run = _latest_topic_subject_run(db=db, municipality_slug=muni, run_id=run_id)
+    if run is None or run.municipality_slug != muni:
+        raise HTTPException(status_code=404, detail="topic_subject_run_not_found")
+
+    rows = _topic_subject_rows(db=db, run_id=run.id, include_linked_details=include_linked_details)
+    requested_group = str(display_group or "").strip()
+    if requested_group:
+        rows = [
+            subject
+            for subject in rows
+            if requested_group
+            in {
+                _topic_subject_display_payload(root=_topic_subject_action_root(subject), child=_topic_subject_action_child(subject))["group_key"],
+                _topic_subject_display_payload(root=_topic_subject_action_root(subject), child=_topic_subject_action_child(subject))["group_label_he"],
+            }
+        ]
+
+    total_count = len(rows)
+    offset = max(0, int(offset))
+    limit = max(1, min(int(limit), 200))
+    page_rows = rows[offset : offset + limit]
+    documents_by_id = {
+        document.id: document
+        for document in db.execute(
+            select(Document).where(Document.id.in_([subject.source_document_id for subject in page_rows]))
+        ).scalars()
+    } if page_rows else {}
+    versions_by_id = {
+        version.id: version
+        for version in db.execute(
+            select(DocumentVersion).where(DocumentVersion.id.in_([subject.source_document_version_id for subject in page_rows]))
+        ).scalars()
+    } if page_rows else {}
+    quality_rows = list(
+        db.execute(
+            select(TopicSubjectQualityReport)
+            .where(TopicSubjectQualityReport.run_id == run.id)
+            .where(TopicSubjectQualityReport.artifact_id.in_([subject.artifact_id for subject in page_rows]))
+        ).scalars()
+    ) if page_rows else []
+    quality_by_key = {
+        _topic_subject_quality_key(row.run_id, row.artifact_id, row.semantic_node_id): row
+        for row in quality_rows
+    }
+    event_ids = [str(subject.event_id) for subject in page_rows if str(subject.event_id or "").strip()]
+    linked_detail_rows = list(
+        db.execute(
+            select(TopicSubjectQualityReport)
+            .where(TopicSubjectQualityReport.run_id == run.id)
+            .where(TopicSubjectQualityReport.linked_event_id.in_(event_ids))
+            .where(TopicSubjectQualityReport.status == "linked_detail")
+            .order_by(TopicSubjectQualityReport.id.asc())
+        ).scalars()
+    ) if event_ids else []
+    linked_details_by_event: dict[str, list[TopicSubjectQualityReport]] = {}
+    for detail in linked_detail_rows:
+        linked_details_by_event.setdefault(str(detail.linked_event_id or ""), []).append(detail)
+    return {
+        "run": _topic_subject_run_payload(run),
+        "filters": {
+            "municipality": muni,
+            "display_group": requested_group or None,
+            "include_linked_details": include_linked_details,
+            "limit": limit,
+            "offset": offset,
+        },
+        "count": len(page_rows),
+        "total_count": total_count,
+        "items": [
+            _topic_subject_item_payload(
+                subject,
+                document=documents_by_id.get(subject.source_document_id),
+                document_version=versions_by_id.get(subject.source_document_version_id),
+                quality=quality_by_key.get(_topic_subject_quality_key(subject.run_id, subject.artifact_id, subject.semantic_node_id)),
+                linked_details=linked_details_by_event.get(str(subject.event_id or ""), []),
+            )
+            for subject in page_rows
+        ],
+    }
 
 
 @app.post("/api/ui/rag-dashboard/interaction")
@@ -4141,14 +4637,18 @@ def document_version_source_pdf(document_version_id: int, db=Depends(get_db)) ->
     allowed_docvers = _pdf_first_allowed_document_version_ids()
     if allowed_docvers is not None and document_version_id not in allowed_docvers:
         raise HTTPException(status_code=404, detail="pdf_first_document_version_not_found")
-    version = db.execute(
-        select(DocumentVersion).where(DocumentVersion.id == document_version_id)
-    ).scalar_one_or_none()
-    if version is None:
+    row = db.execute(
+        select(DocumentVersion, Document)
+        .join(Document, Document.id == DocumentVersion.document_id)
+        .where(DocumentVersion.id == document_version_id)
+    ).first()
+    if row is None:
         raise HTTPException(status_code=404, detail="document_version_not_found")
+    version, document = row
     resolved = _resolve_document_version_source_pdf_path(
         document_version_id=document_version_id,
         storage_uri=str(version.storage_uri or ""),
+        document_url=str(document.canonical_url or ""),
     )
     if resolved is None:
         raise HTTPException(status_code=404, detail="document_version_file_missing")
@@ -4166,23 +4666,41 @@ def document_version_source_pdf(document_version_id: int, db=Depends(get_db)) ->
     )
 
 
-def _resolve_document_version_source_pdf_path(*, document_version_id: int, storage_uri: str) -> Path | None:
+def _resolve_document_version_source_pdf_path(*, document_version_id: int, storage_uri: str, document_url: str = "") -> Path | None:
     storage_uri = str(storage_uri or "").strip()
     candidates: list[Path] = []
-    batch_pdf = _pdf_first_batch_pdf_path_for_docver(document_version_id)
-    if batch_pdf is not None:
-        candidates.append(batch_pdf)
+    candidates.extend(_local_pdf_first_batch_candidates(document_url))
     if storage_uri:
         storage_path = Path(storage_uri)
         candidates.append(storage_path if storage_path.is_absolute() else Path.cwd() / storage_path)
         if not storage_path.is_absolute():
             candidates.append(Path.cwd() / "storage" / "raw" / storage_path)
+    batch_pdf = _pdf_first_batch_pdf_path_for_docver(document_version_id)
+    if batch_pdf is not None:
+        candidates.append(batch_pdf)
 
     for candidate in candidates:
         resolved = candidate.resolve()
         if resolved.exists() and resolved.is_file():
             return resolved
     return None
+
+
+def _local_pdf_first_batch_candidates(document_url: str) -> list[Path]:
+    parsed = urlparse(str(document_url or "").strip())
+    if parsed.scheme != "local" or parsed.netloc != "pdf_first_batch":
+        return []
+    parts = [unquote(part) for part in parsed.path.split("/") if part]
+    if len(parts) < 2:
+        return []
+    city = parts[0]
+    rel = Path(*parts[1:])
+    project_root = Path(__file__).resolve().parents[2]
+    return [
+        project_root / "rag_eval" / "data" / "raw_docs" / f"{city}_council_by_year" / rel,
+        project_root / "rag_eval" / "data" / "raw_docs" / f"{city}_council_protocols" / rel,
+        project_root / "storage" / "raw" / "tree" / city / "city_council_protocols" / rel,
+    ]
 
 
 def _pdf_first_batch_pdf_path_for_docver(document_version_id: int) -> Path | None:
@@ -4304,6 +4822,17 @@ def _resolve_pipeline_artifact_path(*, run_id: str, artifact: dict[str, Any]) ->
 def ask_playground_page() -> HTMLResponse:
     return HTMLResponse(
         render_rag_dashboard_page(initial_gis_map_payload=None),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
+
+
+@app.get("/ui/subjects", response_class=HTMLResponse)
+def subject_browser_page() -> HTMLResponse:
+    return HTMLResponse(
+        render_subject_browser_page(),
         headers={
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",

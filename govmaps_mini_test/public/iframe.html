@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GovMap Native Iframe</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #17202a;
+        --muted: #52606d;
+        --line: #d4dbe2;
+        --accent: #0f766e;
+        --danger: #b42318;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        background: #eef2f5;
+      }
+
+      #map-shell {
+        position: fixed;
+        inset: 0;
+      }
+
+      #map {
+        width: 100%;
+        height: 100%;
+      }
+
+      .panel {
+        position: fixed;
+        top: 16px;
+        left: 16px;
+        z-index: 10;
+        display: grid;
+        width: min(360px, calc(100% - 32px));
+        max-height: calc(100% - 32px);
+        gap: 12px;
+        padding: 14px;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.94);
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.2;
+      }
+
+      .status {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      .error {
+        color: var(--danger);
+      }
+
+      .blocker {
+        display: grid;
+        gap: 8px;
+        padding: 10px;
+        border: 1px solid #f2b8b5;
+        border-radius: 6px;
+        color: var(--ink);
+        background: #fff5f5;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      .blocker[hidden] {
+        display: none;
+      }
+
+      .blocker strong {
+        color: var(--danger);
+      }
+
+      code {
+        overflow-wrap: anywhere;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+      }
+
+      .controls {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      button {
+        min-height: 38px;
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        color: #ffffff;
+        background: var(--accent);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 750;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.56;
+      }
+
+      pre {
+        min-height: 120px;
+        max-height: 220px;
+        margin: 0;
+        overflow: auto;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #f8fafc;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+      }
+
+      @media (max-width: 720px) {
+        .panel {
+          top: 10px;
+          left: 10px;
+          width: calc(100% - 20px);
+          max-height: 45%;
+        }
+      }
+    </style>
+    <script
+      src="https://www.govmap.gov.il/govmap/api/govmap.api.js"
+      defer
+      onload="initGovMap()"
+      onerror="handleGovMapScriptError()"
+    ></script>
+  </head>
+  <body>
+    <div id="map-shell">
+      <div id="map"></div>
+    </div>
+
+    <aside class="panel">
+      <h1>GovMap Native Iframe</h1>
+      <div class="status local-marker">Local reverse proxy  neoooo_test check: 2026-06-19 07:04 UTC</div>
+      <div class="status" id="status">Loading GovMap API...</div>
+      <div class="blocker" id="blocker" hidden></div>
+      <div class="controls">
+        <button id="streets" disabled>Streets</button>
+        <button id="ortho" disabled>Orthophoto</button>
+        <button id="parcel-on" disabled>Parcels On</button>
+        <button id="parcel-off" disabled>Parcels Off</button>
+      </div>
+      <pre id="log"></pre>
+    </aside>
+
+    <script>
+      const mapDivId = "map";
+      const statusNode = document.querySelector("#status");
+      const logNode = document.querySelector("#log");
+      const blockerNode = document.querySelector("#blocker");
+      const buttons = Array.from(document.querySelectorAll("button"));
+      let config = null;
+      let mapReady = false;
+
+      function publicPathPrefix() {
+        const path = window.location.pathname;
+        const marker = "/iframe.html";
+        return path.endsWith(marker) ? path.slice(0, -marker.length) : "";
+      }
+
+      function appUrl(path) {
+        return `${publicPathPrefix()}${path}` || path;
+      }
+
+      function log(message, detail) {
+        const timestamp = new Date().toISOString();
+        const suffix = detail === undefined ? "" : ` ${JSON.stringify(detail)}`;
+        logNode.textContent = `${timestamp} ${message}${suffix}\n${logNode.textContent}`.slice(0, 5000);
+      }
+
+      function setStatus(message, isError = false) {
+        statusNode.textContent = message;
+        statusNode.className = isError ? "status error" : "status";
+      }
+
+      function setControlsEnabled(enabled) {
+        buttons.forEach((button) => {
+          button.disabled = !enabled;
+        });
+      }
+
+      function handleGovMapScriptError() {
+        setStatus("GovMap API script failed to load.", true);
+        log("script error");
+      }
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, (character) => {
+          return {
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            "\"": "&quot;",
+            "'": "&#39;",
+          }[character];
+        });
+      }
+
+      function showOriginBlocker(payload) {
+        const origin = payload.origin || window.location.origin;
+        const allowedOrigins = payload.allowedIframeOrigins || [];
+        const tunnelOrigin =
+          allowedOrigins.find((value) => value.includes("dev.")) ||
+          allowedOrigins[0] ||
+          "https://dev.horizonscanninglab.org";
+        const tunnelUrl = `${tunnelOrigin}${appUrl("/iframe.html")}`;
+
+        setStatus("Native iframe is blocked on this origin.", true);
+        blockerNode.hidden = false;
+        blockerNode.innerHTML = `
+          <strong>Approved HTTPS origin required.</strong>
+          <span>This page is currently running from <code>${escapeHtml(origin)}</code>.</span>
+          <span>Use the tunnel URL after GovMap approves it: <code>${escapeHtml(tunnelUrl)}</code></span>
+          <span>The tunnel must forward <code>Host</code> and <code>X-Forwarded-Proto: https</code>.</span>
+        `;
+        log("origin blocked", {
+          origin,
+          tunnelUrl,
+          allowedOrigins,
+        });
+      }
+
+      async function loadIframeConfig() {
+        const response = await fetch(appUrl("/api/govmap/iframe-config"), { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) {
+          if (payload.error === "iframe_origin_not_allowed") {
+            showOriginBlocker(payload);
+            return null;
+          }
+          const message = payload.message || "This origin is not allowed for native iframe API.";
+          throw new Error(`${message} Origin: ${payload.origin || window.location.origin}`);
+        }
+        return payload;
+      }
+
+      async function initGovMap() {
+        try {
+          if (!window.govmap) {
+            throw new Error("window.govmap is not available after script load.");
+          }
+
+          config = await loadIframeConfig();
+          if (!config) {
+            return;
+          }
+          const settings = {
+            ...config.mapSettings,
+            token: config.token,
+            onLoad: () => {
+              mapReady = true;
+              setControlsEnabled(true);
+              setStatus(`Map loaded for ${config.origin}`);
+              log("onLoad");
+            },
+            onError: (event) => {
+              setStatus("GovMap reported an error.", true);
+              log("onError", event);
+            },
+            onClick: (event) => {
+              log("onClick", event);
+            },
+            onPan: (event) => {
+              log("onPan", event);
+            },
+          };
+
+          setStatus("Creating GovMap iframe...");
+          log("createMap", {
+            origin: config.origin,
+            scriptUrl: config.scriptUrl,
+            layers: settings.layers,
+          });
+          await window.govmap.createMap(mapDivId, settings);
+        } catch (error) {
+          setStatus(error.message, true);
+          log("init error", { message: error.message });
+        }
+      }
+
+      function runWhenReady(action) {
+        if (!mapReady || !window.govmap) {
+          log("command skipped", { reason: "map is not ready" });
+          return;
+        }
+        action();
+      }
+
+      document.querySelector("#streets").addEventListener("click", () => {
+        runWhenReady(() => {
+          window.govmap.setBackground("1", mapDivId);
+          log("setBackground", { background: "1" });
+        });
+      });
+
+      document.querySelector("#ortho").addEventListener("click", () => {
+        runWhenReady(() => {
+          window.govmap.setBackground("2", mapDivId);
+          log("setBackground", { background: "2" });
+        });
+      });
+
+      document.querySelector("#parcel-on").addEventListener("click", () => {
+        runWhenReady(() => {
+          window.govmap.setVisibleLayers(["PARCEL_ALL"], [], mapDivId);
+          log("setVisibleLayers", { layersOn: ["PARCEL_ALL"], layersOff: [] });
+        });
+      });
+
+      document.querySelector("#parcel-off").addEventListener("click", () => {
+        runWhenReady(() => {
+          window.govmap.setVisibleLayers([], ["PARCEL_ALL"], mapDivId);
+          log("setVisibleLayers", { layersOn: [], layersOff: ["PARCEL_ALL"] });
+        });
+      });
+    </script>
+  </body>
+</html>

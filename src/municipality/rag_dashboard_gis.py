@@ -104,14 +104,18 @@ def build_dashboard_gis_map_payload(
     address: str | None = None,
     center_x: float | None = None,
     center_y: float | None = None,
+    focus_layer: str | None = None,
+    timeline_event_id: str | None = None,
 ) -> dict[str, Any]:
     selected_provider = str(provider or os.environ.get("GIS_DASHBOARD_PROVIDER") or "govmap").strip().lower()
     if selected_provider not in {"local", "postgis"}:
-        cache_key = ("govmap", round(float(radius_m), 3), str(profile or "initial"), str(municipality or ""), str(address or ""), center_x, center_y)
+        cache_key = ("govmap", round(float(radius_m), 3), str(profile or "initial"), str(municipality or ""), str(address or ""), center_x, center_y, str(focus_layer or ""), str(timeline_event_id or ""))
         cached_payload = _cached_gis_payload(cache_key)
         if cached_payload is not None:
             return cached_payload
-        payload = build_govmap_dashboard_payload(radius_m=radius_m, profile=profile, municipality=municipality, address=address, center_x=center_x, center_y=center_y)
+        payload = build_govmap_dashboard_payload(radius_m=radius_m, profile=profile, municipality=municipality, address=address, center_x=center_x, center_y=center_y, focus_layer=focus_layer)
+        if timeline_event_id:
+            payload.setdefault("query", {})["timeline_event_id"] = str(timeline_event_id)
         _store_gis_payload(cache_key, payload)
         return payload
     return _build_local_dashboard_gis_map_payload(session, gush=gush, helka=helka, radius_m=radius_m, poi_limit=poi_limit, example=example, profile=profile)

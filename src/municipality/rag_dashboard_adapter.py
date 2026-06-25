@@ -189,17 +189,30 @@ def _municipality_scope_limitations(geo_intent_resolution: dict[str, Any] | None
     return [caveat] if caveat else []
 
 
-def build_dashboard_error_payload(*, question: str, error_code: str, message_he: str, municipality_id: str | None = None) -> dict[str, Any]:
+def build_dashboard_error_payload(*, question: str, error_code: str, message_he: str, municipality_id: str | None = None, geo_intent_resolution: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = get_mock_rag_dashboard_payload()
+    map_context = _map_context_from_geo(geo_intent_resolution)
+    map_context_entity = _map_context_entity(map_context)
     payload["state"] = {
         **payload["state"],
         "current_question": question,
         "municipality_id": municipality_id or payload["state"].get("municipality_id"),
+        "search_intent": _dashboard_search_intent(geo_intent_resolution, payload["state"].get("search_intent")),
+        "intent_resolution": _dashboard_intent_resolution(geo_intent_resolution, payload["state"].get("intent_resolution")),
         "active_detail_drawer_mode": "errorState",
         "generation_status": "error",
+        "selected_map_entity_id": map_context_entity["id"] if map_context_entity else payload["state"].get("selected_map_entity_id"),
         "error": {"code": error_code, "message_he": message_he},
     }
     payload["main_civic_workspace"]["map"] = _schematic_map(payload["main_civic_workspace"]["map"])
+    if map_context_entity:
+        payload["main_civic_workspace"]["map"]["entities"] = [
+            {**entity, "selected": False}
+            for entity in payload["main_civic_workspace"]["map"].get("entities", [])
+        ]
+        payload["main_civic_workspace"]["map"]["entities"].insert(0, map_context_entity)
+    if map_context is not None:
+        payload["main_civic_workspace"]["map_context"] = map_context
     payload["end_detail_drawer"] = {
         **payload["end_detail_drawer"],
         "mode": "errorState",

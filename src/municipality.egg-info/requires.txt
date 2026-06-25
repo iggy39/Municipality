@@ -1,6 +1,13 @@
+alembic>=1.14
 beautifulsoup4>=4.12
 fastapi>=0.115
 httpx>=0.28
+openai>=1.0
+psycopg[binary]>=3.2
+PyMuPDF>=1.24
+pyproj>=3.7
+pyshp>=2.3
+PyYAML>=6.0
 sqlalchemy>=2.0
 uvicorn>=0.34
 

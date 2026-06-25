@@ -1,19 +1,19 @@
 # Model Usage Guidelines
 
-These rules protect extraction quality while allowing faster local models for bounded support work.
+These rules protect extraction quality. Topic Subject V3 currently uses the primary Dicta 24B Thinking model for every model-backed stage.
 
 ## Core Rule
 
 Choose the model by semantic risk, not only by prompt length.
 
-Use the heavy model when the task decides what the document means. Use the small model only when the task is narrow, source-bounded, schema-bounded, and followed by heavier validation when it can affect final output.
+Use the heavy model when the task decides what the document means. Do not route Topic Subject V3 stages to smaller Dicta models unless a fresh benchmark proves they do not introduce semantic drift or invalid enum values.
 
 ## Default Models
 
 | Model | Use | Thinking |
 |---|---|---|
 | `dicta-il/DictaLM-3.0-24B-Thinking:bf16` | Hebrew semantic extraction, interpretation, and judging | Required |
-| `dicta-il/DictaLM-3.0-1.7B-Thinking:latest` | Short bounded support stages | Enabled unless there is a concrete reason not to |
+| `dicta-il/DictaLM-3.0-1.7B-Thinking:latest` | Not used for Topic Subject V3 now | Paused after benchmark drift |
 | `mistral-small3.1:latest` | Vision/layout tasks | Task dependent |
 | `qwen3.5:122b` | General non-Hebrew or broad planning/reasoning tasks | Task dependent |
 
@@ -31,19 +31,16 @@ Use `format: json` and strict JSON instructions instead of disabling thinking.
 | `topic_subject_v3_contextual_event_normalization` | 24B Thinking | Decides event identity and row roles |
 | `topic_subject_v3_action_subject_extraction` | 24B Thinking | Decides action, matter, and outcome |
 | `topic_subject_v3_event_judge` | 24B Thinking | Final semantic quality gate |
-| `topic_subject_json_repair` | 1.7B Thinking | Format repair only, no new facts |
-| `topic_subject_v3_json_repair` | 1.7B Thinking | Format repair only, no new facts |
-| `topic_subject_v3_quote_repair` | 1.7B Thinking | Exact quote copying from supplied rows |
-| `topic_subject_v3_evidence_entailment` | 1.7B Thinking | Short source-bounded entailment check; final 24B judge still runs afterward |
+| `topic_subject_json_repair` | 24B Thinking | Format repair remains on the quality model for now |
+| `topic_subject_v3_json_repair` | 24B Thinking | Format repair remains on the quality model for now |
+| `topic_subject_v3_quote_repair` | 24B Thinking | Exact quote copying still affected final quality |
+| `topic_subject_v3_evidence_entailment` | 24B Thinking | Evidence status controls final event/outcome acceptance |
 
 Unknown new stages must default to the heavy model until they are explicitly classified.
 
-## Safe Uses For The Small Dicta Model
+## Small Dicta Model Status
 
-- Exact quote repair when the model may only copy spans from supplied source rows.
-- JSON repair when the model may only convert malformed output into valid JSON without adding facts.
-- Short evidence-entailment checks when all evidence is supplied in the prompt and a heavier judge follows before acceptance.
-- Fast smoke checks where results are not persisted as final predictions.
+The 1.7B Dicta model is disabled for Topic Subject V3 until further notice. The last benchmark showed enum drift such as `entitled` instead of `entailed` and differences on outcome entailment.
 
 ## Unsafe Uses For The Small Dicta Model
 
@@ -57,4 +54,15 @@ Unknown new stages must default to the heavy model until they are explicitly cla
 
 After changing model routing, run focused unit tests and at least one real dry-run sample from multiple municipalities. Inspect the quality report and the event JSON, especially the `stage_model_name`, `stage_think`, evidence-entailment metadata, and judge result.
 
-If a small-model stage introduces semantic drift, promote that stage back to 24B before optimizing speed further.
+If a future small-model experiment introduces semantic drift, keep the stage on 24B before optimizing speed further.
+
+## Benchmarking V3 Quality
+
+Use `scripts/benchmark_topic_subject_v3_models.py` to run 24B-only V3 quality benchmarks across representative municipality rows.
+
+Each benchmark run must write these reports in the same output directory:
+
+- `v3_quality_report.md` for problematic or low-confidence rows.
+- `v3_all_rows_report.md` for every row, including accepted events and non-events.
+
+Do not reintroduce 1.7B unless a separate experiment includes enum validation, output repair, and broad cross-municipality evidence that quality is unchanged.

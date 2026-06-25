@@ -2,10 +2,6 @@
 
 Date: 2026-06-20
 
-Purpose: seed the first protocol-to-GIS linker with real protocol/topic-subject examples that already exist in `/Users/igor/Desktop/projects/Municipality/municipality.db`.
-
-Current data state:
-- `topic_subject_v3_event` is present but empty in the current local DB.
 - `topic_subject` contains real legacy topic/subject rows that can bootstrap linking.
 - `retrieval_artifact` contains the source protocol text spans.
 - `decision_gis_feature_link` requires `decision_id`; because `decision` is empty, first protocol-GIS links should use a new generic table/report before decision-level persistence.

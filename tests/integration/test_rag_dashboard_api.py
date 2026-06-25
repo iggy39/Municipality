@@ -247,7 +247,7 @@ def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None
     assert "/api/ui/rag-dashboard/gis-map" in body
     assert "maplibre-gl" not in body
     assert "id=\"real-gis-map\"" in body
-    assert "id=\"govmap-tile-basemap\"" in body
+    assert "id=\"govmap-tile-basemap\"" not in body
     assert "id=\"govmap-iframe\"" in body
     assert "id=\"real-gis-static-map\"" in body
     assert "id=\"map-example-select\"" in body
@@ -262,21 +262,40 @@ def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None
     assert "GOVMAP_IFRAME_CONFIG_ENDPOINT" in body
     assert "loadGovMapIframeConfig" in body
     assert "setVisibleLayers" in body
+    assert "updateMountedGovMapIframeUrl" in body
+    assert "govMapOfficialIframeUrl" in body
+    assert "govMapNativeCommandReady" in body
+    assert "url.searchParams.set(\"laym\"" in body
     assert "displayGeometries" in body
     assert "clearGeometriesByName" in body
     assert "data-govmap-layer-toggle" in body
     assert "default_visible_layers" in body
-    assert "const aliases = new Set(payload?.govmap?.default_visible_layers" in body
+    assert "payload.govmap.default_visible_layers = []" in body
+    assert "story_filters_enabled" in body
+    assert "compatibleLayerAliases" in body
+    assert "GovMap layers active for this story" in body
+    assert "nativeGovMapEnabled: true" in body
     assert "selectFeaturesOnMap" in body
     assert "GOVMAP_SELECTED_NEIGHBORHOOD_RADIUS_M" in body
+    assert "GOVMAP_SELECTED_NEIGHBORHOOD_RADIUS_M = 12" in body
     assert "selectOnMap: false" in body
     assert "selectOnMap: true" in body
     assert "govMapSelectedAreaRing" in body
+    assert "selectedRadius * 3" not in body
     assert "waitForGovMapNativeCommand" in body
-    assert "12000" in body
+    assert "onLoad: () => finish(true)" in body
+    assert ".then(() => finish(true))" in body
+    assert "finishIfNativeMapMounted" in body
+    assert "nativeMap.childElementCount > 0" in body
+    assert "onError: (event) => finish(false" in body
+    assert "govmap_native_onload_timeout" in body
     assert "האזור הנבחר יוצג רק כאשר GovMap מאשר פקודות API לדומיין הנוכחי" in body
-    assert "לא מוצג פוליגון דמה בגיבוי" in body
-    assert "renderGovMapOverlay(payload, { showDistrictLabels: false, showMarkers: false })" not in body
+    assert "renderGovMapFallback" not in body
+    assert "renderGovMapTileBasemap(payload)" not in body
+    assert "GovMap נטען" not in body
+    assert "GovMap לא נטען" in body
+    assert "OSM גיבוי" not in body
+    assert "native_ready" in body
     assert "renderGovMapOverlay(payload, {\n            showSelectedArea: true" not in body
     assert "whereClause" in body
     assert "clearSelection" in body
@@ -285,7 +304,18 @@ def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None
     assert "govmap_address_marker_failed" in body
     assert "displayGovMapHouseMarker" in body
     assert "displayGovMapPointWkt" in body
+    assert "size: 3" in body
     assert "gisSignature" in body
+    assert "selectedTimelineEventId" in body
+    assert "timeline_event_id" in body
+    assert "hasExplicitCenter" in body
+    assert "window.setTimeout(() => syncGovMapNativeLayers(payload), 700)" in body
+    assert "window.setTimeout(() => syncGovMapNativeLayers(payload), 1600)" in body
+    assert "window.setTimeout(() => syncGovMapNativeLayers(payload), 4500)" in body
+    assert "window.setTimeout(() => syncGovMapNativeLayers(payload), 9000)" in body
+    assert "window.setTimeout(() => syncGovMapNativeLayers(payload), 1200)" in body
+    assert "mountedFrame?.addEventListener(\"load\"" in body
+    assert "loadDashboardGisMap();" in body
     assert "__municipalDashboardLastGisSkipped" in body
     assert "__municipalDashboardWheelZoomBlocked" in body
     assert 'aliases.add("neighborhoods_area")' not in body
@@ -294,6 +324,9 @@ def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None
     assert "updateGovMapFilterAvailability" in body
     assert "window.__municipalDashboardGisMapFromServer=true" not in body
     assert "מפת GIS אמיתית" in body
+    assert "isDetailCollapsed" in body
+    assert "data-detail-drawer-collapsed" in body
+    assert "detail-drawer-content" in body
 
 
 def test_govmap_iframe_config_allows_prefixed_approved_origin(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -352,7 +385,7 @@ def test_rag_dashboard_page_wires_stage_6_point_report_and_coverage_ui() -> None
     assert "visualBasemapCollections" in body
     assert "ensurePocBasemap" in body
     assert "renderGovMapEmbed" in body
-    assert "renderGovMapTileBasemap" in body
+    assert "renderGovMapTileBasemap" not in body
     assert "applyGovMapOverlayFilters" in body
     assert "קבוצות של שכבות GovMap" in body
     assert "מסנן בסיס המפה אינו פעיל במצב GovMap רשמי" in body
@@ -380,7 +413,7 @@ def test_rag_dashboard_gis_map_endpoint_defaults_to_govmap(monkeypatch: pytest.M
     app.dependency_overrides[get_db] = override_db
     try:
         client = TestClient(app)
-        response = client.get("/api/ui/rag-dashboard/gis-map")
+        response = client.get("/api/ui/rag-dashboard/gis-map?timeline_event_id=event_test_123")
     finally:
         app.dependency_overrides.pop(get_db, None)
         gis_module._GIS_PAYLOAD_CACHE.clear()
@@ -414,6 +447,7 @@ def test_rag_dashboard_gis_map_endpoint_defaults_to_govmap(monkeypatch: pytest.M
     assert payload["query"]["center_x"] == 180428.96
     assert payload["query"]["center_y"] == 665728.35
     assert payload["query"]["center_source"] == "fallback_tel_aviv"
+    assert payload["query"]["timeline_event_id"] == "event_test_123"
     assert {"address", "street", "settlement"} <= set(payload["query"]["address_search_datatypes"])
     assert payload["layers"]["address_points"]["source_id"] == "govmap:search"
 
@@ -732,6 +766,26 @@ def test_rag_dashboard_interaction_updates_selection_state() -> None:
     assert all("real_fields" in row and "inferred_fields" in row for row in story_payload["main_civic_workspace"]["timeline"]["events"])
     assert any(row["date_is_mock"] is True for row in story_payload["main_civic_workspace"]["timeline"]["events"])
     assert next(row for lane in story_payload["gis_story_review"]["lanes"] for row in lane["stories"] if row["story_id"] == first_story["story_id"])["selected"] is True
+
+    broad_story = next(row for lane in base["gis_story_review"]["lanes"] for row in lane["stories"] if row["story_id"] == "story_51f94e03424c3376")
+    broad_story_payload = rag_dashboard_interaction(
+        RagDashboardInteractionRequest.model_validate({"state": base["state"], "interaction": {"type": "select_popular_search", "id": broad_story["story_query"]}})
+    )
+    broad_layers = broad_story_payload["main_civic_workspace"]["map_context"]["layers"]
+    auto_aliases = {alias for layer in broad_layers for alias in layer.get("govmap_aliases", [])}
+    context_aliases = {alias for layer in broad_layers for alias in layer.get("context_govmap_aliases", [])}
+    broad_focus = broad_story_payload["state"]["intent_resolution"]["geo"]["focus"]
+    assert broad_focus["focus_type"] == "story_specific_executed_govmap_center"
+    assert "כיכר המדינה" in broad_focus["place_query"]
+    assert broad_focus["center_x"] and broad_focus["center_y"]
+    assert auto_aliases
+    assert len(auto_aliases) <= 8
+    assert len(context_aliases) > len(auto_aliases)
+
+    unresolved_focus = story_payload["state"]["intent_resolution"]["geo"]["focus"]
+    unresolved_auto_aliases = {alias for layer in story_payload["main_civic_workspace"]["map_context"]["layers"] for alias in layer.get("govmap_aliases", [])}
+    assert unresolved_focus["focus_type"] == "story_without_specific_executed_govmap_center"
+    assert not unresolved_auto_aliases
 
     story_event_id = story_payload["main_civic_workspace"]["timeline"]["events"][0]["id"]
     story_event_progress = story_payload["main_civic_workspace"]["timeline"]["events"][0]["progress"]

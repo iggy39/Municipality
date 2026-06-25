@@ -1,0 +1,24 @@
+ALTER TABLE topic_subject_v3_event RENAME COLUMN action_root_label_he TO action_type_he;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN action_root_label_norm TO action_type_norm;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN action_child_label_he TO action_subtype_he;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN action_child_label_norm TO action_subtype_norm;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN other_action_label_he TO other_action_type_he;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN other_action_label_norm TO other_action_type_norm;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN action_label_confidence TO action_type_confidence;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN action_label_status TO action_type_status;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN subject_matter_he TO matter_he;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN subject_matter_norm TO matter_norm;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN action_evidence_quote_he TO action_quote_he;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN is_decision TO outcome_is_decision;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN decision_label_he TO outcome_label_he;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN decision_label_norm TO outcome_label_norm;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN decision_summary_he TO outcome_summary_he;
+ALTER TABLE topic_subject_v3_event RENAME COLUMN decision_source_quote_he TO outcome_quote_he;
+
+ALTER TABLE topic_subject_v3_row_quality RENAME COLUMN action_root_by_dicta TO action_type_by_dicta;
+ALTER TABLE topic_subject_v3_row_quality RENAME COLUMN action_child_by_dicta TO action_subtype_by_dicta;
+ALTER TABLE topic_subject_v3_row_quality RENAME COLUMN other_action_by_dicta TO other_action_type_by_dicta;
+ALTER TABLE topic_subject_v3_row_quality RENAME COLUMN subject_matter_by_dicta TO matter_by_dicta;
+ALTER TABLE topic_subject_v3_row_quality RENAME COLUMN decision_by_dicta TO outcome_by_dicta;
+ALTER TABLE topic_subject_v3_row_quality ADD COLUMN judge_prediction_json TEXT;
+ALTER TABLE topic_subject_v3_row_quality ADD COLUMN prediction_comparison TEXT;

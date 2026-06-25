@@ -60,6 +60,19 @@ def test_unknown_question_does_not_require_gis() -> None:
     assert result.focus is None
 
 
+def test_mikveh_question_resolves_religious_service_map_focus() -> None:
+    result = resolve_geo_intent("מה הוחלט לגבי הקמה והפעלה של מקווה טהרה ברחוב ספיר ברובע י\"ז באשדוד?")
+
+    assert result.intent == "public_service_facility_context"
+    assert result.needs_gis is True
+    assert result.focus is not None
+    assert result.focus.focus_type == "place"
+    assert result.focus.address_query == "רחוב ספיר"
+    assert "religious_services" in result.resident_layer_keys
+    assert result.govmap_layer_aliases == ("mikve", "neighborhoods_area")
+    assert "parcels_cadaster" not in result.resident_layer_keys
+
+
 def test_focus_resolver_accepts_gershayim_place_variants() -> None:
     focus = resolve_gis_focus("מה קרה באזור רובע ט״ו?")
 
@@ -86,6 +99,28 @@ def test_dashboard_payload_carries_geo_intent_resolution() -> None:
         "helka": "43",
         "matched_text": "7103/43",
     }
+
+
+def test_dashboard_error_payload_keeps_mikveh_gis_intent() -> None:
+    geo_intent = resolve_geo_intent("מה הוחלט לגבי מקווה טהרה ברחוב ספיר באשדוד?").to_payload()
+    geo_intent["map_context"] = {
+        "status": "focus_needs_lookup",
+        "focus": geo_intent["focus"],
+        "layers": [],
+        "caveats": ["יש לפתור את שם המקום או כתובת לפני טעינת שכבות GIS סביבו."],
+    }
+    payload = build_dashboard_payload_from_ask_result(
+        question="מה הוחלט לגבי מקווה טהרה ברחוב ספיר באשדוד?",
+        municipality_id="ashdod",
+        ask_payload={"status": "answer", "answer": "נמצא הסכם בנושא מקווה.", "citations": []},
+        filters={},
+        geo_intent_resolution=geo_intent,
+    )
+
+    geo = payload["state"]["intent_resolution"]["geo"]
+    assert geo["govmap_layer_aliases"][:1] == ["mikve"]
+    assert payload["main_civic_workspace"]["map_context"]["status"] == "focus_needs_lookup"
+    assert payload["contracts"]["map_entities"][0]["label"] == "רחוב ספיר"
 
 
 def test_dashboard_payload_fuses_map_context_into_visible_state() -> None:

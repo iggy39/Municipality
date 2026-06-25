@@ -5,6 +5,7 @@ from typing import Any
 
 from municipality.chunking import normalize_for_search
 from municipality.pdf_first_v4_topic_tree import ROOT_BY_ID, V4_ROOT_TOPICS, root_label_for_id
+from municipality.topic_label_quality import is_low_quality_topic_label
 
 
 AUTO_ACCEPT_SCORE = 0.88
@@ -34,7 +35,7 @@ def build_topic_profile_index(topic_tree: dict[str, Any] | None) -> dict[str, An
         entry = _index_entry(root_topic_id=root_topic_id, root_label=root_label, child_choice_id=None, child_label=None, fields=fields, source="topic_profile_root", support_count=int(root.get("support_count") or 0))
         _append_index_entry(entries=entries, postings=postings, entry=entry)
         for child in root.get("children") or []:
-            if str(child.get("status") or "active") == "rejected":
+            if not _importable_tree_child(child=child, root_topic_id=root_topic_id):
                 continue
             child_label = str(child.get("child_label_he") or child.get("label_he") or "")
             child_profile = child.get("profile") if isinstance(child.get("profile"), dict) else {}
@@ -148,6 +149,8 @@ def _tree_root_candidates(topic_tree: dict[str, Any], *, search_text: str) -> li
             alias_scores.append(_phrase_score(str(alias), search_text) * 0.9)
         child_scores = []
         for child in root.get("children") or []:
+            if not _importable_tree_child(child=child, root_topic_id=root_topic_id):
+                continue
             child_label = str(child.get("child_label_he") or child.get("label_he") or "")
             child_scores.append(_phrase_score(child_label, search_text) * 0.84)
             child_profile = child.get("profile") if isinstance(child.get("profile"), dict) else {}
@@ -269,6 +272,16 @@ def _profile_fields(label: str, keywords: list[Any], profile: dict[str, Any]) ->
     return fields
 
 
+def _importable_tree_child(*, child: dict[str, Any], root_topic_id: str) -> bool:
+    if str(child.get("status") or "active") != "active":
+        return False
+    child_root_id = str(child.get("root_topic_id") or root_topic_id)
+    if child_root_id in ROOT_BY_ID and child_root_id != root_topic_id:
+        return False
+    label = str(child.get("child_label_he") or child.get("label_he") or "")
+    return bool(label.strip()) and not is_low_quality_topic_label(label)
+
+
 def _add_field(fields: list[dict[str, Any]], text: str, *, weight: float) -> None:
     compact = " ".join(str(text or "").split())
     if compact:
@@ -382,9 +395,11 @@ def _phrase_score(phrase: str, search_text: str) -> float:
     phrase_norm = normalize_for_search(phrase)
     if not phrase_norm or not search_text:
         return 0.0
+    phrase_tokens = _tokens(phrase_norm)
+    if len(phrase_tokens) == 1 and len(phrase_tokens[0]) <= 3:
+        return 0.86 if _short_hebrew_keyword_supported(phrase_tokens[0], search_text) else 0.0
     if phrase_norm in search_text:
         return 0.86 if len(_tokens(phrase_norm)) <= 1 else 0.92
-    phrase_tokens = _tokens(phrase_norm)
     if not phrase_tokens:
         return 0.0
     search_tokens = set(_token_variants(search_text))
@@ -395,6 +410,26 @@ def _phrase_score(phrase: str, search_text: str) -> float:
     if len(hits) >= 2:
         return 0.46 + ratio * 0.16
     return 0.0
+
+
+def _short_hebrew_keyword_supported(keyword: str, search_text: str) -> bool:
+    """Match short Hebrew keywords as tokens, while allowing attached prefixes.
+
+    This prevents words like "עתודת" from matching the keyword "דת", but still
+    allows ordinary Hebrew prefix forms such as "הדת" or "ובדת".
+    """
+
+    if not keyword:
+        return False
+    for token in _tokens(search_text):
+        if token == keyword:
+            return True
+        stripped = token
+        while len(stripped) > len(keyword) and stripped[0] in "ובכלמהש":
+            stripped = stripped[1:]
+            if stripped == keyword:
+                return True
+    return False
 
 
 def _example_overlap_score(example: str, search_text: str) -> float:
@@ -440,8 +475,11 @@ def _token_variants(value: str) -> list[str]:
     tokens = _tokens(value)
     variants = set(tokens)
     for token in tokens:
-        if len(token) >= 4 and token[0] in "ובכלמהש":
-            variants.add(token[1:])
+        stripped = token
+        while len(stripped) >= 3 and stripped[0] in "ובכלמהש":
+            stripped = stripped[1:]
+            if len(stripped) >= 2:
+                variants.add(stripped)
     return list(variants)
 
 

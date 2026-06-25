@@ -21,7 +21,7 @@ from municipality.models import (
     SemanticNode,
 )
 from municipality.pdf_first_v4_topic_policy import best_topic_policy_match
-from municipality.topic_label_quality import canonicalize_topic_label, is_low_quality_topic_label
+from municipality.topic_label_quality import canonicalize_topic_label, is_low_quality_topic_label, strip_topic_carrier_prefixes
 
 
 TOPIC_TREE_VERSION = "pdf_first_v4_global_tree_2026_06_07"
@@ -54,7 +54,7 @@ V4_ROOT_TOPICS: tuple[dict[str, Any], ...] = (
     {"root_topic_id": "root_education", "root_label_he": "חינוך", "keywords": ["חינוך", "בית ספר", "בתי ספר", "גן", "גנים", "תלמידים", "צהרון", "צהרונים", "מעונות", "תשלומי הורים", "מדעניות העתיד"]},
     {"root_topic_id": "root_welfare_social", "root_label_he": "רווחה ושירותים חברתיים", "keywords": ["רווחה", "שירותים חברתיים", "נזקקים", "קשישים", "הגיל השלישי", "עריריים", "אלמנים", "אלמנות", "היפוטרמיה", "דרי רחוב", "חסרי בית", "ביטחון תזונתי", "בטחון תזונתי", "חתולי רחוב", "גורי חתולי רחוב"]},
     {"root_topic_id": "root_culture_sport", "root_label_he": "תרבות וספורט", "keywords": ["תרבות", "ספורט", "איצטדיון", "אצטדיון", "כדורסל", "כדורגל", "כדוריד", "ליגה", "אליפות", "גביע", "קבוצת ספורט", "ספורטאי", "משכן", "אומנויות הבמה", "אמנויות הבמה", "אודיטוריום", "אולם", "אולמות", "תיאטרון", "מרכז תרבות", "פסל", "פסל ציבורי"], "profile": {"aliases_he": ["ספורט ופנאי", "קבוצות ספורט", "ספורט עירוני"], "aliases_en": ["sports", "sport", "recreation", "football", "soccer", "handball", "basketball"]}},
-    {"root_topic_id": "root_infrastructure_environment", "root_label_he": "תשתיות וסביבה", "keywords": ["תשתיות", "סביבה", "סביבתי", "סביבתית", "איכות הסביבה", "הגנת הסביבה", "הסברה סביבתית", "מחזור", "מיחזור", "הצפות", "הצפה", "ניקוז", "נגר", "ניקיון", "ביוב", "מים", "פארק", "גינה", "עצים", "שתילת עצים", "נטיעת עצים", "גיזום", "זיהום", "פינוי אשפה", "מניעת רעש", "מפגעים"]},
+    {"root_topic_id": "root_infrastructure_environment", "root_label_he": "תשתיות וסביבה", "keywords": ["תשתיות", "סביבה", "סביבתי", "סביבתית", "איכות הסביבה", "הגנת הסביבה", "הסברה סביבתית", "מחזור", "מיחזור", "הצפות", "הצפה", "ניקוז", "נגר", "ניקיון", "ביוב", "מים", "פארק", "גינה", "עצים", "שתילת עצים", "נטיעת עצים", "גיזום", "זיהום", "פינוי אשפה", "מניעת רעש", "מפגעים", "אנרגיה מתחדשת", "אנרגיה ירוקה", "פאנלים סולאריים", "פאנלים סולריים", "סולארי", "סולרי"]},
     {"root_topic_id": "root_religious_services", "root_label_he": "דת ושירותי דת", "keywords": ["דת", "דתית", "שירותי דת", "מועצה דתית", "בית כנסת", "מקווה", "מקווה טהרה", "רב", "הרבצת תורה"]},
     {"root_topic_id": "root_administration", "root_label_he": "מנהל עירוני ומינויים", "keywords": ["מינוי", "מינויים", "מינויו", "מינויה", "הארכת מינוי", "מורשי חתימה", "האצלת סמכויות", "ועדה", "דירקטוריון", "דירקטוריונים", "תאגידים", "ביקורת", "דוח ביקורת", "דו\"ח ביקורת", "החלטות מועצה", "חברי מועצה", "מליאה", "ישיבות מליאה", "היעדרויות", "איחורים", "נוכחות", "חילופי גברי", "קריאת רחוב", "שם רחוב", "שמות רחובות", "מסרונים", "מסרי וידאו", "מאגר מסרונים", "שימוע", "מהנדס העיר"]},
     {"root_topic_id": "root_security_enforcement", "root_label_he": "ביטחון ואכיפה", "keywords": ["ביטחון", "בטחון", "אכיפה", "אלימות", "אלימות במשפחה", "משטרה", "מיגון", "מקלט", "אבטחת מידע", "סייבר", "הגנת פרטיות", "הגנת הפרטיות", "רעידת אדמה", "מערכת התראה", "מל\"ח", "חירום", "פיקוד העורף", "פקע\"ר", "יקל\"ר", "אתרי הרס", "פח\"ע", "מיגור תופעת האלימות", "מיגור אלימות", "אלרגיות מסכנות חיים", "מזרקי אפיפן", "אפיפן"]},
@@ -139,12 +139,14 @@ CURATED_V4_CHILD_TOPICS: tuple[dict[str, Any], ...] = (
     {"root_topic_id": "root_culture_sport", "child_label_he": "מתקני ספורט", "aliases_he": ["מרכז ספורט", "מתקני משחקי מחבט"]},
     {"root_topic_id": "root_culture_sport", "child_label_he": "אמנות במרחב הציבורי", "aliases_he": ["פסל ציבורי", "הקמת פסל"]},
     {"root_topic_id": "root_culture_sport", "child_label_he": "מוסדות תרבות", "aliases_he": ["משכן לאומנויות הבמה", "אולם תרבות"]},
+    {"root_topic_id": "root_culture_sport", "child_label_he": "פרסים עירוניים", "aliases_he": ["פרס התיאטרון", "תקנוני פרסים", "תקנון פרס התיאטרון"]},
     {"root_topic_id": "root_infrastructure_environment", "child_label_he": "פארקים וגינות", "aliases_he": ["שטחים ירוקים", "טיילת", "פארקים"]},
     {"root_topic_id": "root_infrastructure_environment", "child_label_he": "מיחזור ותברואה", "aliases_he": ["מחזור", "מיחזור", "ניקיון העיר", "גללי כלבים"]},
     {"root_topic_id": "root_infrastructure_environment", "child_label_he": "מים וביוב", "aliases_he": ["מי ביוב", "זרימת ביוב"]},
     {"root_topic_id": "root_infrastructure_environment", "child_label_he": "בעלי חיים", "aliases_he": ["חתולי רחוב", "גורי חתולים", "וטרינרי"]},
     {"root_topic_id": "root_infrastructure_environment", "child_label_he": "מערכות מידע ותקשורת ציבורית", "aliases_he": ["לוחות פרסום אלקטרוניים"]},
     {"root_topic_id": "root_infrastructure_environment", "child_label_he": "ניקיון ותברואה", "aliases_he": ["ניקיון", "אכיפה סביבתית"]},
+    {"root_topic_id": "root_infrastructure_environment", "child_label_he": "התקנת פאנלים סולאריים", "aliases_he": ["פאנלים סולאריים", "פאנלים סולריים", "אנרגיה מתחדשת", "אנרגיה ירוקה", "גגות סולאריים"]},
     {"root_topic_id": "root_religious_services", "child_label_he": "שירותי דת", "aliases_he": ["שירותי דת עירוניים"]},
     {"root_topic_id": "root_religious_services", "child_label_he": "מועצה דתית", "aliases_he": ["מינוי מועצה דתית"]},
     {"root_topic_id": "root_religious_services", "child_label_he": "מקוואות", "aliases_he": ["מקווה טהרה"]},
@@ -178,6 +180,7 @@ class V4NodeWriteResult:
 
 def global_topic_tree_payload(*, existing_tree: dict[str, Any] | None = None, attachment_contexts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     children_by_root = _children_by_root_from_tree(existing_tree or {})
+    _merge_curated_children(children_by_root)
     roots_by_id = _roots_by_id_from_tree(existing_tree or {})
     return {
         "topic_tree_version": TOPIC_TREE_VERSION,
@@ -451,7 +454,7 @@ def derive_child_candidate(*, text: str, canonical_label_he: str | None = None, 
     return None, "root_only"
 
 
-def infer_root_topic_id(text: str, *, fallback: str | None = None) -> str:
+def infer_root_topic_id(text: str, *, fallback: str | None = None, allow_procedural_default: bool = True) -> str | None:
     normalized = normalize_for_search(text)
     policy_root = _policy_root_override(normalized)
     if policy_root:
@@ -464,7 +467,9 @@ def infer_root_topic_id(text: str, *, fallback: str | None = None) -> str:
         if score > best_score:
             best_id = root["root_topic_id"]
             best_score = score
-    return best_id or "root_agenda_queries"
+    if best_id:
+        return best_id
+    return "root_agenda_queries" if allow_procedural_default else None
 
 
 def _policy_root_override(normalized: str) -> str | None:
@@ -887,12 +892,14 @@ def _dedupe_labels(values: list[Any]) -> list[str]:
 
 
 def clean_topic_label(value: Any) -> str | None:
-    label = compact_label(value)
+    label = strip_topic_carrier_prefixes(compact_label(value))
     if not label or label.casefold() in {"none", "null"}:
         return None
-    label = re.sub(r"^(?:הנדון|נדון|בנושא|נושא)\s*[:\-–]?\s*", "", label).strip()
+    label = re.sub(r"^(?:הנדון|נדון)\s*[:\-–]?\s*", "", label).strip()
+    label = re.sub(r"^בנושא\s*[:\-–]?\s*", "", label).strip()
+    label = re.sub(r"^נושא\s*[:\-–]\s*", "", label).strip()
     label = re.sub(r"^שאיל(?:תא|תה)\s+(?:רקע\s+)?", "", label).strip()
-    label = re.sub(r"^סעיף\s*\d+(?:\.\d+)?\s*[:.)-]*\s*", "", label).strip()
+    label = strip_topic_carrier_prefixes(label)
     label = re.sub(r"^[\d\s'.:()\-–]+", "", label).strip()
     label = re.sub(r"^פרוטוקול\s+מישיבת\s+", "", label).strip()
     label = re.sub(r"^מישיבת\s+", "", label).strip()
@@ -1347,6 +1354,41 @@ def _children_by_root_from_tree(tree: dict[str, Any]) -> dict[str, list[dict[str
             continue
         out[root_id] = [dict(child) for child in root.get("children") or []]
     return out
+
+
+def _merge_curated_children(children_by_root: dict[str, list[dict[str, Any]]]) -> None:
+    """Ensure DB-free/shadow runs still expose the manually curated child tree."""
+    for row in CURATED_V4_CHILD_TOPICS:
+        root_topic_id = str(row.get("root_topic_id") or "")
+        label = str(row.get("child_label_he") or "").strip()
+        if root_topic_id not in ROOT_BY_ID or not label:
+            continue
+        children = children_by_root.setdefault(root_topic_id, [])
+        child_id = child_topic_id(root_topic_id, label)
+        seen = {
+            str(child.get("child_topic_id") or child.get("topic_id") or "") or f"label:{normalize_for_search(child.get('child_label_he') or child.get('label_he') or '')}"
+            for child in children
+        }
+        label_key = f"label:{normalize_for_search(label)}"
+        if child_id in seen or label_key in seen:
+            continue
+        aliases = [str(value).strip() for value in row.get("aliases_he") or [] if str(value).strip()]
+        children.append(
+            {
+                "child_topic_id": child_id,
+                "child_label_he": label,
+                "root_topic_id": root_topic_id,
+                "aliases_he": aliases,
+                "support_count": 0,
+                "status": "active",
+                "profile": {
+                    "summary_he": str(row.get("summary_he") or f"נושא משנה מוניציפלי חוזר בתחום {label}."),
+                    "aliases_he": aliases,
+                },
+                "curation_status": "curated_mid_level_seed",
+                "curation_source": "manual_review_20260616",
+            }
+        )
 
 
 def _roots_by_id_from_tree(tree: dict[str, Any]) -> dict[str, dict[str, Any]]:

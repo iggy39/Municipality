@@ -513,6 +513,20 @@ def _profiled_client_class(module: Any) -> Any:
                 return {**error, "stage": stage, "stage_model_name": body.get("model"), "stage_think": body.get("think")}
             content = str(((raw_payload.get("message") or {}).get("content")) or "")
             parsed = module.parse_json_object(content)
+            if not isinstance(parsed, dict) and raw_payload.get("done_reason") == "length":
+                retry_body = dict(body)
+                retry_options = dict(retry_body.get("options") or {})
+                retry_options["num_predict"] = max(int(retry_options.get("num_predict") or 0) * 2, int(retry_options.get("num_predict") or 0) + 1200, 2200)
+                retry_body["options"] = retry_options
+                record["length_retry_attempted"] = True
+                retry_payload, retry_error = self._post_chat_with_timeout_retry(body=retry_body, config=config, attempts=1)
+                if retry_error is None:
+                    retry_content = str(((retry_payload.get("message") or {}).get("content")) or "")
+                    retry_parsed = module.parse_json_object(retry_content)
+                    raw_payload = {**retry_payload, "retried_after_done_reason_length": True, "initial_done_reason": "length"}
+                    content = retry_content or content
+                    parsed = retry_parsed
+            elapsed = round(time.perf_counter() - started, 3)
             quality = _stage_quality(parsed=parsed, request_payload=request_payload, raw_payload=raw_payload)
             record["response"] = {"status": "ok" if isinstance(parsed, dict) else "invalid_json", "elapsed_seconds": elapsed, "raw_payload": raw_payload, "parsed_response": parsed, "quality": quality}
             self._record_stage(record)
@@ -547,6 +561,7 @@ def _profiled_client_class(module: Any) -> Any:
             return record
 
         def _payload_from_cached_stage(self, *, stage: str, record: dict[str, Any], config: Any) -> Optional[dict[str, Any]]:
+            record = self._record_with_current_quality(record)
             response = record.get("response") if isinstance(record.get("response"), dict) else {}
             status = response.get("status")
             self._record_stage(record, cached=True)
@@ -575,6 +590,20 @@ def _profiled_client_class(module: Any) -> Any:
             parsed["stage_model_name"] = record.get("model")
             parsed["stage_think"] = record.get("think")
             return parsed
+
+        def _record_with_current_quality(self, record: dict[str, Any]) -> dict[str, Any]:
+            response = record.get("response") if isinstance(record.get("response"), dict) else {}
+            if response.get("status") not in {"ok", "invalid_json"}:
+                return record
+            updated = dict(record)
+            updated_response = dict(response)
+            parsed = updated_response.get("parsed_response")
+            raw_payload = updated_response.get("raw_payload") if isinstance(updated_response.get("raw_payload"), dict) else {}
+            request_payload = updated.get("request_payload") if isinstance(updated.get("request_payload"), dict) else {}
+            updated_response["quality"] = _stage_quality(parsed=parsed, request_payload=request_payload, raw_payload=raw_payload)
+            updated_response["status"] = "ok" if isinstance(parsed, dict) else "invalid_json"
+            updated["response"] = updated_response
+            return updated
 
         def _record_stage(self, record: dict[str, Any], cached: bool = False) -> None:
             safe = re.sub(r"[^0-9A-Za-z._-]+", "_", str(record.get("call_id") or "stage_call"))[:180]
@@ -767,17 +796,74 @@ def _invalid_enum_fields(parsed: Any, schema: Any, prefix: str = "") -> list[str
         value = parsed.get(key)
         if isinstance(expected, str) and _is_enum_schema_text(expected) and value is not None:
             allowed = [part for part in expected.split("|") if part not in {"null", "string", "boolean"}]
-            if path.endswith("span_roles[].span_role") and isinstance(value, str) and "|" in value:
-                role_parts = [part.strip() for part in value.split("|") if part.strip()]
-                if role_parts and all(part in allowed for part in role_parts):
-                    continue
-            if allowed and str(value) not in allowed:
+            if allowed and not _enum_value_valid_or_recoverable(path=path, value=value, allowed=allowed):
                 invalid.append(path)
         elif isinstance(expected, list) and expected and isinstance(value, list) and value:
             invalid.extend(_invalid_enum_fields(value[0], expected[0], path + "[]"))
         elif isinstance(expected, dict) and isinstance(value, dict):
             invalid.extend(_invalid_enum_fields(value, expected, path))
     return invalid
+
+
+def _enum_value_valid_or_recoverable(*, path: str, value: Any, allowed: list[str]) -> bool:
+    if value in allowed:
+        return True
+    text = str(value or "").strip()
+    if text in allowed:
+        return True
+    if isinstance(value, dict) and path == "prediction_comparison":
+        return True
+    alias = _enum_alias_for_path(path=path, value=text)
+    if alias in allowed:
+        return True
+    if "|" in text and _path_accepts_composite_enum(path):
+        parts = [part.strip() for part in text.split("|") if part.strip()]
+        if parts and all(part in allowed for part in parts):
+            return True
+    return False
+
+
+def _path_accepts_composite_enum(path: str) -> bool:
+    return path in {
+        "prediction_comparison",
+        "row_quality.quality_status",
+        "entailment_status",
+    } or path.endswith("span_roles[].span_role") or path.endswith("row_roles[].row_role")
+
+
+def _enum_alias_for_path(*, path: str, value: str) -> str:
+    aliases_by_path = {
+        "entailment_status": {
+            "partial": "partially_entailed",
+            "partially": "partially_entailed",
+            "partial_entailed": "partially_entailed",
+            "partly_entailed": "partially_entailed",
+            "not entailed": "not_entailed",
+            "not-entailed": "not_entailed",
+        },
+        "prediction_comparison": {
+            "partial": "partially_different",
+            "partially different": "partially_different",
+            "partly_different": "partially_different",
+            "not_same": "different",
+            "invalid": "model_invalid",
+            "uncertain": "judge_uncertain",
+            "unknown": "judge_uncertain",
+        },
+        "row_quality.quality_status": {
+            "good": "accepted",
+            "ok": "accepted",
+            "pass": "accepted",
+            "passed": "accepted",
+            "valid": "accepted",
+            "review": "needs_review",
+            "warning": "needs_review",
+            "error": "failed",
+            "invalid": "failed",
+            "rejected": "failed",
+        },
+    }
+    return aliases_by_path.get(path, {}).get(value, value)
 
 
 def _placeholder_like_fields(*, parsed: Any, schema: Any, prefix: str = "") -> list[str]:

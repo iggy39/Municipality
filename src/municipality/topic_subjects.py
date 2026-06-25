@@ -99,6 +99,16 @@ TOPIC_SUBJECT_V3_EVENT_STATUS_VALUES = {
 TOPIC_SUBJECT_V3_EVIDENCE_STATUSES = {"entailed", "partially_entailed", "not_entailed", "uncertain"}
 TOPIC_SUBJECT_V3_EVIDENCE_FIELD_STATUSES = {"entailed", "not_entailed", "uncertain"}
 TOPIC_SUBJECT_V3_EVIDENCE_OUTCOME_STATUSES = {"entailed", "not_entailed", "uncertain", "not_applicable"}
+TOPIC_SUBJECT_V3_EVIDENCE_STATUS_ALIASES = {
+    "partial": "partially_entailed",
+    "partially": "partially_entailed",
+    "partial_entailed": "partially_entailed",
+    "partly_entailed": "partially_entailed",
+    "not entailed": "not_entailed",
+    "not-entailed": "not_entailed",
+}
+TOPIC_SUBJECT_V3_PREDICTION_COMPARISON_VALUES = {"same", "partially_different", "different", "model_invalid", "judge_uncertain"}
+TOPIC_SUBJECT_V3_QUALITY_STATUS_VALUES = {"accepted", "needs_review", "failed", "non_event"}
 
 ACTION_ONTOLOGY_V3 = (
     {
@@ -642,6 +652,88 @@ def topic_subject_v3_normalize_event_role(raw_role: Any, *, is_event: bool, row_
     if role in {"same_as_existing_event", "duplicate_prediction"}:
         return "duplicate_event_prediction"
     return "primary" if is_event else "not_part_of_event"
+
+
+def topic_subject_v3_enum_parts(raw_value: Any) -> list[str]:
+    return [compact_text(part) for part in compact_text(raw_value).split("|") if compact_text(part)]
+
+
+def topic_subject_v3_normalize_row_role_value(raw_role: Any, *, fallback: str = "insufficient_context") -> tuple[str, bool]:
+    role = compact_text(raw_role)
+    if role in TOPIC_SUBJECT_V3_ROW_ROLE_VALUES:
+        return role, False
+    fallback_role = compact_text(fallback)
+    if fallback_role not in TOPIC_SUBJECT_V3_ROW_ROLE_VALUES:
+        fallback_role = "insufficient_context"
+    parts = topic_subject_v3_enum_parts(role)
+    if parts and all(part in TOPIC_SUBJECT_V3_ROW_ROLE_VALUES for part in parts):
+        return fallback_role, True
+    return fallback_role, bool(role)
+
+
+def topic_subject_v3_normalize_prediction_comparison(raw_value: Any) -> tuple[str, Any | None]:
+    if isinstance(raw_value, dict):
+        values = [compact_text(value) for key, value in raw_value.items() if key not in {"confidence", "rationale_he", "rationale", "reason_he"} and compact_text(value)]
+        if not values:
+            return "judge_uncertain", raw_value
+        if any(value == "model_invalid" for value in values):
+            return "model_invalid", raw_value
+        if any(value in {"judge_uncertain", "uncertain"} for value in values):
+            return "judge_uncertain", raw_value
+        comparable = [value for value in values if value in {"same", "partially_different", "different"}]
+        if comparable and all(value == "same" for value in comparable):
+            return "same", raw_value
+        if comparable and all(value == "different" for value in comparable):
+            return "different", raw_value
+        return "partially_different", raw_value
+    value = compact_text(raw_value)
+    if value in TOPIC_SUBJECT_V3_PREDICTION_COMPARISON_VALUES:
+        return value, None
+    aliases = {
+        "partial": "partially_different",
+        "partially different": "partially_different",
+        "partly_different": "partially_different",
+        "not_same": "different",
+        "invalid": "model_invalid",
+        "uncertain": "judge_uncertain",
+        "unknown": "judge_uncertain",
+    }
+    if value in aliases:
+        return aliases[value], value
+    parts = topic_subject_v3_enum_parts(value)
+    if parts and all(part in TOPIC_SUBJECT_V3_PREDICTION_COMPARISON_VALUES for part in parts):
+        return "judge_uncertain", value
+    return "unknown", value if value else None
+
+
+def topic_subject_v3_normalize_quality_status(raw_value: Any, *, validation_status: str, is_event: bool) -> tuple[str, Any | None]:
+    if not is_event:
+        return "non_event", None
+    validation = compact_text(validation_status)
+    if validation == "failed":
+        return "failed", None
+    if validation == "needs_review":
+        return "needs_review", None
+    value = compact_text(raw_value)
+    if value in TOPIC_SUBJECT_V3_QUALITY_STATUS_VALUES:
+        return value, None
+    aliases = {
+        "good": "accepted",
+        "ok": "accepted",
+        "pass": "accepted",
+        "passed": "accepted",
+        "valid": "accepted",
+        "review": "needs_review",
+        "warning": "needs_review",
+        "error": "failed",
+        "invalid": "failed",
+        "rejected": "failed",
+    }
+    if value in aliases:
+        return aliases[value], value
+    if validation in TOPIC_SUBJECT_V3_QUALITY_STATUS_VALUES:
+        return validation, value if value else None
+    return "accepted", value if value else None
 
 
 @dataclass(slots=True)
@@ -1223,6 +1315,22 @@ class OllamaTopicSubjectV3Client(OllamaTopicSubjectClient):
             return {**error, "stage": stage, "stage_model_name": model_name, "stage_think": think}
         content = str(((raw_payload.get("message") or {}).get("content")) or "")
         parsed = parse_json_object(content)
+        if not isinstance(parsed, dict) and raw_payload.get("done_reason") == "length":
+            retry_body = dict(body)
+            retry_options = dict(retry_body.get("options") or {})
+            retry_options["num_predict"] = max(int(num_predict) * 2, int(num_predict) + 1200)
+            retry_body["options"] = retry_options
+            retry_payload, retry_error = self._post_chat_with_timeout_retry(body=retry_body, config=config, attempts=1)
+            if retry_error is None:
+                retry_content = str(((retry_payload.get("message") or {}).get("content")) or "")
+                retry_parsed = parse_json_object(retry_content)
+                if isinstance(retry_parsed, dict):
+                    raw_payload = {**retry_payload, "retried_after_done_reason_length": True, "initial_done_reason": "length"}
+                    content = retry_content
+                    parsed = retry_parsed
+                else:
+                    raw_payload = {**retry_payload, "retried_after_done_reason_length": True, "initial_done_reason": "length"}
+                    content = retry_content or content
         if not isinstance(parsed, dict):
             repaired = self._repair_stage_json(raw_content=content, stage=stage, config=config)
             if isinstance(repaired, dict):
@@ -1279,6 +1387,14 @@ class OllamaTopicSubjectV3Client(OllamaTopicSubjectClient):
             return None
         content = str(((raw_payload.get("message") or {}).get("content")) or "")
         repaired = parse_json_object(content)
+        if not isinstance(repaired, dict) and raw_payload.get("done_reason") == "length":
+            retry_body = dict(body)
+            retry_options = dict(retry_body.get("options") or {})
+            retry_options["num_predict"] = max(int(retry_options.get("num_predict") or 2200) * 2, 3400)
+            retry_body["options"] = retry_options
+            retry_payload, retry_error = self._post_chat_with_timeout_retry(body=retry_body, config=config, attempts=1)
+            if retry_error is None:
+                repaired = parse_json_object(str(((retry_payload.get("message") or {}).get("content")) or ""))
         if isinstance(repaired, dict):
             repaired["stage_model_name"] = model_name
             repaired["stage_think"] = think
@@ -3006,9 +3122,13 @@ def topic_subject_v3_fallback_normalized_event(*, context: TopicSubjectV3EventCo
     }
 
 
-def topic_subject_v3_normalize_context_event_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def topic_subject_v3_normalize_context_event_payload(payload: dict[str, Any], *, context: TopicSubjectV3EventContext | None = None) -> dict[str, Any]:
     normalized = dict(payload)
     warnings = [compact_text(item) for item in normalized.get("schema_warnings") or [] if compact_text(item)]
+    target_row_role, target_row_role_changed = topic_subject_v3_normalize_row_role_value(normalized.get("target_row_role"), fallback="insufficient_context")
+    if target_row_role_changed:
+        warnings.append(f"target_row_role_normalized:{compact_text(normalized.get('target_row_role'))}->{target_row_role}")
+    normalized["target_row_role"] = target_row_role
     span_roles = normalized.get("span_roles") if isinstance(normalized.get("span_roles"), list) else []
     normalized_span_roles: list[dict[str, str]] = []
     for item in span_roles:
@@ -3038,6 +3158,27 @@ def topic_subject_v3_normalize_context_event_payload(payload: dict[str, Any]) ->
             }
         )
     normalized["span_roles"] = normalized_span_roles
+    row_roles = normalized.get("row_roles") if isinstance(normalized.get("row_roles"), list) else []
+    normalized_row_roles: list[dict[str, str]] = []
+    target_artifact_id = context.target_artifact.artifact_id if context is not None else compact_text(normalized.get("target_artifact_id"))
+    for item in row_roles:
+        if not isinstance(item, dict):
+            continue
+        artifact_id = compact_text(item.get("artifact_id"))
+        if not artifact_id:
+            continue
+        fallback_role = target_row_role if artifact_id == target_artifact_id else "dependent_detail"
+        row_role, row_role_changed = topic_subject_v3_normalize_row_role_value(item.get("row_role"), fallback=fallback_role)
+        if row_role_changed:
+            warnings.append(f"row_role_normalized:{artifact_id}:{compact_text(item.get('row_role'))}->{row_role}")
+        normalized_row_roles.append(
+            {
+                "artifact_id": artifact_id,
+                "row_role": row_role,
+                "role_reason_he": compact_text(item.get("role_reason_he") or item.get("reason_he") or item.get("reason"))[:300],
+            }
+        )
+    normalized["row_roles"] = normalized_row_roles
     normalized["schema_warnings"] = unique_strings(warnings)
     return normalized
 
@@ -3055,7 +3196,7 @@ def process_topic_subject_v3_context(
     normalized_event = client.normalize_event(context=context, config=config)
     if normalized_event.get("error_code"):
         normalized_event = topic_subject_v3_fallback_normalized_event(context=context, model_payload=normalized_event)
-    normalized_event = topic_subject_v3_normalize_context_event_payload(normalized_event)
+    normalized_event = topic_subject_v3_normalize_context_event_payload(normalized_event, context=context)
 
     extraction_payload = client.extract_event(context=context, normalized_event=normalized_event, config=config)
     if extraction_payload.get("error_code"):
@@ -3441,6 +3582,29 @@ def normalize_topic_subject_v3_event_payload(
         outcome = {}
     elif not outcome_is_decision and not has_meaningful_non_decision_outcome:
         outcome = {}
+    target_row_role, target_row_role_changed = topic_subject_v3_normalize_row_role_value(raw.get("target_row_role"), fallback="action_anchor" if is_event else "insufficient_context")
+    if target_row_role_changed:
+        schema_warnings.append(f"target_row_role_normalized:{compact_text(raw.get('target_row_role'))}->{target_row_role}")
+    raw_row_roles = raw.get("row_roles") if isinstance(raw.get("row_roles"), list) else []
+    row_roles: list[dict[str, str]] = []
+    for item in raw_row_roles:
+        if not isinstance(item, dict):
+            continue
+        artifact_id = compact_text(item.get("artifact_id"))
+        if not artifact_id:
+            continue
+        fallback_role = target_row_role if artifact_id == context.target_artifact.artifact_id else "dependent_detail"
+        row_role, row_role_changed = topic_subject_v3_normalize_row_role_value(item.get("row_role"), fallback=fallback_role)
+        if row_role_changed:
+            schema_warnings.append(f"row_role_normalized:{artifact_id}:{compact_text(item.get('row_role'))}->{row_role}")
+        row_roles.append(
+            {
+                "artifact_id": artifact_id,
+                "row_role": row_role,
+                "event_role": topic_subject_v3_normalize_event_role(item.get("event_role"), is_event=is_event, row_role=row_role),
+                "reason_he": compact_text(item.get("reason_he") or item.get("role_reason_he") or item.get("reason"))[:300],
+            }
+        )
     normalized = {
         "context_id": compact_text(raw.get("context_id")) or context.context_id,
         "target_artifact_id": compact_text(raw.get("target_artifact_id")) or context.target_artifact.artifact_id,
@@ -3466,8 +3630,8 @@ def normalize_topic_subject_v3_event_payload(
         "outcome_is_decision": outcome_is_decision,
         "outcome": outcome if outcome_is_decision or outcome else None,
         "event_phase": topic_subject_v3_event_phase(context=context, is_event=is_event, action_type=action_type, outcome_is_decision=outcome_is_decision),
-        "target_row_role": compact_text(raw.get("target_row_role"))[:64] or "unknown",
-        "row_roles": raw.get("row_roles") if isinstance(raw.get("row_roles"), list) else [],
+        "target_row_role": target_row_role,
+        "row_roles": row_roles,
         "confidence": clamp_float(raw.get("confidence"), default=0.0),
         "rationale_he": compact_text(raw.get("rationale_he"))[:1000],
         "schema_warnings": schema_warnings,
@@ -4004,6 +4168,11 @@ def topic_subject_v3_normalize_evidence_assessment(assessment_payload: dict[str,
     normalized = dict(assessment_payload)
     warnings = [compact_text(item) for item in normalized.get("schema_warnings") or [] if compact_text(item)]
     status = compact_text(normalized.get("entailment_status"))
+    aliased_status = TOPIC_SUBJECT_V3_EVIDENCE_STATUS_ALIASES.get(status, status)
+    if aliased_status != status:
+        warnings.append(f"entailment_status_normalized:{status}->{aliased_status}")
+        status = aliased_status
+        normalized["entailment_status"] = status
     if status not in TOPIC_SUBJECT_V3_EVIDENCE_STATUSES:
         if status:
             warnings.append(f"invalid_entailment_status:{status}")
@@ -4178,13 +4347,7 @@ def topic_subject_v3_row_quality_from_payloads(
     row_quality = judge_payload.get("row_quality") if isinstance(judge_payload.get("row_quality"), dict) else {}
     outcome_summary = topic_subject_v3_outcome_summary(event_payload)
     is_event = bool(event_payload.get("is_event"))
-    quality_status = compact_text(row_quality.get("quality_status")) or validation_status
-    if not is_event:
-        quality_status = "non_event"
-    elif validation_status == "failed":
-        quality_status = "failed"
-    elif validation_status == "needs_review":
-        quality_status = "needs_review"
+    quality_status, raw_quality_status = topic_subject_v3_normalize_quality_status(row_quality.get("quality_status"), validation_status=validation_status, is_event=is_event)
     judge_status = compact_text(judge_payload.get("judge_status")) or validation_status
     if not is_event and judge_status == "accepted":
         judge_status = "non_event"
@@ -4197,9 +4360,28 @@ def topic_subject_v3_row_quality_from_payloads(
         reason_items.append(decision_action_failure)
     if topic_subject_v3_judge_action_disagreement_needs_review(event_payload=event_payload, judge_payload=judge_payload):
         reason_items.append("judge_action_disagreement_high_confidence")
-    row_role = compact_text(row_quality.get("row_role")) or compact_text(event_payload.get("target_row_role")) or "unknown"
+    raw_row_role = compact_text(row_quality.get("row_role")) or compact_text(event_payload.get("target_row_role"))
+    row_role, raw_row_role_changed = topic_subject_v3_normalize_row_role_value(raw_row_role, fallback=compact_text(event_payload.get("target_row_role")) or "insufficient_context")
     raw_event_role = compact_text(row_quality.get("event_role"))
     event_role = topic_subject_v3_normalize_event_role(raw_event_role, is_event=is_event, row_role=row_role)
+    prediction_comparison, raw_prediction_comparison = topic_subject_v3_normalize_prediction_comparison(judge_payload.get("prediction_comparison"))
+    metadata = {
+        "context_id": context.context_id,
+        "context_artifact_ids": [artifact.artifact_id for artifact in context.rows],
+        "upstream_subject_hint_policy": "strong_context_hint_only_not_source_evidence",
+        "upstream_subject_hint": topic_subject_v3_upstream_subject_hint(target),
+        "source_topic_label_he": target.topic_label_he,
+        "event_identity_status": compact_text(judge_payload.get("event_identity_status")) or compact_text(event_payload.get("event_identity_status")) or "unknown",
+        "raw_event_role_by_judge": raw_event_role,
+        "schema_warnings": [str(item) for item in event_payload.get("schema_warnings") or [] if str(item).strip()],
+        "judge_payload": compact_payload_for_prompt(judge_payload),
+    }
+    if raw_quality_status is not None:
+        metadata["raw_quality_status_by_judge"] = raw_quality_status
+    if raw_row_role_changed:
+        metadata["raw_row_role_by_judge"] = raw_row_role
+    if raw_prediction_comparison is not None:
+        metadata["raw_prediction_comparison_by_judge"] = compact_payload_for_prompt(raw_prediction_comparison) if isinstance(raw_prediction_comparison, dict) else raw_prediction_comparison
     return TopicSubjectV3RowQualityData(
         artifact=target,
         event_id=event_id,
@@ -4214,22 +4396,12 @@ def topic_subject_v3_row_quality_from_payloads(
         outcome_by_dicta=outcome_summary,
         model_prediction=event_payload,
         judge_prediction=topic_subject_v3_judge_prediction(judge_payload),
-        prediction_comparison=compact_text(judge_payload.get("prediction_comparison")) or "unknown",
+        prediction_comparison=prediction_comparison,
         judge_status=judge_status,
         ground_truth_he=ground_truth,
         reason_for_failure="; ".join(unique_strings(reason_items)),
         quality_status=quality_status,
-        metadata={
-            "context_id": context.context_id,
-            "context_artifact_ids": [artifact.artifact_id for artifact in context.rows],
-            "upstream_subject_hint_policy": "strong_context_hint_only_not_source_evidence",
-            "upstream_subject_hint": topic_subject_v3_upstream_subject_hint(target),
-            "source_topic_label_he": target.topic_label_he,
-            "event_identity_status": compact_text(judge_payload.get("event_identity_status")) or compact_text(event_payload.get("event_identity_status")) or "unknown",
-            "raw_event_role_by_judge": raw_event_role,
-            "schema_warnings": [str(item) for item in event_payload.get("schema_warnings") or [] if str(item).strip()],
-            "judge_payload": compact_payload_for_prompt(judge_payload),
-        },
+        metadata=metadata,
     )
 
 

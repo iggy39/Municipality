@@ -19,7 +19,9 @@ DEFAULT_GOVMAP_ORIGIN = "https://horizonscanninglab.org"
 DEFAULT_GOVMAP_CENTER_X = 180428.96
 DEFAULT_GOVMAP_CENTER_Y = 665728.35
 DEFAULT_GOVMAP_RADIUS_M = 3000.0
+DEFAULT_ADDRESS_SELECTED_AREA_RADIUS_M = 300.0
 DEFAULT_GOVMAP_LEVEL = 8
+GOVMAP_DASHBOARD_FEATURE_DISPLAY_LIMIT = 120
 
 GOVMAP_BASE_URL = "https://www.govmap.gov.il"
 GOVMAP_SEARCH_PATH = "/api/search-service/api-search"
@@ -245,9 +247,11 @@ def build_govmap_dashboard_payload(
     center_y: float | None = None,
     municipality: str | None = None,
     address: str | None = None,
+    focus_layer: str | None = None,
 ) -> dict[str, Any]:
     client = client or GovMapClient()
     radius_m = min(float(radius_m or DEFAULT_GOVMAP_RADIUS_M), 3000.0)
+    selected_area_radius_m = min(DEFAULT_ADDRESS_SELECTED_AREA_RADIUS_M, radius_m)
     center_source = "explicit" if center_x is not None and center_y is not None else "fallback_tel_aviv"
     resolved_center = None
     if center_x is None or center_y is None:
@@ -258,8 +262,22 @@ def build_govmap_dashboard_payload(
             center_source = resolved_center["source"]
     center_x = float(center_x if center_x is not None else DEFAULT_GOVMAP_CENTER_X)
     center_y = float(center_y if center_y is not None else DEFAULT_GOVMAP_CENTER_Y)
-    center = itm_to_wgs84(center_x, center_y)
     govmap_layers = GOVMAP_DASHBOARD_LAYERS
+    focus_layer_spec = _govmap_layer_by_alias(focus_layer)
+    selected_focus_feature: dict[str, Any] | None = None
+    selected_focus_error: str | None = None
+    address_focus_requested = bool(_center_search_text(address))
+    if focus_layer_spec is not None and _live_govmap_enabled():
+        try:
+            selected_focus_feature = _selected_focus_feature_from_govmap(client, center_x=center_x, center_y=center_y, radius_m=radius_m, layer=focus_layer_spec)
+            focus_center = selected_focus_feature.get("govmap_center") if selected_focus_feature else None
+            if isinstance(focus_center, Mapping) and not address_focus_requested:
+                center_x = float(focus_center["x"])
+                center_y = float(focus_center["y"])
+                center_source = f"focus_layer:{focus_layer_spec.alias}"
+        except (httpx.HTTPError, ValueError) as exc:
+            selected_focus_error = exc.__class__.__name__
+    center = itm_to_wgs84(center_x, center_y)
     resident_layer_groups = _resident_govmap_layer_groups()
     resident_map_layer_aliases = _resident_govmap_aliases(resident_layer_groups, kind="map_layer")
     default_visible_layers = [layer.alias for layer in govmap_layers if layer.alias in GOVMAP_DEFAULT_VISIBLE_LAYER_ALIASES]
@@ -298,7 +316,17 @@ def build_govmap_dashboard_payload(
         selected_neighborhood_error = "live_govmap_disabled"
 
     grouped_layers = _dashboard_layers_from_govmap(spatial_payload.get("layers") or {}, govmap_layers, center=center)
-    selected_area = _selected_area_feature(center, selected_neighborhood)
+    if selected_focus_feature is not None:
+        focus_group = grouped_layers.setdefault(focus_layer_spec.dashboard_key if focus_layer_spec else "municipal_pois", {"count": 0, "displayed_count": 0, "total_count": 0, "items": [], "status": "not_found", "source_id": "govmap"})
+        existing_ids = {item.get("id") for item in focus_group.get("items", []) if isinstance(item, Mapping)}
+        if selected_focus_feature.get("id") not in existing_ids:
+            focus_group["items"].insert(0, selected_focus_feature)
+            focus_group["count"] = int(focus_group.get("count") or 0) + 1
+            focus_group["displayed_count"] = int(focus_group.get("displayed_count") or 0) + 1
+            focus_group["total_count"] = int(focus_group.get("total_count") or 0) + 1
+            focus_group["status"] = "found"
+    selected_area = _address_radius_area_feature(center_x=center_x, center_y=center_y, center=center, radius_m=selected_area_radius_m, address=address)
+    address_marker = _address_marker_feature(center_x=center_x, center_y=center_y, center=center, address=address)
     nearby_pois = _nearby_pois_from_layers(grouped_layers)
     address_layer = _address_search_layer(address_payload, address_error=address_error)
     grouped_layers["address_points"] = address_layer
@@ -316,7 +344,9 @@ def build_govmap_dashboard_payload(
             "center_source": center_source,
             "municipality": municipality,
             "address": address,
+            "focus_layer": focus_layer_spec.alias if focus_layer_spec else None,
             "radius_m": radius_m,
+            "selected_area_radius_m": selected_area_radius_m,
             "profile": profile,
             "address_search_supported": True,
             "address_search_datatypes": list(GOVMAP_ADDRESS_DATATYPES),
@@ -341,11 +371,12 @@ def build_govmap_dashboard_payload(
             "enabled": True,
             "origin": client.origin,
             "api_key": client.api_key,
-            "iframe_url": build_govmap_url(center_x=center_x, center_y=center_y, layers=tuple(default_visible_layers), level=DEFAULT_GOVMAP_LEVEL),
+            "iframe_url": build_govmap_url(center_x=center_x, center_y=center_y, layers=tuple(default_visible_layers), level=_govmap_level(profile=profile, selected_focus_feature=selected_focus_feature, address_focused=address_focus_requested)),
             "center": {"x": float(center_x), "y": float(center_y), **center},
-            "level": DEFAULT_GOVMAP_LEVEL,
+            "level": _govmap_level(profile=profile, selected_focus_feature=selected_focus_feature, address_focused=address_focus_requested),
             "background": 0,
             "radius_m": radius_m,
+            "selected_area_radius_m": selected_area_radius_m,
             "visible_layers": _unique_govmap_aliases([layer.alias for layer in govmap_layers] + resident_map_layer_aliases),
             "default_visible_layers": default_visible_layers,
             "layer_filters": _govmap_layer_filters(govmap_layers),
@@ -353,8 +384,13 @@ def build_govmap_dashboard_payload(
             "layer_groups": _govmap_layer_groups(),
             "spatial_status": "available" if spatial_error is None else "degraded",
             "spatial_error": spatial_error,
-            "selected_area": selected_neighborhood,
-            "selected_area_error": selected_neighborhood_error,
+            "selected_area": selected_area,
+            "address_marker": address_marker,
+            "selected_area_error": None,
+            "neighborhood_boundary": selected_neighborhood,
+            "neighborhood_boundary_error": selected_neighborhood_error,
+            "selected_focus_feature": selected_focus_feature,
+            "selected_focus_error": selected_focus_error,
         },
         "parcel": selected_area,
         "primary_feature": selected_area,
@@ -364,7 +400,7 @@ def build_govmap_dashboard_payload(
         "legend": _govmap_legend(),
         "caveats": [
             "GovMap הוא מקור ה-GIS הראשי במפה זו; התשובות נשענות על שכבות GovMap ועל מזהי אובייקטים שהוחזרו מה-API.",
-            "הסימונים הצפים מעל המפה הם שכבת תצוגה של הדשבורד; שכבות המקור מוצגות ב-GovMap עצמו.",
+            "אזור הבחירה מוצג כמעגל סביב הכתובת; גבול השכונה מוצג כהקשר נפרד כאשר GovMap מחזיר פוליגון שכונה.",
             "חיפוש כתובות ורחובות זמין דרך GovMap Search API כ-datatypes: address, street, settlement.",
             "אם GovMap אינו זמין, ניתן לעבור חזרה לנתוני PostGIS מקומיים באמצעות GIS_DASHBOARD_PROVIDER=local או provider=local.",
         ],
@@ -446,14 +482,14 @@ def _dashboard_layers_from_govmap(layers_payload: Mapping[str, Any], specs: tupl
         raw_items = layers_payload.get(spec.alias) if isinstance(layers_payload, Mapping) else []
         raw_items = raw_items if isinstance(raw_items, list) else []
         features = []
-        for raw in raw_items:
+        for raw in raw_items[:GOVMAP_DASHBOARD_FEATURE_DISPLAY_LIMIT]:
             if not isinstance(raw, Mapping):
                 continue
             display_index += 1
             features.append(_feature_from_govmap_item(spec, raw, center=center, display_index=display_index))
         group = grouped.setdefault(spec.dashboard_key, {"count": 0, "displayed_count": 0, "total_count": 0, "items": [], "status": "not_found", "source_id": "govmap"})
         group["items"].extend(features)
-        group["count"] += len(features)
+        group["count"] += len(raw_items)
         group["displayed_count"] += len(features)
         group["total_count"] += len(raw_items)
         if raw_items:
@@ -461,6 +497,21 @@ def _dashboard_layers_from_govmap(layers_payload: Mapping[str, Any], specs: tupl
     for key in ("nearby_parcels", "plans", "municipal_boundaries", "neighborhoods", "municipal_pois", "emergency", "environment", "infrastructure"):
         grouped.setdefault(key, {"count": 0, "displayed_count": 0, "total_count": 0, "items": [], "status": "not_found", "source_id": "govmap"})
     return grouped
+
+
+def _govmap_layer_by_alias(alias: str | None) -> GovMapLayerSpec | None:
+    text = str(alias or "").strip().lower()
+    if not text:
+        return None
+    return next((layer for layer in GOVMAP_DASHBOARD_LAYERS if layer.alias.lower() == text), None)
+
+
+def _govmap_level(*, profile: str, selected_focus_feature: Mapping[str, Any] | None, address_focused: bool = False) -> int:
+    if selected_focus_feature is not None and not address_focused:
+        return 11
+    if str(profile or "").strip().lower() == "question":
+        return 10
+    return DEFAULT_GOVMAP_LEVEL
 
 
 def _feature_from_govmap_item(spec: GovMapLayerSpec, item: Mapping[str, Any], *, center: Mapping[str, float], display_index: int) -> dict[str, Any]:
@@ -511,22 +562,137 @@ def _selected_neighborhood_from_govmap(client: GovMapClient, *, center_x: float,
     }
 
 
-def _selected_area_feature(center: Mapping[str, float], selected_neighborhood: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    geometry = selected_neighborhood.get("geometry") if isinstance(selected_neighborhood, Mapping) else None
-    object_id = selected_neighborhood.get("objectid") if isinstance(selected_neighborhood, Mapping) else None
+def _selected_focus_feature_from_govmap(client: GovMapClient, *, center_x: float, center_y: float, radius_m: float, layer: GovMapLayerSpec) -> dict[str, Any] | None:
+    items = client.select_features_on_map(x=center_x, y=center_y, radius_m=radius_m, layer=layer)
+    features = [_focus_feature_from_selected_item(layer, item, fallback_center_x=center_x, fallback_center_y=center_y) for item in items if isinstance(item, Mapping)]
+    features = [feature for feature in features if feature is not None]
+    if not features:
+        return None
+    return min(features, key=lambda feature: float(feature.get("distance_from_query_m") or 0.0))
+
+
+def _focus_feature_from_selected_item(layer: GovMapLayerSpec, item: Mapping[str, Any], *, fallback_center_x: float, fallback_center_y: float) -> dict[str, Any] | None:
+    attributes = item.get("attributes") if isinstance(item.get("attributes"), Mapping) else item
+    object_id = str(item.get("objectid") or item.get("OBJECTID") or item.get("ObjectId") or item.get("id") or attributes.get("objectid") or "").strip()
+    wkt = str(item.get("wkt") or item.get("WKT") or "").strip()
+    point = _web_mercator_point_wkt_to_centers(wkt) if wkt else None
+    if point is None:
+        return None
+    title = _feature_title(layer, attributes, object_id or "1")
+    distance_m = math.hypot(point["x"] - float(fallback_center_x), point["y"] - float(fallback_center_y))
     return {
-        "id": f"govmap:neighborhoods_area:{object_id}" if object_id else "govmap:selected-area",
-        "feature_type": "selected_area",
-        "source_id": "govmap:neighborhoods_area" if object_id else "govmap",
-        "provenance_id": f"govmap:neighborhoods_area:{object_id}" if object_id else "govmap:selected-area:not-resolved",
-        "source": _govmap_source(None),
-        "label": "אזור נבחר",
-        "name_he": "אזור נבחר",
+        "id": f"govmap:{layer.alias}:{object_id or 'selected'}",
+        "feature_type": "govmap_selected_focus_feature",
+        "source_id": f"govmap:{layer.alias}",
+        "provenance_id": _provenance_id(layer.alias, object_id or "selected", attributes),
+        "source": _govmap_source(layer),
         "source_object_id": object_id,
-        "govmap_layer": "neighborhoods_area" if object_id else None,
-        "geometry": geometry,
-        "display_geometry_status": "real_govmap_neighborhood_geometry" if geometry else "not_available",
+        "govmap_layer": layer.alias,
+        "label": title,
+        "name_he": title,
+        "poi_category": layer.category,
+        "geometry_kind": layer.geometry_kind,
+        "attributes": dict(attributes),
+        "geometry": {"type": "Point", "coordinates": [point["lon"], point["lat"]]},
+        "display_geometry_status": "real_govmap_feature_point",
+        "govmap_center": {"x": point["x"], "y": point["y"], "lon": point["lon"], "lat": point["lat"]},
+        "distance_from_query_m": round(distance_m, 2),
     }
+
+
+def _web_mercator_point_wkt_to_centers(wkt: str) -> dict[str, float] | None:
+    text = " ".join(str(wkt or "").strip().split())
+    if not text.upper().startswith("POINT"):
+        return None
+    body = text[text.find("(") + 1 : text.rfind(")")]
+    parts = body.split()
+    if len(parts) < 2:
+        return None
+    mercator_x = float(parts[0])
+    mercator_y = float(parts[1])
+    itm_x, itm_y = Transformer.from_crs("EPSG:3857", "EPSG:2039", always_xy=True).transform(mercator_x, mercator_y)
+    lon, lat = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True).transform(mercator_x, mercator_y)
+    return {"x": float(itm_x), "y": float(itm_y), "lon": float(lon), "lat": float(lat)}
+
+
+def _address_radius_area_feature(*, center_x: float, center_y: float, center: Mapping[str, float], radius_m: float, address: str | None = None) -> dict[str, Any]:
+    radius = float(radius_m or DEFAULT_ADDRESS_SELECTED_AREA_RADIUS_M)
+    itm_ring = _itm_circle_ring(float(center_x), float(center_y), radius)
+    geometry = _itm_ring_to_wgs84_polygon(itm_ring)
+    display_wkt = f"POLYGON ({_wkt_ring(itm_ring)})"
+    label_address = _center_search_text(address) or "מוקד הכתובת"
+    return {
+        "id": "govmap:address-radius:selected-area",
+        "feature_type": "address_radius_selected_area",
+        "source_id": "govmap:address_radius",
+        "provenance_id": f"govmap:address-radius:{round(float(center_x), 2)}:{round(float(center_y), 2)}:{round(radius, 2)}",
+        "source": _govmap_source(None),
+        "label": f"מעגל {radius / 1000:g} ק\"מ סביב {label_address}",
+        "name_he": f"מעגל {radius / 1000:g} ק\"מ סביב {label_address}",
+        "source_object_id": None,
+        "govmap_layer": None,
+        "radius_m": radius,
+        "center": {"x": float(center_x), "y": float(center_y), **dict(center)},
+        "geometry": geometry,
+        "display_wkt": display_wkt,
+        "display_srid": "2039",
+        "geometry_kind": "polygon",
+        "display_geometry_status": "address_radius_circle",
+    }
+
+
+def _address_marker_feature(*, center_x: float, center_y: float, center: Mapping[str, float], address: str | None = None) -> dict[str, Any]:
+    label_address = _center_search_text(address) or "מוקד הכתובת"
+    house_ring = _itm_house_marker_ring(float(center_x), float(center_y))
+    return {
+        "id": "govmap:address-marker:selected-address",
+        "feature_type": "address_marker",
+        "source_id": "govmap:address_marker",
+        "provenance_id": f"govmap:address-marker:{round(float(center_x), 2)}:{round(float(center_y), 2)}",
+        "source": _govmap_source(None),
+        "label": f"כתובת: {label_address}",
+        "name_he": f"כתובת: {label_address}",
+        "source_object_id": None,
+        "govmap_layer": None,
+        "center": {"x": float(center_x), "y": float(center_y), **dict(center)},
+        "geometry": {"type": "Point", "coordinates": [float(center["lon"]), float(center["lat"])]},
+        "display_wkt": f"POINT({float(center_x):.3f} {float(center_y):.3f})",
+        "house_display_wkt": f"POLYGON ({_wkt_ring(house_ring)})",
+        "display_srid": "2039",
+        "geometry_kind": "house_marker",
+        "display_geometry_status": "address_marker_house",
+    }
+
+
+def _itm_house_marker_ring(center_x: float, center_y: float, *, width_m: float = 8.5, height_m: float = 8.0) -> list[list[float]]:
+    half_width = width_m / 2.0
+    half_body = height_m * 0.28
+    roof_top = height_m * 0.52
+    ring = [
+        [center_x - half_width, center_y - half_body],
+        [center_x - half_width, center_y + half_body],
+        [center_x - half_width * 0.42, center_y + half_body],
+        [center_x, center_y + roof_top],
+        [center_x + half_width * 0.42, center_y + half_body],
+        [center_x + half_width, center_y + half_body],
+        [center_x + half_width, center_y - half_body],
+        [center_x - half_width, center_y - half_body],
+    ]
+    return ring
+
+
+def _itm_circle_ring(center_x: float, center_y: float, radius_m: float, *, segments: int = 96) -> list[list[float]]:
+    ring: list[list[float]] = []
+    for index in range(max(12, int(segments))):
+        angle = 2.0 * math.pi * index / max(12, int(segments))
+        ring.append([center_x + radius_m * math.cos(angle), center_y + radius_m * math.sin(angle)])
+    ring.append(ring[0])
+    return ring
+
+
+def _itm_ring_to_wgs84_polygon(ring: list[list[float]]) -> dict[str, Any]:
+    transformer = Transformer.from_crs("EPSG:2039", "EPSG:4326", always_xy=True)
+    return {"type": "Polygon", "coordinates": [[list(transformer.transform(point[0], point[1])) for point in ring]]}
 
 
 def _web_mercator_wkt_to_geojson(wkt: str) -> dict[str, Any] | None:

@@ -306,7 +306,7 @@ def _register_pdf(*, session: Session, storage: RawStorage, city: str, input_roo
     rel = _safe_rel(pdf_path, input_root=input_root)
     canonical_url = f"local://pdf_first_batch/{city}/{rel.as_posix()}"
     document = session.execute(select(Document).where(Document.canonical_url == canonical_url)).scalar_one_or_none()
-    doc_kind = "attachment" if source_kind == "pdf_first_attachment" else "protocol_full"
+    doc_kind = "attachment" if source_kind.endswith("_attachment") else "protocol_full"
     if document is None:
         document = Document(
             source_site_id=site.id,

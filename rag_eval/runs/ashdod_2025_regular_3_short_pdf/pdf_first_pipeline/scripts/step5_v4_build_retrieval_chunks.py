@@ -95,6 +95,7 @@ def main() -> int:
 def _build_chunk(*, unit: dict[str, Any], assignment: dict[str, Any], entity_facts: list[dict[str, Any]], ordinal: int, retrieval_set_id: str, source_title: str | None, source_url: str | None, document_version_id: int | None) -> dict[str, Any]:
     unit_id = str(unit.get("structure_unit_id") or unit.get("semantic_unit_id") or "")
     raw_text = _compact(unit.get("raw_text"))
+    corrected_text = _corrected_text(raw_text)
     summary = _compact(unit.get("summary_he"))
     page = _positive_int(unit.get("page") or assignment.get("source_page"))
     confidence = _float_or_none(assignment.get("topic_assignment_confidence")) or 0.45
@@ -116,6 +117,9 @@ def _build_chunk(*, unit: dict[str, Any], assignment: dict[str, Any], entity_fac
         decision_fields["decision_citation_chunk_ids"] = [local_id]
         decision_fields["decision_citation_artifact_ids"] = [local_id]
     chunk_text = _chunk_text(root_label=root_label, child_label=child_label, structural_role=str(unit.get("structural_role") or ""), summary=summary, raw_text=raw_text, entity_mentions=entity_mentions)
+    structure_metadata = _structure_metadata(unit=unit, page=page)
+    topic_assignment = _topic_assignment_metadata(assignment=assignment, root_topic_id=root_topic_id, root_label=root_label, child_id=child_id, child_label=child_label, status=status, confidence=confidence)
+    spans = _span_hints_for_v3(unit=unit, assignment=assignment, raw_text=raw_text, corrected_text=corrected_text, quote=quote, decision_fields=decision_fields, topic_assignment=topic_assignment)
     return {
         "retrieval_artifact_id": local_id,
         "chunk_id": local_id,
@@ -157,7 +161,11 @@ def _build_chunk(*, unit: dict[str, Any], assignment: dict[str, Any], entity_fac
         "spatial_representation": "none",
         **decision_fields,
         "raw_text": raw_text,
+        "corrected_text_he": corrected_text,
         "summary_he": summary,
+        "structure_metadata": structure_metadata,
+        "topic_assignment": topic_assignment,
+        "spans": spans,
         "chunk_text": chunk_text,
         "search_text": re.sub(r"\s+", " ", chunk_text).strip(),
         "retrieval_weight": _retrieval_weight(str(unit.get("structural_role") or ""), child_label=child_label),
@@ -291,6 +299,203 @@ def _empty_contract_value(value: Any) -> bool:
 def _write_evidence(*, evidence_dir: Path, chunks: list[dict[str, Any]]) -> None:
     rows = [{"retrieval_artifact_id": chunk.get("retrieval_artifact_id"), "evidence_contract": chunk.get("evidence_contract"), "evidence_refs": chunk.get("evidence_refs") or []} for chunk in chunks]
     (evidence_dir / "evidence_refs.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _structure_metadata(*, unit: dict[str, Any], page: int | None) -> dict[str, Any]:
+    return {
+        "structure_unit_id": unit.get("structure_unit_id"),
+        "semantic_unit_id": unit.get("semantic_unit_id") or unit.get("structure_unit_id"),
+        "source_semantic_unit_ids": [str(value) for value in unit.get("source_semantic_unit_ids") or [] if str(value).strip()],
+        "source_window_id": unit.get("source_window_id"),
+        "source_block_ids": [str(value) for value in unit.get("source_block_ids") or [] if str(value).strip()],
+        "source_region_ids": [str(value) for value in unit.get("source_region_ids") or [] if str(value).strip()],
+        "structural_role": unit.get("structural_role"),
+        "section_id": unit.get("section_id"),
+        "section_number": unit.get("section_number"),
+        "page": page,
+        "fragment_index": unit.get("fragment_index"),
+        "fragment_count": unit.get("fragment_count"),
+        "continuation_of_unit_id": unit.get("continuation_of_unit_id"),
+        "topic_assignment_eligible": unit.get("topic_assignment_eligible"),
+        "structure_evidence": unit.get("structure_evidence") or {},
+    }
+
+
+def _topic_assignment_metadata(*, assignment: dict[str, Any], root_topic_id: str, root_label: str, child_id: str | None, child_label: str | None, status: str, confidence: float) -> dict[str, Any]:
+    return {
+        "root_topic_id": root_topic_id or None,
+        "root_label_he": root_label or None,
+        "child_topic_id": child_id,
+        "child_label_he": child_label,
+        "topic_node_status": status,
+        "topic_reject_reason": assignment.get("topic_reject_reason"),
+        "topic_assignment_route": assignment.get("topic_assignment_route"),
+        "topic_assignment_confidence": confidence,
+        "topic_supporting_quote_he": assignment.get("topic_supporting_quote_he"),
+        "is_topic_bearing": assignment.get("is_topic_bearing"),
+        "row_type": assignment.get("row_type"),
+    }
+
+
+def _span_hints_for_v3(*, unit: dict[str, Any], assignment: dict[str, Any], raw_text: str, corrected_text: str, quote: str, decision_fields: dict[str, Any], topic_assignment: dict[str, Any]) -> list[dict[str, Any]]:
+    if not raw_text:
+        return []
+    structure_unit_id = str(unit.get("structure_unit_id") or unit.get("semantic_unit_id") or "")
+    source_block_ids = [str(value) for value in unit.get("source_block_ids") or [] if str(value).strip()]
+    source_region_ids = [str(value) for value in unit.get("source_region_ids") or [] if str(value).strip()]
+    role = str(unit.get("structural_role") or "")
+    spans: list[dict[str, Any]] = []
+
+    event_hint = _topic_assignment_is_event_hint(topic_assignment)
+    quote_span = _bounded_substring_span(raw_text=raw_text, candidate=quote)
+    action_span = quote_span if event_hint else None
+    if action_span:
+        spans.append(_span_payload(structure_unit_id=structure_unit_id, raw_text=raw_text, corrected_text=corrected_text, start=quote_span[0], end=quote_span[1], role="action_candidate", source_block_ids=source_block_ids, source_region_ids=source_region_ids))
+
+    for start, end in _sentence_like_spans(raw_text):
+        span_text = raw_text[start:end]
+        span_role = _span_role_for_sentence(role=role, span_text=span_text, full_text=raw_text, assignment=assignment, topic_assignment=topic_assignment, action_span=action_span, start=start, end=end)
+        if span_role is None:
+            continue
+        spans.append(_span_payload(structure_unit_id=structure_unit_id, raw_text=raw_text, corrected_text=corrected_text, start=start, end=end, role=span_role, source_block_ids=source_block_ids, source_region_ids=source_region_ids))
+
+    return _dedupe_spans(spans)[:12]
+
+
+def _span_role_for_sentence(*, role: str, span_text: str, full_text: str, assignment: dict[str, Any], topic_assignment: dict[str, Any], action_span: tuple[int, int] | None, start: int, end: int) -> str | None:
+    normalized_role = role or "unknown"
+    if normalized_role in {"metadata", "table_header_only", "noise"}:
+        return "structural"
+    if normalized_role in {"section_heading", "outline_item"} and len(_hebrew_tokens(span_text)) <= 18:
+        return "structural"
+    if normalized_role == "vote_or_result" or _looks_decision_like(span_text):
+        return "outcome_candidate"
+    if action_span and _ranges_overlap((start, end), action_span):
+        return "action_candidate"
+    if not _topic_assignment_is_event_hint(topic_assignment):
+        return "not_relevant" if _looks_structural_or_protocol_chrome(span_text) else "supporting_context"
+    if _looks_structural_or_protocol_chrome(span_text) and span_text != full_text:
+        return "background"
+    return "supporting_context"
+
+
+def _topic_assignment_is_event_hint(topic_assignment: dict[str, Any]) -> bool:
+    if topic_assignment.get("is_topic_bearing") is False:
+        return False
+    status = str(topic_assignment.get("topic_node_status") or "")
+    root_topic_id = str(topic_assignment.get("root_topic_id") or "")
+    if status != "active":
+        return False
+    return root_topic_id not in {"", "root_agenda_queries", "root_order_proposals"}
+
+
+def _sentence_like_spans(text: str) -> list[tuple[int, int]]:
+    raw = str(text or "")
+    if not raw:
+        return []
+    spans: list[tuple[int, int]] = []
+    start = 0
+    for match in re.finditer(r"[.!?;]\s+|\n+", raw):
+        end = match.end()
+        _append_span(spans, raw, start, end)
+        start = end
+    _append_span(spans, raw, start, len(raw))
+    expanded: list[tuple[int, int]] = []
+    for start, end in spans:
+        if end - start <= 360:
+            expanded.append((start, end))
+        else:
+            expanded.extend(_window_spans(raw, start=start, end=end, max_chars=320, overlap_chars=60))
+    return expanded
+
+
+def _window_spans(text: str, *, start: int, end: int, max_chars: int, overlap_chars: int) -> list[tuple[int, int]]:
+    out = []
+    cursor = start
+    while cursor < end:
+        target_end = min(end, cursor + max_chars)
+        if target_end < end:
+            boundary = text.rfind(" ", cursor + max_chars // 2, target_end)
+            if boundary > cursor:
+                target_end = boundary
+        _append_span(out, text, cursor, target_end)
+        if target_end >= end:
+            break
+        cursor = max(start, target_end - overlap_chars)
+        if out and cursor <= out[-1][0]:
+            cursor = out[-1][1]
+    return out
+
+
+def _append_span(spans: list[tuple[int, int]], text: str, start: int, end: int) -> None:
+    while start < end and text[start].isspace():
+        start += 1
+    while end > start and text[end - 1].isspace():
+        end -= 1
+    if end - start >= 8:
+        spans.append((start, end))
+
+
+def _bounded_substring_span(*, raw_text: str, candidate: Any) -> tuple[int, int] | None:
+    text = str(candidate or "").strip()
+    if not text or len(text) > 600:
+        return None
+    index = raw_text.find(text)
+    if index < 0:
+        return None
+    return index, index + len(text)
+
+
+def _span_payload(*, structure_unit_id: str, raw_text: str, corrected_text: str, start: int, end: int, role: str, source_block_ids: list[str], source_region_ids: list[str]) -> dict[str, Any]:
+    raw_span = raw_text[start:end]
+    corrected_span = _corrected_text(corrected_text[start:end] if len(corrected_text) == len(raw_text) else raw_span)
+    return {
+        "span_id": "span_" + _short_hash("|".join([structure_unit_id, role, str(start), str(end), raw_span[:80]])),
+        "span_role": role,
+        "raw_text": raw_span,
+        "corrected_text_he": corrected_span,
+        "char_start": start,
+        "char_end": end,
+        "source_block_ids": source_block_ids,
+        "source_region_ids": source_region_ids,
+    }
+
+
+def _dedupe_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = []
+    seen: set[tuple[str, int, int, str]] = set()
+    for span in sorted(spans, key=lambda row: (int(row.get("char_start") or 0), int(row.get("char_end") or 0), str(row.get("span_role") or ""))):
+        key = (str(span.get("span_role") or ""), int(span.get("char_start") or 0), int(span.get("char_end") or 0), str(span.get("raw_text") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(span)
+    return out
+
+
+def _ranges_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    return left[0] < right[1] and right[0] < left[1]
+
+
+def _looks_structural_or_protocol_chrome(text: str) -> bool:
+    normalized = _compact(text)
+    if not normalized:
+        return True
+    chrome_terms = ("פרוטוקול", "ישיבת", "השתתפו", "נעדרו", "נוכחים", "יו\"ר הישיבה", "חתימה", "עמוד")
+    return any(term in normalized for term in chrome_terms) and len(_hebrew_tokens(normalized)) <= 40
+
+
+def _corrected_text(value: Any) -> str:
+    text = str(value or "")
+    text = re.sub(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", text)
+    text = re.sub(r"\s*([,:;.!?])\s*", r"\1 ", text)
+    text = re.sub(r"\s+([)\]])", r"\1", text)
+    text = re.sub(r"([([])\s+", r"\1", text)
+    return _compact(text)
+
+
+def _hebrew_tokens(value: str) -> list[str]:
+    return re.findall(r"[\u0590-\u05FF]{2,}", str(value or ""))
 
 
 def _looks_decision_like(value: str) -> bool:

@@ -231,6 +231,10 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       min-height: 0;
     }
 
+    .appShell.isDetailCollapsed .dashboardGrid {
+      grid-template-columns: 58px minmax(0, 1fr) minmax(300px, 0.22fr);
+    }
+
     .endDetailDrawer,
     .mainCivicWorkspace,
     .startDiscoveryPanel {
@@ -248,6 +252,17 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       grid-column: 1;
       padding: 14px 14px 12px;
       overflow: auto;
+      min-width: 0;
+      transition: padding 160ms ease, box-shadow 160ms ease;
+    }
+
+    .appShell.isDetailCollapsed .endDetailDrawer {
+      padding: 8px;
+      overflow: hidden;
+    }
+
+    .appShell.isDetailCollapsed .endDetailDrawer > :not(.drawerTop) {
+      display: none;
     }
 
     .mainCivicWorkspace {
@@ -274,6 +289,11 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       direction: ltr;
     }
 
+    .appShell.isDetailCollapsed .drawerTop {
+      justify-content: center;
+      margin-bottom: 0;
+    }
+
     .drawerClose {
       width: 36px;
       height: 36px;
@@ -288,6 +308,14 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
     }
 
     .drawerClose:hover { background: #f4f6fa; }
+
+    .drawerCloseIconOpen { display: none; }
+
+    .appShell.isDetailCollapsed .drawerCloseIconClose { display: none; }
+
+    .appShell.isDetailCollapsed .drawerCloseIconOpen { display: block; }
+
+    .appShell.isDetailCollapsed .detailTitle { display: none; }
 
     .detailTitle {
       display: flex;
@@ -1016,6 +1044,20 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       background: #eff6ff;
     }
 
+    .storyGovMapLayerItem label {
+      min-height: 34px;
+      padding: 6px 8px;
+      align-items: center;
+    }
+
+    .storyGovMapLayerItem .residentGovMapLayerText {
+      gap: 1px;
+    }
+
+    .storyGovMapLayerItem .storyActivatedBadge {
+      display: none;
+    }
+
     .residentGovMapLayerKind {
       color: #7c4a03;
       font-size: 9px;
@@ -1113,6 +1155,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
     .govMapEmbedFrame {
       position: absolute;
       inset: 0;
+      z-index: 1;
       width: 100%;
       height: 100%;
       border: 0;
@@ -1125,8 +1168,8 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
     .govMapNativeMap {
       position: absolute;
       inset: 0;
-      z-index: 1;
-      background: #edf2ee;
+      z-index: 2;
+      background: transparent;
     }
 
     .govMapNativeMap iframe {
@@ -1138,41 +1181,6 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
     }
 
     .govMapNativeMap[hidden] { display: none; }
-
-    .govMapTileBasemap {
-      position: absolute;
-      inset: 0;
-      z-index: 1;
-      overflow: hidden;
-      background:
-        radial-gradient(circle at 72% 18%, rgba(255,255,255,0.5), transparent 28%),
-        #e8eee7;
-    }
-
-    .govMapTileBasemap img {
-      position: absolute;
-      width: 256px;
-      height: 256px;
-      filter: saturate(0.78) contrast(0.94) brightness(1.03);
-      image-rendering: auto;
-      user-select: none;
-      -webkit-user-drag: none;
-    }
-
-    .govMapBasemapAttribution {
-      position: absolute;
-      left: 12px;
-      bottom: 10px;
-      z-index: 4;
-      padding: 4px 8px;
-      border-radius: 999px;
-      background: rgba(255,255,255,0.78);
-      color: #475569;
-      font-size: 10px;
-      font-weight: 800;
-      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.10);
-      pointer-events: none;
-    }
 
     .govMapToneOverlay {
       position: absolute;
@@ -2663,6 +2671,8 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       .startDiscoveryPanel { order: 1; }
       .mainCivicWorkspace { order: 2; grid-template-rows: 520px auto; }
       .endDetailDrawer { order: 3; }
+      .appShell.isDetailCollapsed .dashboardGrid { grid-template-columns: 1fr; }
+      .appShell.isDetailCollapsed .endDetailDrawer { min-height: 54px; }
     }
 
     @media (max-width: 760px) {
@@ -2748,9 +2758,12 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
     <main class="dashboardGrid" aria-label="מרחב עבודה עירוני">
       <aside class="endDetailDrawer panelCard" aria-label="תשובה">
         <div class="drawerTop">
-          <button class="drawerClose" type="button" aria-label="סגירת תשובה">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+          <button class="drawerClose" type="button" aria-label="סגירת תשובה" aria-expanded="true" aria-controls="detail-drawer-content">
+            <svg class="icon drawerCloseIconClose" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
               <path d="M6 6l12 12M18 6 6 18" stroke-linecap="round" />
+            </svg>
+            <svg class="icon drawerCloseIconOpen" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+              <path d="M9 5l7 7-7 7" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
           </button>
           <div class="detailTitle">
@@ -2762,6 +2775,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           </div>
         </div>
 
+        <div id="detail-drawer-content" class="detailDrawerContent">
         <p class="questionLine">שאלה: אילו החלטות עירייה התקבלו לאחרונה ליד דיזנגוף 99 תל אביב</p>
 
         <section class="answerSection" aria-labelledby="decisions-title">
@@ -2832,6 +2846,8 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             <a class="topicChip" href="#topic-env" role="listitem">השפעה סביבתית</a>
           </div>
         </section>
+
+        </div>
 
       </aside>
 
@@ -3069,7 +3085,6 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
             <div id="real-gis-map" class="realGisMap" role="img" aria-label="מפת GovMap עם שכבות תושב" hidden>
               <div id="govmap-native-map" class="govMapNativeMap" aria-label="GovMap רשמי"></div>
-              <div id="govmap-tile-basemap" class="govMapTileBasemap" aria-hidden="true"></div>
               <iframe id="govmap-iframe" class="govMapEmbedFrame" title="GovMap - שכבות תושב" loading="lazy" referrerpolicy="origin" hidden></iframe>
               <div class="govMapToneOverlay" aria-hidden="true"></div>
               <div id="govmap-dashboard-overlay" class="govMapOverlay" aria-hidden="true" hidden></div>
@@ -3368,6 +3383,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       const popularButton = document.getElementById("popular-searches-button");
       const popularPopover = document.getElementById("popular-popover");
       const gisStoryReviewPanel = document.getElementById("gis-story-review-panel");
+      const detailDrawerToggle = document.querySelector(".drawerClose");
       const mapExampleSelect = document.getElementById("map-example-select");
       const dashboardRoot = document.getElementById("rag-dashboard");
       const APP_PATH_PREFIX = (() => {
@@ -3393,7 +3409,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       const GOVMAP_NATIVE_MAP_ID = "govmap-native-map";
       const GOVMAP_SELECTED_NEIGHBORHOOD_LAYER = "neighborhoods_area";
       const GOVMAP_SELECTED_NEIGHBORHOOD_FIELD = "objectid";
-      const GOVMAP_SELECTED_NEIGHBORHOOD_RADIUS_M = 1;
+      const GOVMAP_SELECTED_NEIGHBORHOOD_RADIUS_M = 12;
       const DASHBOARD_QUERY_TIMEOUT_MS = 45000;
       const evidenceDialog = document.getElementById("evidence-preview");
       let currentDashboardData = null;
@@ -3417,9 +3433,14 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       let gisMapProfileRequest = null;
       let lastQuestionGisMapSignature = "";
       let govMapSelectedAreaNativeStatus = "unknown";
+      let govMapNativeReady = false;
+      let govMapNativeCommandReady = false;
+      let govMapNativeRenderSeq = 0;
+      let detailDrawerCollapsed = false;
       window.__municipalMapIconScale = currentMapIconScale;
       window.__municipalMapLabelScale = currentMapLabelScale;
       window.__govMapApiReady = window.__govMapApiReady || null;
+      window.__municipalDashboardGovMapNativeReady = false;
       const MAP_POI_ICON_LIMIT = 160;
       const MAP_MUNICIPAL_ICON_LIMIT = 120;
       const MAP_PARK_ICON_LIMIT = 120;
@@ -3431,6 +3452,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const extended = normalizeText(extendedText);
         return Boolean(extended && extended !== base && extended.length > base.length + 40);
       };
+      const selectedGisStoryIdFromData = (data = currentDashboardData) => String(data?.state?.selected_gis_story_id || dashboardState?.selected_gis_story_id || "").trim();
       window.isAlmostEqualText = isAlmostEqualText;
       window.hasMeaningfulExtraInfo = hasMeaningfulExtraInfo;
 
@@ -3446,6 +3468,20 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         if (node && value !== undefined && value !== null) {
           node.setAttribute(attr, String(value));
         }
+      };
+
+      const syncDetailDrawerToggle = (closeLabel = "סגירת תשובה") => {
+        if (!detailDrawerToggle) return;
+        detailDrawerToggle.setAttribute("aria-expanded", String(!detailDrawerCollapsed));
+        detailDrawerToggle.setAttribute("aria-label", detailDrawerCollapsed ? "פתיחת תשובה" : closeLabel);
+        detailDrawerToggle.title = detailDrawerCollapsed ? "פתיחת תשובה" : closeLabel;
+      };
+
+      const setDetailDrawerCollapsed = (collapsed) => {
+        detailDrawerCollapsed = Boolean(collapsed);
+        dashboardRoot?.classList.toggle("isDetailCollapsed", detailDrawerCollapsed);
+        dashboardRoot?.setAttribute("data-detail-drawer-collapsed", String(detailDrawerCollapsed));
+        syncDetailDrawerToggle();
       };
 
       const applyStaticGisZoom = () => {
@@ -3991,6 +4027,9 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         const code = contextCode || mapCode;
         if (code && municipalitySlugByCode[code]) {
           return municipalitySlugByCode[code];
+        }
+        if (code && municipalityLabelBySlug[code]) {
+          return code;
         }
         return String(dashboardState?.municipality_id || currentDashboardData?.state?.municipality_id || "").trim() || undefined;
       };
@@ -5202,24 +5241,23 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       };
 
       const govMapCurrentAliases = (payload) => {
-        const groups = payload?.govmap?.layer_groups || {};
-        const aliases = new Set(payload?.govmap?.default_visible_layers || []);
-        const remove = (names = []) => names.forEach((name) => aliases.delete(name));
-        const layerChecked = (key) => {
-          const input = document.querySelector(`[data-map-layer-toggle="${key}"]`);
-          return !input || input.disabled || input.checked;
-        };
-        const objectChecked = (key) => {
-          const input = document.querySelector(`[data-map-object-toggle="${key}"]`);
-          return !input || input.disabled || input.checked;
-        };
+        const storyFiltersEnabled = payload?.govmap?.story_filters_enabled === true && Boolean(String(payload?.govmap?.selected_gis_story_id || selectedGisStoryIdFromData()).trim());
+        const aliases = new Set();
+        if (!storyFiltersEnabled) return [];
+        const residentLayerInputs = Array.from(document.querySelectorAll("[data-resident-govmap-layer-toggle]"));
+        if (!residentLayerInputs.length) {
+          for (const alias of (payload?.govmap?.question_visible_layers || [])) {
+            const text = String(alias || "").trim();
+            if (text) aliases.add(text);
+          }
+        }
         const explicitLayerInputs = Array.from(document.querySelectorAll("[data-govmap-layer-toggle]"));
         if (explicitLayerInputs.length) {
           for (const input of explicitLayerInputs) {
             if (input.checked) aliases.add(input.dataset.govmapLayerToggle);
           }
         }
-        for (const input of document.querySelectorAll("[data-resident-govmap-layer-toggle]")) {
+        for (const input of residentLayerInputs) {
           if (!input.checked) continue;
           if (input.dataset.residentGovmapLayerKind !== "map_layer") continue;
           const alias = String(input.dataset.residentGovmapLayerToggle || "").trim();
@@ -5231,6 +5269,16 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       };
 
       const govMapAllAliases = (payload = window.__municipalDashboardGisMap) => Array.from(new Set(payload?.govmap?.visible_layers || []));
+
+      const storyCompatibleGovMapAliases = (payload = window.__municipalDashboardGisMap, explicitMapContext = null) => {
+        if (!String(payload?.govmap?.selected_gis_story_id || selectedGisStoryIdFromData()).trim()) return new Set();
+        const storyMapContext = explicitMapContext || currentDashboardData?.main_civic_workspace?.map_context || dashboardState?.intent_resolution?.geo?.map_context || null;
+        const storyLayers = Array.isArray(storyMapContext?.layers) ? storyMapContext.layers : [];
+        return new Set([
+          ...(payload?.govmap?.question_visible_layers || []),
+          ...storyLayers.flatMap((layer) => Array.isArray(layer?.govmap_aliases) ? layer.govmap_aliases : []),
+        ].map((alias) => String(alias || "").trim()).filter(Boolean));
+      };
 
       const setControlDisabled = (input, disabled, reason = "") => {
         if (!input) return;
@@ -5274,6 +5322,28 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         if (resultCount) resultCount.hidden = groups.length === 0;
         list.hidden = groups.length === 0;
         list.replaceChildren();
+        const compatibleAliases = storyCompatibleGovMapAliases(payload);
+        const compatibleStoryLayers = [];
+        const compatibleLayerAliases = new Set();
+        for (const group of groups) {
+          for (const layer of (Array.isArray(group?.layers) ? group.layers : [])) {
+            const alias = String(layer?.alias || "").trim();
+            if (alias && layer?.selectable !== false && layer?.kind === "map_layer" && compatibleAliases.has(alias)) {
+              compatibleLayerAliases.add(alias);
+              compatibleStoryLayers.push({ ...layer, alias, group_name_he: group.display_name_he || group.layer_key || "GovMap" });
+            }
+          }
+        }
+        const nativeReady = payload?.govmap?.native_ready === true && govMapNativeReady === true;
+        const selectedStoryReady = payload?.govmap?.story_filters_enabled === true && Boolean(String(payload?.govmap?.selected_gis_story_id || selectedGisStoryIdFromData()).trim()) && compatibleLayerAliases.size > 0;
+        const storyFiltersEnabled = selectedStoryReady;
+        if (help && groups.length) {
+          help.textContent = storyFiltersEnabled
+            ? "השכבות הפעילות הוגבלו להתאמות GovMap אמיתיות של הסיפור הנבחר."
+            : selectedStoryReady
+              ? "מסנני השכבות יופעלו כאשר מפת GovMap הרשמית פעילה."
+              : "בחר סיפור GIS עם התאמות GovMap כדי להפעיל מסנני שכבות.";
+        }
         const emptyMessage = document.createElement("p");
         emptyMessage.className = "residentGovMapEmpty";
         emptyMessage.textContent = "לא נמצאו שכבות תואמות לחיפוש.";
@@ -5300,13 +5370,14 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             }
           }
           if (resultCount) {
-            resultCount.textContent = query ? `${visibleCount} קבוצות נמצאו` : `${visibleCount} קבוצות זמינות`;
+            resultCount.textContent = selectedStoryReady && !query ? `${compatibleLayerAliases.size} GovMap layers active for this story` : query ? `${visibleCount} קבוצות נמצאו` : `${visibleCount} קבוצות זמינות`;
           }
           emptyMessage.hidden = visibleCount > 0;
         };
         if (search) search.oninput = updateSearchVisibility;
         const syncGroupState = (item) => {
           const groupInput = item.querySelector("[data-resident-govmap-layer-group-toggle]");
+          if (!groupInput) return;
           const childInputs = Array.from(item.querySelectorAll("[data-resident-govmap-layer-toggle]")).filter((input) => !input.disabled);
           const checkedCount = childInputs.filter((input) => input.checked).length;
           const disabled = childInputs.length === 0;
@@ -5324,9 +5395,62 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           }
           return true;
         };
-        for (const group of groups) {
+        if (selectedStoryReady) {
+          for (const layer of compatibleStoryLayers) {
+            const alias = String(layer.alias || "").trim();
+            if (!alias) continue;
+            const item = document.createElement("li");
+            item.className = "residentGovMapGroupItem storyGovMapLayerItem";
+            item.dataset.groupName = layer.group_name_he || "GovMap";
+            item.dataset.searchText = [layer.group_name_he, alias, layer.label_he, layer.kind].filter(Boolean).join(" ");
+            const label = document.createElement("label");
+            label.className = "isStoryActivated";
+            if (layer.evidence_he || layer.caveat_he) {
+              label.title = [layer.evidence_he, layer.caveat_he].filter(Boolean).join(" ");
+            }
+            const input = document.createElement("input");
+            input.type = "checkbox";
+            input.checked = false;
+            input.disabled = false;
+            input.dataset.residentGovmapLayerToggle = alias;
+            input.dataset.residentGovmapLayerKind = layer.kind || "map_layer";
+            input.autocomplete = "off";
+            input.addEventListener("change", () => {
+              window.__updateGovMapIframeUrl?.();
+              window.__syncResidentGovMapLayerGroups?.();
+            });
+            const textWrap = document.createElement("span");
+            textWrap.className = "residentGovMapLayerText";
+            const name = document.createElement("span");
+            name.className = "residentGovMapLayerName";
+            name.textContent = String(layer.label_he || "").trim() || alias;
+            const meta = document.createElement("span");
+            meta.className = "residentGovMapLayerMeta";
+            meta.textContent = `${alias} · ${layer.group_name_he || "GovMap"}`;
+            textWrap.append(name, meta);
+            if (layer.status && layer.status !== "primary") {
+              const badge = document.createElement("span");
+              badge.className = `govMapCatalogBadge${layer.status === "partial" ? " isPartial" : ""}`;
+              badge.textContent = layer.status === "partial" ? "חלקי" : "מאומת";
+              textWrap.appendChild(badge);
+            }
+            const activated = document.createElement("span");
+            activated.className = "storyActivatedBadge";
+            activated.textContent = "Activated by selected story";
+            textWrap.appendChild(activated);
+            label.append(input, textWrap);
+            item.appendChild(label);
+            list.appendChild(item);
+          }
+          list.appendChild(emptyMessage);
+          updateSearchVisibility();
+          return true;
+        }
+        const groupCompatibleLayerCount = (group) => (Array.isArray(group?.layers) ? group.layers : []).filter((layer) => compatibleLayerAliases.has(String(layer?.alias || "").trim())).length;
+        const orderedGroups = selectedStoryReady ? [...groups].sort((left, right) => groupCompatibleLayerCount(right) - groupCompatibleLayerCount(left)) : groups;
+        for (const group of orderedGroups) {
           const key = String(group.layer_key || "").trim();
-          const layers = Array.isArray(group.layers) ? group.layers : [];
+          const layers = (Array.isArray(group.layers) ? group.layers : []).filter((layer) => !selectedStoryReady || compatibleLayerAliases.has(String(layer?.alias || "").trim()));
           const selectableLayers = layers.filter((layer) => layer.selectable !== false && layer.kind === "map_layer");
           if (!key || layers.length === 0 || selectableLayers.length === 0) continue;
           const item = document.createElement("li");
@@ -5391,9 +5515,9 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             const childItem = document.createElement("li");
             const childLabel = document.createElement("label");
             const childInput = document.createElement("input");
-            const selectable = layer.selectable !== false && layer.kind === "map_layer";
+            const selectable = layer.selectable !== false && layer.kind === "map_layer" && storyFiltersEnabled && compatibleAliases.has(alias);
             childInput.type = "checkbox";
-            childInput.checked = layer.default_visible === true;
+            childInput.checked = false;
             childInput.disabled = !selectable;
             childInput.dataset.residentGovmapLayerToggle = alias;
             childInput.dataset.residentGovmapLayerKind = layer.kind || "map_layer";
@@ -5421,7 +5545,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             }
             if (!selectable) {
               childLabel.classList.add("isDisabled");
-              childLabel.title = layer.reason_he || "לא ניתן להציג כשכבת מפה.";
+              childLabel.title = !nativeReady && selectedStoryReady ? "GovMap הרשמי עדיין לא פעיל. אין תצוגת גיבוי." : storyFiltersEnabled ? (layer.reason_he || "שכבה זו אינה תואמת לסיפור הנבחר.") : "בחר סיפור GIS תואם כדי להפעיל שכבות GovMap.";
             } else if (layer.evidence_he || layer.caveat_he) {
               childLabel.title = [layer.evidence_he, layer.caveat_he].filter(Boolean).join(" ");
             }
@@ -5447,6 +5571,10 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       };
 
       const applyQuestionGovMapLayerSelection = (payload = window.__municipalDashboardGisMap, explicitMapContext = null) => {
+        if (!selectedGisStoryIdFromData()) {
+          window.__syncResidentGovMapLayerGroups?.();
+          return false;
+        }
         const storyMapContext = explicitMapContext || currentDashboardData?.main_civic_workspace?.map_context || dashboardState?.intent_resolution?.geo?.map_context || null;
         const storyLayers = Array.isArray(storyMapContext?.layers) ? storyMapContext.layers : [];
         const storyAliases = new Set(storyLayers.flatMap((layer) => Array.isArray(layer?.govmap_aliases) ? layer.govmap_aliases : []).map((alias) => String(alias || "").trim()).filter(Boolean));
@@ -5478,34 +5606,40 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           if (!layerKeys.has(key)) continue;
           const groupItem = input.closest(".residentGovMapGroupItem");
           const expand = groupItem?.querySelector("[data-resident-govmap-expand]");
-          input.checked = true;
-          groupItem?.querySelectorAll("[data-resident-govmap-layer-toggle]").forEach((child) => {
-            if (!child.disabled && aliases.size === 0) {
-              child.checked = true;
-            }
-          });
-          if (expand && expand.getAttribute("aria-expanded") !== "true") {
+          const hasActivatedChild = Array.from(groupItem?.querySelectorAll("[data-resident-govmap-layer-toggle]") || []).some((child) => aliases.has(String(child.dataset.residentGovmapLayerToggle || "").trim()));
+          if (hasActivatedChild && expand && expand.getAttribute("aria-expanded") !== "true") {
             expand.click();
           }
         }
         window.__syncResidentGovMapLayerGroups?.();
+        window.setTimeout(() => syncGovMapNativeLayers(payload), 0);
+        window.setTimeout(() => syncGovMapNativeLayers(payload), 700);
         return true;
       };
 
       const syncGovMapNativeLayers = (payload = window.__municipalDashboardGisMap) => {
         const nativeMap = document.getElementById(GOVMAP_NATIVE_MAP_ID);
-        if (!window.govmap?.setVisibleLayers || !payload?.govmap?.enabled || !nativeMap || nativeMap.hidden) {
+        if (!payload?.govmap?.enabled || !nativeMap || nativeMap.hidden) {
           return false;
         }
         const on = govMapCurrentAliases(payload);
         const onSet = new Set(on);
         const off = govMapAllAliases(payload).filter((alias) => !onSet.has(alias));
-        window.govmap.setVisibleLayers(on, off, GOVMAP_NATIVE_MAP_ID);
-        syncGovMapSelectedArea(payload);
-        syncGovMapAddressMarker(payload);
-        syncGovMapNeighborhoodBoundary(payload);
-        syncGovMapSelectedFocus(payload);
-        return true;
+        const iframeUpdated = updateMountedGovMapIframeUrl(payload);
+        if (!govMapNativeCommandReady || !window.govmap?.setVisibleLayers) {
+          return iframeUpdated;
+        }
+        try {
+          window.govmap.setVisibleLayers(on, off, GOVMAP_NATIVE_MAP_ID);
+          syncGovMapSelectedArea(payload);
+          syncGovMapAddressMarker(payload);
+          syncGovMapNeighborhoodBoundary(payload);
+          syncGovMapSelectedFocus(payload);
+          return true;
+        } catch (error) {
+          console.warn("govmap_layer_visibility_sync_failed", error);
+          return iframeUpdated;
+        }
       };
 
       const selectedAreaChecked = () => document.querySelector('[data-map-layer-toggle="parcel"]')?.checked !== false;
@@ -5582,7 +5716,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             outlineColor: [91, 33, 182, 1],
             outlineWidth: 2,
             fillColor: [255, 255, 255, 1],
-            size: 28,
+            size: 3,
           },
           data: { tooltips: [tooltip || "כתובת"] },
         }, GOVMAP_NATIVE_MAP_ID));
@@ -5720,7 +5854,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         displayGovMapPolygonWkt({
           wkt: selectedWkt,
           name: geometryName,
-          tooltip: selectedArea?.label || "אזור נבחר",
+          tooltip: "אזור נבחר",
           outlineColor: [124, 77, 206, 1],
           outlineWidth: 3,
           fillColor: [124, 77, 206, 0.22],
@@ -5818,59 +5952,6 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         return !input || input.checked;
       };
 
-      const govMapTileTemplate = (payload) => payload?.visual_context?.tile_url || payload?.basemap?.tile_url || "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-
-      const clampGovMapZoom = (value) => Math.max(10, Math.min(18, Number(value) || 14));
-
-      const lonLatToWorldPixel = (lon, lat, zoom) => {
-        const sinLat = Math.sin(Math.max(-85.05112878, Math.min(85.05112878, Number(lat))) * Math.PI / 180);
-        const scale = 256 * Math.pow(2, zoom);
-        return {
-          x: (Number(lon) + 180) / 360 * scale,
-          y: (0.5 - Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI)) * scale,
-        };
-      };
-
-      const renderGovMapTileBasemap = (payload = window.__municipalDashboardGisMap) => {
-        const container = document.getElementById("govmap-tile-basemap");
-        if (!container || !payload?.center) {
-          return false;
-        }
-        const zoom = clampGovMapZoom(container.dataset.govmapZoom || payload.zoom || 14);
-        container.dataset.govmapZoom = String(zoom);
-        const rect = container.getBoundingClientRect();
-        const width = Math.max(900, Math.round(rect.width || 900));
-        const height = Math.max(620, Math.round(rect.height || 620));
-        const center = lonLatToWorldPixel(payload.center.lon, payload.center.lat, zoom);
-        const left = center.x - width / 2;
-        const top = center.y - height / 2;
-        const maxTile = Math.pow(2, zoom);
-        const minX = Math.floor(left / 256) - 1;
-        const maxX = Math.floor((left + width) / 256) + 1;
-        const minY = Math.max(0, Math.floor(top / 256) - 1);
-        const maxY = Math.min(maxTile - 1, Math.floor((top + height) / 256) + 1);
-        const template = govMapTileTemplate(payload);
-        container.replaceChildren();
-        for (let x = minX; x <= maxX; x += 1) {
-          const wrappedX = ((x % maxTile) + maxTile) % maxTile;
-          for (let y = minY; y <= maxY; y += 1) {
-            const tile = document.createElement("img");
-            tile.alt = "";
-            tile.decoding = "async";
-            tile.loading = "lazy";
-            tile.src = template.replace("{z}", String(zoom)).replace("{x}", String(wrappedX)).replace("{y}", String(y));
-            tile.style.left = `${Math.round(x * 256 - left)}px`;
-            tile.style.top = `${Math.round(y * 256 - top)}px`;
-            container.appendChild(tile);
-          }
-        }
-        const attribution = document.createElement("span");
-        attribution.className = "govMapBasemapAttribution";
-        attribution.textContent = payload?.visual_context?.basemap_label_he || "שכבות: GovMap · רקע גיאוגרפי: OSM";
-        container.appendChild(attribution);
-        return true;
-      };
-
       const applyGovMapOverlayFilters = () => {
         const overlay = document.getElementById("govmap-dashboard-overlay");
         if (!overlay) {
@@ -5887,23 +5968,45 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         return true;
       };
 
+      const updateMountedGovMapIframeUrl = (payload = window.__municipalDashboardGisMap) => {
+        const nativeMap = document.getElementById(GOVMAP_NATIVE_MAP_ID);
+        const frame = nativeMap?.querySelector("iframe");
+        if (!frame?.src || !payload?.govmap?.enabled) {
+          return false;
+        }
+        const aliases = govMapCurrentAliases(payload);
+        const url = new URL(frame.src);
+        url.searchParams.set("lay", aliases.join(","));
+        url.searchParams.set("laym", aliases.join(","));
+        url.searchParams.set("z", String(payload.govmap.level || url.searchParams.get("z") || "7"));
+        const nextUrl = url.toString();
+        if (frame.src !== nextUrl) {
+          frame.src = nextUrl;
+        }
+        return true;
+      };
+
+      const govMapOfficialIframeUrl = (payload) => {
+        if (!payload?.govmap?.iframe_url) return "";
+        const aliases = govMapCurrentAliases(payload);
+        const url = new URL(payload.govmap.iframe_url);
+        url.searchParams.set("lay", aliases.join(","));
+        url.searchParams.set("laym", aliases.join(","));
+        url.searchParams.set("z", String(payload.govmap.level || url.searchParams.get("z") || "7"));
+        return url.toString();
+      };
+
       const updateGovMapIframeUrl = (payload = window.__municipalDashboardGisMap) => {
+        const officialFrame = document.getElementById("govmap-iframe");
+        const officialUrl = govMapOfficialIframeUrl(payload);
+        if (officialFrame && officialUrl && officialFrame.src !== officialUrl) {
+          officialFrame.src = officialUrl;
+        }
         if (syncGovMapNativeLayers(payload)) {
           applyGovMapOverlayFilters();
           return true;
         }
-        const frame = document.getElementById("govmap-iframe");
-        if (!frame || !payload?.govmap?.iframe_url) {
-          return false;
-        }
-        const url = new URL(payload.govmap.iframe_url);
-        const aliases = govMapCurrentAliases(payload);
-        url.searchParams.set("lay", aliases.join(","));
-        url.searchParams.set("z", String(frame.dataset.govmapZoom || url.searchParams.get("z") || "7"));
-        frame.src = url.toString();
-        applyGovMapOverlayFilters();
-        renderGovMapTileBasemap(payload);
-        return true;
+        return false;
       };
 
       window.__updateGovMapIframeUrl = updateGovMapIframeUrl;
@@ -5915,36 +6018,70 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           return false;
         }
         const govmap = await ensureGovMapApi();
+        const renderSeq = ++govMapNativeRenderSeq;
         nativeMap.hidden = false;
         nativeMap.replaceChildren();
-        const tileBasemap = document.getElementById("govmap-tile-basemap");
-        if (tileBasemap) tileBasemap.hidden = true;
         const center = payload.govmap.center || {};
         if (!Number.isFinite(Number(center.x)) || !Number.isFinite(Number(center.y))) {
           return false;
         }
         const iframeConfig = await loadGovMapIframeConfig();
-        await waitForGovMapNativeCommand(govmap.createMap(GOVMAP_NATIVE_MAP_ID, {
-          token: iframeConfig?.token || payload.govmap.api_key,
-          center: { x: Number(center.x), y: Number(center.y) },
-          level: Number(payload.govmap.level || 7),
-          background: Number(payload.govmap.background ?? 0),
-          visibleLayers: govMapCurrentAliases(payload),
-          layers: govMapCurrentAliases(payload),
-          language: "he",
-          isEmbeddedToggle: true,
-          bgButton: false,
-          zoomButtons: false,
-          identifyOnClick: true,
-        }), 12000);
-        syncGovMapNativeLayers(payload);
-        window.setTimeout(() => {
-          syncGovMapSelectedArea(payload);
-          syncGovMapAddressMarker(payload);
-          syncGovMapNeighborhoodBoundary(payload);
-          syncGovMapSelectedFocus(payload);
-        }, 900);
-        return true;
+        return new Promise((resolve) => {
+          let settled = false;
+          let mountedCheckTimer = null;
+          const finish = (ready, error = null) => {
+            if (settled || renderSeq !== govMapNativeRenderSeq) return;
+            settled = true;
+            if (mountedCheckTimer) window.clearInterval(mountedCheckTimer);
+            if (error) console.warn("govmap_native_render_failed", error);
+            if (ready) {
+              govMapNativeCommandReady = true;
+              syncGovMapNativeLayers(payload);
+              window.setTimeout(() => syncGovMapNativeLayers(payload), 700);
+              window.setTimeout(() => syncGovMapNativeLayers(payload), 1600);
+              window.setTimeout(() => syncGovMapNativeLayers(payload), 4500);
+              window.setTimeout(() => syncGovMapNativeLayers(payload), 9000);
+            }
+            resolve(Boolean(ready));
+          };
+          const settings = {
+            token: iframeConfig?.token || payload.govmap.api_key,
+            center: { x: Number(center.x), y: Number(center.y) },
+            level: Number(payload.govmap.level || 7),
+            background: Number(payload.govmap.background ?? 0),
+            visibleLayers: govMapCurrentAliases(payload),
+            layers: govMapCurrentAliases(payload),
+            language: "he",
+            isEmbeddedToggle: true,
+            bgButton: false,
+            zoomButtons: false,
+            identifyOnClick: true,
+            onLoad: () => finish(true),
+            onError: (event) => finish(false, event || new Error("govmap_native_on_error")),
+          };
+          try {
+            Promise.resolve(govmap.createMap(GOVMAP_NATIVE_MAP_ID, settings)).then(() => finish(true)).catch((error) => finish(false, error));
+          } catch (error) {
+            finish(false, error);
+          }
+          const finishIfNativeMapMounted = () => {
+            if (!nativeMap.hidden && nativeMap.childElementCount > 0) {
+              const mountedFrame = nativeMap.querySelector("iframe");
+              mountedFrame?.addEventListener("load", () => {
+                govMapNativeCommandReady = true;
+                syncGovMapNativeLayers(payload);
+                window.setTimeout(() => syncGovMapNativeLayers(payload), 1200);
+                window.setTimeout(() => syncGovMapNativeLayers(payload), 3500);
+              }, { once: true });
+              if (settled || renderSeq !== govMapNativeRenderSeq) return;
+              settled = true;
+              if (mountedCheckTimer) window.clearInterval(mountedCheckTimer);
+              resolve(true);
+            }
+          };
+          mountedCheckTimer = window.setInterval(finishIfNativeMapMounted, 500);
+          window.setTimeout(() => finish(false, new Error("govmap_native_onload_timeout")), 30000);
+        });
       };
 
       const govMapOverlayPosition = (payload, coordinates) => {
@@ -6053,7 +6190,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         window.__applyGovMapOverlayScale?.();
       };
 
-      const renderGovMapEmbed = (payload) => {
+      const renderGovMapEmbed = (payload, options = {}) => {
         const mapNode = document.getElementById("real-gis-map");
         const mapFrame = document.querySelector(".mapFrame");
         const staticMap = document.getElementById("real-gis-static-map");
@@ -6061,20 +6198,29 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         if (!mapNode || !mapFrame || !iframe || !payload?.govmap?.iframe_url) {
           return false;
         }
+        const nativeGovMapEnabled = options.nativeGovMapEnabled !== false;
+        govMapNativeReady = false;
+        govMapNativeCommandReady = false;
+        window.__municipalDashboardGovMapNativeReady = false;
+        payload.govmap.native_ready = false;
         if (staticMap) staticMap.hidden = true;
-        iframe.hidden = true;
         mapNode.hidden = false;
         mapFrame.classList.add("hasRealGis", "govmapActive");
         mapFrame.classList.remove("maplibreActive");
         iframe.dataset.govmapZoom = String(payload.govmap?.level || 8);
-        const nativeMap = document.getElementById(GOVMAP_NATIVE_MAP_ID);
-        const tileBasemap = document.getElementById("govmap-tile-basemap");
-        const overlay = document.getElementById("govmap-dashboard-overlay");
-        if (tileBasemap) {
-          tileBasemap.hidden = true;
-          tileBasemap.dataset.govmapZoom = String(clampGovMapZoom(payload.zoom || 14));
+        const officialUrl = govMapOfficialIframeUrl(payload);
+        if (officialUrl && iframe.src !== officialUrl) {
+          iframe.src = officialUrl;
         }
-        if (nativeMap) nativeMap.hidden = false;
+        iframe.hidden = false;
+        iframe.onload = () => {
+          if (!window.__municipalDashboardGovMapNativeReady) {
+            setText("#map-renderer-status", "GovMap רשמי פעיל");
+          }
+        };
+        const nativeMap = document.getElementById(GOVMAP_NATIVE_MAP_ID);
+        const overlay = document.getElementById("govmap-dashboard-overlay");
+        if (nativeMap) nativeMap.hidden = !nativeGovMapEnabled;
         if (overlay) {
           overlay.hidden = true;
           overlay.replaceChildren();
@@ -6082,52 +6228,54 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         window.__municipalDashboardGisMap = payload;
         renderGovMapLayerControls(payload);
         updateGovMapFilterAvailability(true);
-        const renderGovMapFallback = (error = null) => {
+        const renderGovMapUnavailable = (error = null) => {
           if (error) console.warn("govmap_native_render_failed", error);
+          govMapNativeReady = false;
+          window.__municipalDashboardGovMapNativeReady = false;
+          payload.govmap.native_ready = false;
           if (nativeMap) nativeMap.hidden = true;
-          if (tileBasemap) tileBasemap.hidden = false;
-          document.querySelectorAll(".mapIconSizeControl").forEach((control) => {
-            control.hidden = false;
-          });
-          setControlDisabled(document.getElementById("map-icon-size"), false);
-          setControlDisabled(document.getElementById("map-label-size"), false);
-          renderGovMapTileBasemap(payload);
-          updateGovMapIframeUrl(payload);
-          setGovMapSelectedAreaNativeStatus("unavailable", "האזור הנבחר דורש אובייקט GovMap אמיתי; לא מוצג פוליגון דמה בגיבוי.");
           if (overlay) {
             overlay.hidden = true;
             overlay.replaceChildren();
           }
-          setText("#map-renderer-status", "GovMap נכשל · OSM גיבוי");
-          if (dashboardRoot) dashboardRoot.dataset.gisMapStatus = "govmap-fallback-osm-rendered";
+          renderGovMapLayerControls(payload);
+          setText("#map-renderer-status", "GovMap לא נטען");
+          if (dashboardRoot) dashboardRoot.dataset.gisMapStatus = "govmap-native-unavailable";
         };
-        createNativeGovMap(payload).then((ready) => {
-          if (ready) {
-            setText("#map-renderer-status", "GovMap רשמי פעיל");
-            if (overlay) {
-              overlay.hidden = true;
-              overlay.replaceChildren();
+        if (nativeGovMapEnabled) {
+          createNativeGovMap(payload).then((ready) => {
+            if (ready) {
+              govMapNativeReady = true;
+              window.__municipalDashboardGovMapNativeReady = true;
+              payload.govmap.native_ready = true;
+              setText("#map-renderer-status", "GovMap רשמי פעיל");
+              iframe.hidden = true;
+              if (overlay) {
+                overlay.hidden = true;
+                overlay.replaceChildren();
+              }
+              renderGovMapLayerControls(payload);
+              syncGovMapNativeLayers(payload);
+              window.setTimeout(() => syncGovMapNativeLayers(payload), 700);
+              if (dashboardRoot) dashboardRoot.dataset.gisMapStatus = "govmap-native-rendered";
+            } else {
+              renderGovMapUnavailable(new Error("govmap_native_unavailable"));
             }
-            syncGovMapSelectedArea(payload);
-            syncGovMapAddressMarker(payload);
-            syncGovMapNeighborhoodBoundary(payload);
-            syncGovMapSelectedFocus(payload);
-            if (dashboardRoot) dashboardRoot.dataset.gisMapStatus = "govmap-native-rendered";
-          } else {
-            renderGovMapFallback(new Error("govmap_native_unavailable"));
-          }
-        }).catch((error) => {
-          renderGovMapFallback(error);
-        });
+          }).catch((error) => {
+            renderGovMapUnavailable(error);
+          });
+        } else {
+          renderGovMapUnavailable(new Error("govmap_native_disabled"));
+        }
         renderMapLayerCounts(payload);
         renderMapLayerSummary(payload);
         applyRealGisLegendLabels();
-        setText("#map-renderer-status", "טוען GovMap רשמי");
+        setText("#map-renderer-status", nativeGovMapEnabled ? "GovMap רשמי פעיל" : "GovMap כבוי");
         setAttr(".mapPanel", "aria-label", "מפת GovMap לתושב");
         setText("#map-title", payload.title_he || "מפת GovMap לתושב");
         setText("#map-desc", mapExampleCopy(payload.selected_example));
         setText(".mapProvenanceBadgeTitle", "GovMap רשמי");
-        setText(".mapProvenanceBadgeText", "המפה, הרקע והשכבות נטענים דרך GovMap הרשמי. OSM מופעל רק כגיבוי אם GovMap לא נטען.");
+        setText(".mapProvenanceBadgeText", "המפה, הרקע והשכבות נטענים דרך GovMap הרשמי בלבד. אם GovMap לא נטען, לא מוצגת מפה אחרת.");
         setAttr(".mapProvenanceBadge", "data-spatial-representation", "govmap_embed");
         if (dashboardRoot) {
           dashboardRoot.dataset.realGisAvailable = "true";
@@ -6147,16 +6295,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           if (Number(direction) <= 0 && window.govmap.zoomOut) window.govmap.zoomOut(GOVMAP_NATIVE_MAP_ID);
           return true;
         }
-        const iframe = document.getElementById("govmap-iframe");
-        if (!iframe) return false;
-        const nextZoom = Math.max(1, Math.min(12, Number(iframe.dataset.govmapZoom || 7) + Number(direction || 0)));
-        iframe.dataset.govmapZoom = String(nextZoom);
-        const tileBasemap = document.getElementById("govmap-tile-basemap");
-        if (tileBasemap) {
-          tileBasemap.dataset.govmapZoom = String(clampGovMapZoom(Number(tileBasemap.dataset.govmapZoom || 14) + Number(direction || 0)));
-        }
-        updateGovMapIframeUrl();
-        return true;
+        return false;
       };
 
       window.__recenterGovMapEmbed = () => {
@@ -6173,10 +6312,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             return true;
           }
         }
-        const tileBasemap = document.getElementById("govmap-tile-basemap");
-        if (tileBasemap) tileBasemap.dataset.govmapZoom = String(clampGovMapZoom(window.__municipalDashboardGisMap?.zoom || 14));
-        updateGovMapIframeUrl();
-        return true;
+        return false;
       };
 
       const addMapMarker = (map, coordinates, className, html, title = "", feature = null) => {
@@ -6252,7 +6388,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
       const renderRealGisMap = (payload, options = {}) => {
         if (payload?.govmap?.iframe_url) {
-          return renderGovMapEmbed(payload);
+          return renderGovMapEmbed(payload, options);
         }
         updateGovMapFilterAvailability(false);
         const renderedStatic = renderStaticGisMap(payload, options);
@@ -6442,15 +6578,25 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           if (focusLayer && mapProvider === "govmap") {
             params.set("focus_layer", String(focusLayer).trim());
           }
-          if (Number.isFinite(Number(options.center_x)) && Number.isFinite(Number(options.center_y)) && mapProvider === "govmap") {
+          const hasExplicitCenter = options.center_x !== null && options.center_x !== undefined && options.center_y !== null && options.center_y !== undefined && Number.isFinite(Number(options.center_x)) && Number.isFinite(Number(options.center_y));
+          if (hasExplicitCenter && mapProvider === "govmap") {
             params.set("center_x", String(options.center_x));
             params.set("center_y", String(options.center_y));
+          }
+          if (options.timelineEventId && mapProvider === "govmap") {
+            params.set("timeline_event_id", String(options.timelineEventId));
           }
           const response = await fetch(`${DASHBOARD_GIS_MAP_ENDPOINT}?${params.toString()}`, { headers: { Accept: "application/json" } });
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
           }
           const payload = await response.json();
+          if (options.selectedGisStoryId && selectedGisStoryIdFromData() !== options.selectedGisStoryId) {
+            return;
+          }
+          if (!options.selectedGisStoryId && selectedGisStoryIdFromData()) {
+            return;
+          }
           if (mapExampleSelect && payload.selected_example) {
             mapExampleSelect.value = payload.selected_example;
             currentMapExample = payload.selected_example;
@@ -6462,6 +6608,16 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           if (Array.isArray(options.residentLayerKeys)) {
             payload.govmap = payload.govmap || {};
             payload.govmap.question_resident_layer_keys = options.residentLayerKeys;
+          }
+          if (payload.govmap) {
+            const storyFiltersEnabled = options.storyFiltersEnabled === true && Boolean(selectedGisStoryIdFromData());
+            payload.govmap.story_filters_enabled = storyFiltersEnabled;
+            payload.govmap.selected_gis_story_id = storyFiltersEnabled ? selectedGisStoryIdFromData() : "";
+            payload.govmap.default_visible_layers = [];
+            if (!storyFiltersEnabled) {
+              payload.govmap.question_visible_layers = [];
+              payload.govmap.question_resident_layer_keys = [];
+            }
           }
           const rendered = renderRealGisMap(payload, options);
           renderGovMapLayerControls(payload);
@@ -6503,22 +6659,162 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       const questionGisMapRequest = (data) => {
         const geo = data?.state?.intent_resolution?.geo || null;
         const focus = geo?.focus || null;
+        const selectedStoryId = String(data?.state?.selected_gis_story_id || "").trim();
         if (!geo?.needs_gis || !focus) return null;
-        const municipality = String(data?.state?.municipality_id || selectedMunicipalityForQuery() || "").trim();
+        const municipality = String(data?.main_civic_workspace?.map_context?.municipality_id || geo?.map_context?.municipality_id || selectedMunicipalityForQuery() || data?.state?.municipality_id || "").trim();
         const muniLabel = municipalitySearchLabel(municipality);
         const addressBase = String(focus.address_query || focus.place_query || "").trim();
-        const address = [addressBase, muniLabel].filter(Boolean).join(" ").trim();
+        const address = addressBase && muniLabel && !addressBase.includes(muniLabel) ? `${addressBase} ${muniLabel}`.trim() : addressBase;
         const govmapLayerAliases = Array.isArray(geo.govmap_layer_aliases) ? geo.govmap_layer_aliases : [];
         const residentLayerKeys = Array.isArray(geo.resident_layer_keys) ? geo.resident_layer_keys : [];
-        if (!address && !govmapLayerAliases.length && !residentLayerKeys.length) return null;
+        const centerX = Number(focus.center_x);
+        const centerY = Number(focus.center_y);
+        const hasExecutedCenter = Number.isFinite(centerX) && Number.isFinite(centerY);
+        if (!govmapLayerAliases.length || (!address && !hasExecutedCenter)) return null;
+        const selectedTimelineEventId = String(data?.state?.selected_timeline_event_id || "").trim();
         const gisSignature = JSON.stringify({
           address,
           municipality,
+          selectedTimelineEventId,
+          centerX: hasExecutedCenter ? centerX : null,
+          centerY: hasExecutedCenter ? centerY : null,
           focusLayer: String(geo.focus_layer || "").trim(),
           govmapLayerAliases: stableGisArray(govmapLayerAliases),
           residentLayerKeys: stableGisArray(residentLayerKeys),
         });
-        return { address, municipality, govmapLayerAliases, residentLayerKeys, focusLayer: geo.focus_layer, provider: "govmap", gisSignature };
+        return { address, municipality, center_x: hasExecutedCenter ? centerX : null, center_y: hasExecutedCenter ? centerY : null, govmapLayerAliases, residentLayerKeys, focusLayer: geo.focus_layer, provider: "govmap", gisSignature, storyFiltersEnabled: Boolean(selectedStoryId), selectedGisStoryId: selectedStoryId, timelineEventId: selectedTimelineEventId, nativeGovMapEnabled: true };
+      };
+
+      const quickGovMapUrl = (request) => {
+        if (!request || !Number.isFinite(Number(request.center_x)) || !Number.isFinite(Number(request.center_y))) return "";
+        const aliases = stableGisArray(request.govmapLayerAliases || []);
+        const url = new URL("https://www.govmap.gov.il/");
+        url.searchParams.set("c", `${Number(request.center_x).toFixed(2)},${Number(request.center_y).toFixed(2)}`);
+        url.searchParams.set("z", "10");
+        url.searchParams.set("b", "0");
+        url.searchParams.set("et", "1");
+        url.searchParams.set("lang", "he");
+        url.searchParams.set("lay", aliases.join(","));
+        url.searchParams.set("laym", aliases.join(","));
+        return url.toString();
+      };
+
+      const quickGovMapLayerGroups = (data, request) => {
+        const aliases = stableGisArray(request?.govmapLayerAliases || []);
+        const aliasSet = new Set(aliases);
+        const storyLayers = Array.isArray(data?.main_civic_workspace?.map_context?.layers) ? data.main_civic_workspace.map_context.layers : [];
+        const groups = [];
+        const used = new Set();
+        for (const storyLayer of storyLayers) {
+          const activeAliases = (Array.isArray(storyLayer?.govmap_aliases) ? storyLayer.govmap_aliases : []).map((alias) => String(alias || "").trim()).filter((alias) => aliasSet.has(alias) && !used.has(alias));
+          if (!activeAliases.length) continue;
+          for (const alias of activeAliases) used.add(alias);
+          groups.push({
+            layer_key: storyLayer.layer_key || activeAliases.join("_"),
+            display_name_he: storyLayer.display_name_he || storyLayer.layer_key || "GovMap",
+            govmap_category_he: "GovMap",
+            default_visible: true,
+            layers: activeAliases.map((alias) => ({ alias, label_he: alias, kind: "map_layer", selectable: true, status: "primary" })),
+          });
+        }
+        const remaining = aliases.filter((alias) => !used.has(alias));
+        if (remaining.length) {
+          groups.push({
+            layer_key: "selected_story_govmap_layers",
+            display_name_he: "שכבות הסיפור",
+            govmap_category_he: "GovMap",
+            default_visible: true,
+            layers: remaining.map((alias) => ({ alias, label_he: alias, kind: "map_layer", selectable: true, status: "primary" })),
+          });
+        }
+        return groups;
+      };
+
+      const quickGovMapPayload = (data, request) => {
+        const url = quickGovMapUrl(request);
+        const aliases = stableGisArray(request?.govmapLayerAliases || []);
+        if (!url || !aliases.length || !request?.selectedGisStoryId) return null;
+        return {
+          status: "found",
+          real_gis_available: true,
+          provider: "govmap",
+          selected_example: "govmap_resident_point",
+          title_he: "מפת GovMap לתושב: שכבות רשמיות סביב נקודה",
+          center: {},
+          query: {
+            provider: "govmap",
+            profile: "question",
+            address: request.address,
+            municipality: request.municipality,
+            center_x: Number(request.center_x),
+            center_y: Number(request.center_y),
+            timeline_event_id: request.timelineEventId,
+          },
+          govmap: {
+            enabled: true,
+            iframe_url: url,
+            center: { x: Number(request.center_x), y: Number(request.center_y) },
+            level: 10,
+            visible_layers: aliases,
+            question_visible_layers: aliases,
+            question_resident_layer_keys: request.residentLayerKeys || [],
+            resident_layer_groups: quickGovMapLayerGroups(data, request),
+            default_visible_layers: [],
+            story_filters_enabled: true,
+            selected_gis_story_id: request.selectedGisStoryId,
+            native_ready: false,
+          },
+          nearby_pois: { count: 0, displayed_count: 0, total_count: 0, items: [] },
+          layers: {},
+          coverage: {},
+          legend: [],
+        };
+      };
+
+      const renderInstantStoryGovMap = (data, request) => {
+        const payload = quickGovMapPayload(data, request);
+        if (!payload) return false;
+        const mapNode = document.getElementById("real-gis-map");
+        const mapFrame = document.querySelector(".mapFrame");
+        const staticMap = document.getElementById("real-gis-static-map");
+        const iframe = document.getElementById("govmap-iframe");
+        const nativeMap = document.getElementById(GOVMAP_NATIVE_MAP_ID);
+        const overlay = document.getElementById("govmap-dashboard-overlay");
+        if (!mapNode || !mapFrame || !iframe) return false;
+        window.__municipalDashboardGisMap = payload;
+        if (staticMap) staticMap.hidden = true;
+        if (nativeMap) {
+          nativeMap.hidden = true;
+          nativeMap.replaceChildren();
+        }
+        if (overlay) {
+          overlay.hidden = true;
+          overlay.replaceChildren();
+        }
+        mapNode.hidden = false;
+        mapFrame.classList.add("hasRealGis", "govmapActive");
+        mapFrame.classList.remove("maplibreActive");
+        iframe.src = govMapOfficialIframeUrl(payload);
+        iframe.hidden = false;
+        renderGovMapLayerControls(payload);
+        updateGovMapFilterAvailability(true);
+        renderMapLayerCounts(payload);
+        renderMapLayerSummary(payload);
+        applyRealGisLegendLabels();
+        setText("#map-renderer-status", "GovMap רשמי פעיל");
+        setAttr(".mapPanel", "aria-label", "מפת GovMap לתושב");
+        setText("#map-title", payload.title_he);
+        setText("#map-desc", mapExampleCopy(payload.selected_example));
+        setText(".mapProvenanceBadgeTitle", "GovMap רשמי");
+        setText(".mapProvenanceBadgeText", "המפה, הרקע והשכבות נטענים דרך GovMap הרשמי בלבד. אם GovMap לא נטען, לא מוצגת מפה אחרת.");
+        setAttr(".mapProvenanceBadge", "data-spatial-representation", "govmap_embed");
+        if (dashboardRoot) {
+          dashboardRoot.dataset.realGisAvailable = "true";
+          dashboardRoot.dataset.gisMapStatus = "govmap-official-iframe-rendered";
+          dashboardRoot.dataset.gisMapProfile = "question";
+          dashboardRoot.dataset.mapExample = payload.selected_example;
+        }
+        return true;
       };
 
       const loadQuestionGisMap = (data, request = questionGisMapRequest(data)) => {
@@ -6532,6 +6828,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         if (statusNode) {
           statusNode.textContent = "טוען מפת GovMap לפי מוקד השאלה.";
         }
+        renderInstantStoryGovMap(data, request);
         loadDashboardGisMap("question", request);
         return true;
       };
@@ -6570,6 +6867,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         setAttr(".adminButton", "aria-label", header.admin_aria_label);
 
         setAttr(".drawerClose", "aria-label", drawerCopy.close_label);
+        syncDetailDrawerToggle(drawerCopy.close_label || "סגירת תשובה");
         setText(".detailTitle h1", drawer.title || drawerCopy.title);
         setText(".questionLine", `${drawerCopy.question_prefix || "שאלה:"} ${drawer.question || data.state?.current_question || ""}`);
         setText("#brief-title", drawerCopy.brief_title);
@@ -7554,6 +7852,10 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         event.stopPropagation();
         window.__municipalDashboardWheelZoomBlocked = true;
       }, { passive: false, capture: true });
+
+      detailDrawerToggle?.addEventListener("click", () => {
+        setDetailDrawerCollapsed(!detailDrawerCollapsed);
+      });
 
       categorySection?.addEventListener("click", (event) => {
         const button = event.target.closest(".discoveryRow");

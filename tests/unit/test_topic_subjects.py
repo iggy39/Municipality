@@ -3340,6 +3340,115 @@ def test_topic_subject_v3_row_quality_normalizes_leaked_event_role_labels() -> N
     assert non_event_row.event_role == "not_part_of_event"
 
 
+def test_topic_subject_v3_context_normalization_recovers_composite_row_roles() -> None:
+    anchor = _artifact_dataclass(real_text="אבקש לדון בתקציב השכונה.", topic_label_he="תקציב", artifact_id="artifact-anchor", source_ordinal=1)
+    detail = _artifact_dataclass(real_text="פירוט רקע על התקציב.", topic_label_he="תקציב", artifact_id="artifact-detail", source_ordinal=2)
+    context = build_topic_subject_v3_event_contexts(artifacts=[anchor, detail], max_context_rows=2)[0]
+
+    normalized = topic_subjects_module.topic_subject_v3_normalize_context_event_payload(
+        {
+            "target_artifact_id": anchor.artifact_id,
+            "is_event": True,
+            "target_row_role": "action_anchor|event_title|dependent_detail",
+            "span_roles": [],
+            "row_roles": [
+                {"artifact_id": anchor.artifact_id, "row_role": "action_anchor|event_title|dependent_detail", "role_reason_he": "copied schema"},
+                {
+                    "artifact_id": detail.artifact_id,
+                    "row_role": "action_anchor|event_title|dependent_detail|decision_result|vote_metadata|document_fragment|structural_metadata|duplicate_reference|insufficient_context",
+                    "role_reason_he": "copied schema",
+                },
+            ],
+        },
+        context=context,
+    )
+
+    assert normalized["target_row_role"] == "insufficient_context"
+    assert normalized["row_roles"][0]["row_role"] == "insufficient_context"
+    assert normalized["row_roles"][1]["row_role"] == "dependent_detail"
+    assert any("row_role_normalized" in warning for warning in normalized["schema_warnings"])
+
+
+def test_topic_subject_v3_event_payload_normalizes_composite_row_roles() -> None:
+    anchor = _artifact_dataclass(real_text="אבקש לדון בתקציב השכונה.", topic_label_he="תקציב", artifact_id="artifact-anchor", source_ordinal=1)
+    detail = _artifact_dataclass(real_text="פירוט רקע על התקציב.", topic_label_he="תקציב", artifact_id="artifact-detail", source_ordinal=2)
+    context = build_topic_subject_v3_event_contexts(artifacts=[anchor, detail], max_context_rows=2)[0]
+
+    event_payload = normalize_topic_subject_v3_event_payload(
+        payload={
+            "is_event": True,
+            "action_type_he": "בקשה",
+            "action_type_confidence": 0.9,
+            "matter_he": "תקציב השכונה",
+            "action_quote_he": "אבקש לדון בתקציב השכונה",
+            "outcome_is_decision": False,
+            "target_row_role": "action_anchor|event_title|dependent_detail",
+            "row_roles": [
+                {"artifact_id": anchor.artifact_id, "row_role": "action_anchor|event_title|dependent_detail", "event_role": "primary", "reason_he": "copied schema"},
+                {"artifact_id": detail.artifact_id, "row_role": "action_anchor|event_title|dependent_detail", "event_role": "supporting", "reason_he": "copied schema"},
+            ],
+            "confidence": 0.9,
+        },
+        context=context,
+    )
+
+    assert event_payload["target_row_role"] == "action_anchor"
+    assert event_payload["row_roles"][0]["row_role"] == "action_anchor"
+    assert event_payload["row_roles"][1]["row_role"] == "dependent_detail"
+    assert any("row_role_normalized" in warning for warning in event_payload["schema_warnings"])
+
+
+def test_topic_subject_v3_evidence_status_accepts_partial_alias() -> None:
+    normalized = topic_subjects_module.topic_subject_v3_normalize_evidence_assessment(
+        {
+            "entailment_status": "partial",
+            "field_assessments": {},
+            "repair_required": False,
+            "failure_reasons": [],
+        }
+    )
+
+    assert normalized["entailment_status"] == "partially_entailed"
+    assert "invalid_entailment_status:partial" not in normalized["schema_warnings"]
+
+
+def test_topic_subject_v3_row_quality_normalizes_recoverable_judge_enum_drift() -> None:
+    artifact = _artifact_dataclass(real_text="אבקש לדון בתקציב השכונה.", topic_label_he="תקציב")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    row = topic_subject_v3_row_quality_from_payloads(
+        context=context,
+        event_id="event-test",
+        event_payload={
+            "is_event": True,
+            "action_type_he": "בקשה",
+            "matter_he": "תקציב השכונה",
+            "outcome_is_decision": False,
+            "target_row_role": "action_anchor",
+        },
+        judge_payload={
+            "judge_prediction": {"is_event": True, "action_type_he": "בקשה", "matter_he": "תקציב השכונה", "outcome_type": "none"},
+            "prediction_comparison": {"action_type_he": "same", "matter_he": "same", "outcome_type": "different"},
+            "judge_status": "accepted",
+            "failure_reasons": [],
+            "row_quality": {
+                "row_role": "action_anchor|event_title|dependent_detail",
+                "event_role": "primary",
+                "quality_status": "good",
+                "ground_truth_he": "unit_test",
+                "reason_for_failure": "",
+            },
+        },
+        validation_status="accepted",
+        failure_reasons=[],
+    )
+
+    assert row.quality_status == "accepted"
+    assert row.row_role == "action_anchor"
+    assert row.prediction_comparison == "partially_different"
+    assert row.metadata["raw_quality_status_by_judge"] == "good"
+
+
 def test_topic_subject_v3_event_output_includes_full_source_rows() -> None:
     anchor = _artifact_dataclass(
         artifact_id="artifact-v3-anchor",
@@ -4096,6 +4205,38 @@ def _benchmark_topic_subject_v3_models_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _experiment_topic_subject_v3_profiles_module():
+    module_path = Path("/Users/igor/Desktop/projects/Municipality/scripts/experiment_topic_subject_v3_profiles_real_rows.py")
+    spec = importlib.util.spec_from_file_location("experiment_topic_subject_v3_profiles_test", module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_topic_subject_v3_profile_enum_checker_accepts_recoverable_values() -> None:
+    module = _experiment_topic_subject_v3_profiles_module()
+
+    invalid = module._invalid_enum_fields(
+        {
+            "row_roles": [{"row_role": "action_anchor|event_title|dependent_detail"}],
+            "entailment_status": "partial",
+            "prediction_comparison": {"action_type_he": "same", "matter_he": "same"},
+            "row_quality": {"quality_status": "good"},
+        },
+        {
+            "row_roles": [{"row_role": "action_anchor|event_title|dependent_detail|decision_result|vote_metadata|document_fragment|structural_metadata|duplicate_reference|insufficient_context"}],
+            "entailment_status": "entailed|partially_entailed|not_entailed|uncertain",
+            "prediction_comparison": "same|partially_different|different|model_invalid|judge_uncertain",
+            "row_quality": {"quality_status": "accepted|needs_review|failed|non_event"},
+        },
+    )
+
+    assert invalid == []
 
 
 def _artifact_dataclass(*, real_text: str, topic_label_he: str, artifact_id: str = "artifact-test", source_ordinal: int = 1, metadata: dict | None = None) -> TopicDecisionArtifact:

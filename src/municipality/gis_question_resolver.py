@@ -9,6 +9,8 @@ from municipality.gis_normalization import extract_cadastral_id, normalize_hebre
 
 PLAN_NUMBER_RE = re.compile(r"(?<!\d)(\d{3,}-\d{3,})(?!\d)")
 NEAR_PLACE_RE = re.compile(r"(?:ליד|סביב|באזור|באיזור|בשכונת|בשכונה|ברובע|בקרבת)\s+([^?.,;]+)")
+STREET_PLACE_RE = re.compile(r"(?:רחוב|רח'|רח׳|שדרות|שדרה|דרך)\s+([^?.,;:()]{2,40})")
+RELIGIOUS_SERVICE_TERMS = ("מקווה", "מקוא", "מקוואות", "מקואות", "שירותי דת", "מועצה דתית")
 
 
 @dataclass(frozen=True)
@@ -19,6 +21,7 @@ class GisFocus:
     gush: str | None = None
     helka: str | None = None
     place_query: str | None = None
+    address_query: str | None = None
     unresolved_reason: str | None = None
     matched_text: str | None = None
 
@@ -33,6 +36,8 @@ class GeoIntentResolution:
     needs_gis: bool
     matched_terms: list[str] = field(default_factory=list)
     focus: GisFocus | None = None
+    resident_layer_keys: tuple[str, ...] = ()
+    govmap_layer_aliases: tuple[str, ...] = ()
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -43,6 +48,10 @@ class GeoIntentResolution:
         }
         if self.focus is not None:
             payload["focus"] = self.focus.to_payload()
+        if self.resident_layer_keys:
+            payload["resident_layer_keys"] = list(self.resident_layer_keys)
+        if self.govmap_layer_aliases:
+            payload["govmap_layer_aliases"] = list(self.govmap_layer_aliases)
         return payload
 
 
@@ -55,6 +64,17 @@ def resolve_geo_intent(question: str) -> GeoIntentResolution:
 
     if focus is not None:
         matched_terms.append(focus.focus_type)
+
+    if _has_any(normalized, RELIGIOUS_SERVICE_TERMS):
+        return GeoIntentResolution(
+            intent="public_service_facility_context",
+            confidence_label="בינונית" if focus is None else focus.confidence_label,
+            needs_gis=True,
+            matched_terms=_dedupe([*matched_terms, "שירותי דת", "מקווה"]),
+            focus=focus or GisFocus(focus_type="place", confidence_label="בינונית", place_query="מקווה טהרה", matched_text="מקווה"),
+            resident_layer_keys=("religious_services", "neighborhoods_and_statistics"),
+            govmap_layer_aliases=("mikve", "neighborhoods_area"),
+        )
 
     if focus and focus.focus_type == "parcel":
         return GeoIntentResolution(
@@ -152,6 +172,16 @@ def resolve_gis_focus(question: str) -> GisFocus | None:
             matched_text=f"{gush}/{helka}",
         )
 
+    street = _extract_street_query(question)
+    if street:
+        return GisFocus(
+            focus_type="place",
+            confidence_label="בינונית",
+            place_query=street,
+            address_query=street,
+            matched_text=street,
+        )
+
     place = _extract_place_query(question)
     if place:
         normalized_place = normalize_hebrew_text(place)
@@ -173,6 +203,17 @@ def _extract_place_query(question: str) -> str | None:
         return None
     value = " ".join(match.group(1).split()).strip(" ?.,;:")
     return value or None
+
+
+def _extract_street_query(question: str) -> str | None:
+    match = STREET_PLACE_RE.search(str(question or ""))
+    if not match:
+        return None
+    prefix = match.group(0).split()[0]
+    value = match.group(1)
+    value = re.split(r"\s+(?:ברובע|בשכונה|באשדוד|בתל|בירושלים|בחיפה|בבאר|ליד|סביב)\b", value, maxsplit=1)[0]
+    value = " ".join(value.split()).strip(" ?.,;:")
+    return f"{prefix} {value}" if value else None
 
 
 def _has_any(value: str, terms: tuple[str, ...]) -> bool:

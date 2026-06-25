@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from municipality.chunking import normalize_for_search
+from municipality.topic_label_quality import strip_topic_carrier_prefixes
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +63,13 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         required_any=(("מסרונים", "מסר וידאו", "מסרי וידאו"), ("תושבים", "תושבי העיר")),
     ),
     TopicPolicy(
+        policy_id="municipal_committee_protocol_decision_approval",
+        root_topic_id="root_administration",
+        description_he="אישור החלטות בפרוטוקולים של ועדות עירוניות כלליות הוא נושא מנהל עירוני; ועדה נושאית מפורשת עדיין מסווגת לפי התחום הנושאי שלה.",
+        priority=105,
+        required_any=(("אישור החלטות", "אישור החלטת"), ("פרוטוקולים של ועדות העירייה", "פרוטוקולים של ועדות המועצה", "ועדות העירייה", "ועדות המועצה")),
+    ),
+    TopicPolicy(
         policy_id="city_engineer_hearing_administration",
         root_topic_id="root_administration",
         description_he="שימוע למהנדס העיר מסווג למנהל עירוני ומינויים.",
@@ -76,6 +84,56 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         required_any=(("לוחות פרסום אלקטרוניים",),),
     ),
     TopicPolicy(
+        policy_id="solar_renewable_energy_environment",
+        root_topic_id="root_infrastructure_environment",
+        description_he="פאנלים סולאריים, אנרגיה מתחדשת ואנרגיה ירוקה מסווגים לתשתיות וסביבה גם כשההתקנה היא על גגות מבנים.",
+        priority=109,
+        required_any=(("פאנלים סולאריים", "פאנלים סולריים", "פאנל סולארי", "פאנל סולרי", "סולארי", "סולרי", "אנרגיה מתחדשת", "אנרגיות מתחדשות", "אנרגיה ירוקה"),),
+    ),
+    TopicPolicy(
+        policy_id="planning_committee_domain_representation",
+        root_topic_id="root_planning_building",
+        description_he="ייצוג עירוני בדיוני ועדה מחוזית לתכנון ובנייה מסווג לפי תחום הדיון התכנוני; מינוי חבר ועדה כללי נשאר מנהל עירוני.",
+        priority=114,
+        required_any=(("נציג", "כנציג", "לשמש כנציג"), ("דיוני הוועדה המחוזית", "וועדה מחוזית לתכנון", "ועדה מחוזית לתכנון", "תכנון ובנייה", "תכנון ולבניה")),
+        negative_terms=("מינוי חבר", "מינוי חברה", "מינויים ושינויים"),
+    ),
+    TopicPolicy(
+        policy_id="asset_registrar_authorization_assets",
+        root_topic_id="root_commerce_assets",
+        description_he="הסמכת רשם/רשמת נכסים מסווגת לפי תחום הנכסים ולא כמינוי מנהלי כללי.",
+        priority=114,
+        required_any=(("הסמכת", "להסמיך"), ("רשמת הנכסים", "רשם הנכסים", "נכסי העירייה", "נכסי העיריה")),
+    ),
+    TopicPolicy(
+        policy_id="electric_mobility_enforcement_security",
+        root_topic_id="root_security_enforcement",
+        description_he="אכיפה או הסדרה של כלים חשמליים ממונעים היא נושא ביטחון ואכיפה כאשר מוקד הסעיף הוא רגולציה/אכיפה ולא תכנון תחבורתי.",
+        priority=114,
+        required_any=(("אכיפה", "הסדרה", "הסדרת"), ("כלים חשמליים ממונעים", "כלים חשמליים", "קורקינטים", "אופניים חשמליים")),
+    ),
+    TopicPolicy(
+        policy_id="sewage_water_utility_infrastructure",
+        root_topic_id="root_infrastructure_environment",
+        description_he="תחנות שאיבת ביוב, מאגרי חירום לביוב, ניהול מים ותאגידי מים וביוב מסווגים לתשתיות וסביבה.",
+        priority=114,
+        required_any=(("ביוב", "מים וביוב", "תאגיד המים", "ניהול המים", "תחנת שאיבת", "מאגר חירום"),),
+    ),
+    TopicPolicy(
+        policy_id="air_pollution_odors_environment",
+        root_topic_id="root_infrastructure_environment",
+        description_he="זיהום אוויר, ריחות קשים ומפגעי ריח עירוניים מסווגים לתשתיות וסביבה.",
+        priority=114,
+        required_any=(("זיהום אויר", "זיהום אוויר", "ריחות קשים", "מפגעי ריח", "ריחות"),),
+    ),
+    TopicPolicy(
+        policy_id="park_fountain_infrastructure",
+        root_topic_id="root_infrastructure_environment",
+        description_he="השבתה או תפעול של מזרקות ומתקני פארק ציבוריים מסווגים לתשתיות וסביבה.",
+        priority=113,
+        required_any=(("מזרקה", "מזרקות", "המזרקה המוזיקלית"),),
+    ),
+    TopicPolicy(
         policy_id="right_of_use_agreement_action",
         root_topic_id="root_agreements",
         description_he="כאשר הנושא מנוסח כהסכם/הסדרת רשות שימוש, מותר להישאר בשורש הסכמים והתקשרויות במקום לכפות הקצאה.",
@@ -88,6 +146,13 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         description_he="הסכמי רשות, הסכמי פיתוח או הסכם להקמה והפעלה מסווגים לפי פעולת ההסכם גם כאשר מוזכר תחום שירות כמו דת.",
         priority=101,
         required_any=(("הסכמי רשות", "הסכמי פיתוח", "רשות ופיתוח", "הסכם להקמה", "הסכמי רשות ופיתוח"),),
+    ),
+    TopicPolicy(
+        policy_id="education_use_agreement_action",
+        root_topic_id="root_agreements",
+        description_he="הסכם רשות/שימוש עם עמותה להפעלת מוסדות חינוך מסווג לפי פעולת ההסכם, גם אם תחום השירות הוא חינוך.",
+        priority=114,
+        required_any=(("הסכם רשות", "הסדרת הקצאה", "הסדרת שימוש", "רשות שימוש"), ("עמותה", "עמותת", "עמותות"), ("גן", "גני", "גנ\"י", "גני ילדים", "בית ספר", "מוסדות חינוך")),
     ),
     TopicPolicy(
         policy_id="allocations_committee_or_land_allocation",
@@ -110,6 +175,20 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         description_he="תשלומי הורים, צהרונים וגני ילדים מסווגים לחינוך.",
         priority=97,
         required_any=(("תשלומי הורים", "צהרונים", "גני ילדים"),),
+    ),
+    TopicPolicy(
+        policy_id="education_quality_or_committee_access",
+        root_topic_id="root_education",
+        description_he="השקעה בחינוך, ועדות אפיון וזכאות, מעבר בית ספר ופרוטוקולי חינוך מסווגים לחינוך.",
+        priority=114,
+        required_any=(("השקעה בחינוך", "השקעה נמוכה בחינוך", "השקעה הנמוכה בחינוך", "ועדות אפיון וזכאות", "אפיון וזכאות", "מעבר בית הספר", "מעבר בית ספר", "פרוטוקול חינוך"),),
+    ),
+    TopicPolicy(
+        policy_id="kindergarten_land_use_education",
+        root_topic_id="root_education",
+        description_he="כאשר ייעוד מקרקעין מתואר במפורש להפעלת כיתת גן/גן ילדים, תחום השירות הדומיננטי הוא חינוך.",
+        priority=113,
+        required_any=(("ייעוד המקרקעין", "ייעוד מקרקעין", "מקרקעין"), ("כיתת גן", "גן ילדים", "גני ילדים")),
     ),
     TopicPolicy(
         policy_id="science_program_education",
@@ -161,7 +240,28 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         root_topic_id="root_budget_finance",
         description_he="סעיפי תקציב, עתודות, תשלומים בלתי רגילים ותשלומי רשות מסווגים לתקציב וכספים.",
         priority=95,
-        required_any=(("סעיף תקציבי", "תב\"ר", "תבר", "עתודה", "תשלומים בלתי רגילים", "תשלומי רשות", "תקציב"),),
+        required_any=(("סעיף תקציבי", "תב\"ר", "תבר", "עתודה", "תשלומים בלתי רגילים", "תשלומי רשות", "תקציב", "תקצוב", "עדכון תקציב"),),
+    ),
+    TopicPolicy(
+        policy_id="municipal_budget_update_action",
+        root_topic_id="root_budget_finance",
+        description_he="תקצוב, עדכון תקציב או אישור מועצה לעדכון תקציבי מסווגים לתקציב וכספים, גם כאשר תחום השירות הוא תרבות או ספורט.",
+        priority=113,
+        required_any=(("תקצוב", "עדכון תקציב", "אישור תקציבי", "עדכון תקציבי"),),
+    ),
+    TopicPolicy(
+        policy_id="budget_objection_or_cut_action",
+        root_topic_id="root_budget_finance",
+        description_he="הסתייגות, קיצוץ או העברה מתקציב הם פעולת תקציב וכספים גם כאשר שם התוכנית שייך לתכנון, רווחה או תחום שירות אחר.",
+        priority=115,
+        required_any=(("הסתייגות", "קיצוץ", "מקצצים", "העברה תקציבית", "העברת תקציב"), ("תקציב", "מתקציב", "בתקציב", "תכנית מתוקצבת", "תוכנית מתוקצבת")),
+    ),
+    TopicPolicy(
+        policy_id="municipal_debt_writeoff_finance",
+        root_topic_id="root_budget_finance",
+        description_he="מחיקת חובות או פרוטוקול למחיקת חובות מסווגים לתקציב וכספים.",
+        priority=112,
+        required_any=(("מחיקת חובות", "למחיקת חובות"),),
     ),
     TopicPolicy(
         policy_id="road_safety_traffic_calming",
@@ -169,6 +269,13 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         description_he="תאונות דרכים, פסי האטה, באמפרים, מהירות ובטיחות בדרכים מסווגים לתחבורה ובטיחות.",
         priority=96,
         required_any=(("תאונות דרכים", "אפס תאונות", "תאונות", "בטיחות בדרכים"), ("באמפר", "באמפרים", "פס האטה", "פסי האטה", "מהירות", "תחבורתית", "כביש")),
+    ),
+    TopicPolicy(
+        policy_id="street_paving_bylaw_transport",
+        root_topic_id="root_transport_safety",
+        description_he="תיקון חוק עזר בנושא סלילת רחובות מסווג לתחבורה ובטיחות משום שהחוק מסדיר תשתית רחובות.",
+        priority=112,
+        required_any=(("חוק עזר", "תיקון סעיף", "חוק העזר"), ("סלילת רחובות", "סלילת רחוב", "רחובות")),
     ),
     TopicPolicy(
         policy_id="environmental_bylaw_or_waste_collection",
@@ -222,6 +329,20 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         negative_terms=("היתר בנייה", "היתר בניה", "תיקון מבנה", "מבנה מסוכן", "מבנים מסוכנים"),
     ),
     TopicPolicy(
+        policy_id="paramedical_treatment_benefits_welfare",
+        root_topic_id="root_welfare_social",
+        description_he="זכאות או קריטריונים לטיפולים פרא-רפואיים או לשירותי ביטוח לאומי מסווגים לרווחה ושירותים חברתיים כל עוד אין שורש בריאות ייעודי.",
+        priority=112,
+        required_any=(("טיפולים פרא רפואיים", "טיפולים פרה רפואיים", "ביטוח לאומי"),),
+    ),
+    TopicPolicy(
+        policy_id="elderly_loneliness_monitoring_welfare",
+        root_topic_id="root_welfare_social",
+        description_he="טיפול בבדידות קשישים, לחצני מצוקה, חיישני תנועה וביקורי רווחה לקשישים מסווגים לרווחה ושירותים חברתיים.",
+        priority=114,
+        required_any=(("קשישים", "קשישים עריריים", "בדידות קשישים"), ("לחצני מצוקה", "חיישני תנועה", "ניטור", "ביקורים תקופתיים", "בדידות")),
+    ),
+    TopicPolicy(
         policy_id="street_cats_welfare_subject",
         root_topic_id="root_welfare_social",
         description_he="חתולי רחוב וגורי חתולים מסווגים לרווחה ושירותים חברתיים, ולא לתחבורה בגלל המילה רחוב.",
@@ -263,6 +384,14 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         priority=112,
         required_any=(("מל\"ח", "פקע\"ר", "פיקוד העורף", "יקל\"ר", "אתרי הרס", "תרגיל חירום", "ועדת חירום", "מוכנות לחירום", "מערך חירום", "פעילות חבלנית עוינת"),),
         negative_terms=("מלגה", "מלגות"),
+    ),
+    TopicPolicy(
+        policy_id="municipal_protection_emergency_security",
+        root_topic_id="root_security_enforcement",
+        description_he="מיגון עירוני, מקלטים ודיוני חירום על הגנה אזרחית מסווגים לביטחון ואכיפה/מוכנות לחירום.",
+        priority=112,
+        required_any=(("מיגון", "מקלט", "מקלטים", "מרחב מוגן", "מרחבים מוגנים"),),
+        negative_terms=("ציוד מגן אישי",),
     ),
     TopicPolicy(
         policy_id="flooding_drainage_infrastructure",
@@ -342,11 +471,41 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         required_any=(("עובדים מושאלים", "עובדים זמניים", "כוח אדם", "כח אדם", "עבודה נוספת לעובדי", "העסקת עובד", "העסקת עובדים", "משרת אמון", "משרות אמון", "חוזה אישי", "נהג ראש העיר", "שכרו", "תשלום שכרו", "תחילת עבודתו", "מועד תחילת עבודתו"),),
     ),
     TopicPolicy(
+        policy_id="senior_municipal_officer_appointment",
+        root_topic_id="root_administration",
+        description_he="מינוי או אצילת סמכויות לבעל תפקיד סטטוטורי בכיר בעירייה מסווגים למנהל עירוני ומינויים; שכר הוא היבט תומך בלבד.",
+        priority=111,
+        required_any=(("מינוי", "אצילת סמכויות", "העברת סמכויות"), ("מהנדס העיר", "גזבר העירייה", "מנכ\"ל העירייה", "מנכל העירייה")),
+    ),
+    TopicPolicy(
+        policy_id="municipal_role_appointment_administration",
+        root_topic_id="root_administration",
+        description_he="מינוי או איוש תפקיד עירוני מסווג למנהל עירוני ומינויים גם אם מוזכר מכרז כחלק מהליך האיוש.",
+        priority=114,
+        required_any=(("מינוי", "איוש", "פרסום מכרז"), ("לתפקיד", "תפקיד", "דובר", "בעל תפקיד")),
+    ),
+    TopicPolicy(
+        policy_id="committee_membership_change_administration",
+        root_topic_id="root_administration",
+        description_he="מינויים ושינויים בהרכב ועדה הם ממשל ומינויים גם כאשר שם הוועדה כולל מכרזים; רק פעולת התקשרות/מכרז נשארת בהסכמים.",
+        priority=115,
+        required_any=(("מינויים ושינויים", "שינויים בהרכב", "שינוי בהרכב", "חילופי גברי", "הרכב"), ("ועדה", "וועדה", "ועדת", "וועדת", "דירקטוריון")),
+        negative_terms=("מכרז פומבי", "ביטול מכרז", "פטור ממכרז", "התקשרות", "הסכם"),
+    ),
+    TopicPolicy(
         policy_id="committee_appointment_or_membership_administration",
         root_topic_id="root_administration",
         description_he="מינוי, הארכת מינוי, כהונה או חברות בוועדה/דירקטוריון מסווגים למנהל עירוני ומינויים.",
         priority=110,
-        required_any=(("הארכת מינוי", "הארכת המינויים", "להאריך את מינוי", "להאריך את מינויה", "להאריך את מינויו", "מינויו", "מינויה", "כהונה"), ("ועדה", "וועדה", "ועדת", "דירקטוריון")),
+        required_any=(("מינוי", "מינויים", "מינוי חבר", "הארכת מינוי", "הארכת המינויים", "להאריך את מינוי", "להאריך את מינויה", "להאריך את מינויו", "מינויו", "מינויה", "כהונה", "חברות"), ("ועדה", "וועדה", "ועדת", "דירקטוריון", "תאגידים", "איגודים")),
+        negative_terms=("ועדת מכרזים", "וועדת מכרזים", "בטיחות בדרכים"),
+    ),
+    TopicPolicy(
+        policy_id="director_board_appointment_administration",
+        root_topic_id="root_administration",
+        description_he="מינוי כדירקטור או לתפקיד בדירקטוריון מסווג למנהל עירוני ומינויים.",
+        priority=111,
+        required_any=(("מינוי",), ("דירקטור", "דירקטוריון", "יו\"ר דירקטוריון")),
     ),
     TopicPolicy(
         policy_id="council_governance_attendance",
@@ -354,6 +513,13 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         description_he="נוכחות, איחורים והיעדרויות של חברי מועצה בישיבות מליאה/ועדות הם נושא מנהל עירוני.",
         priority=93,
         required_any=(("חברי מועצה", "חברת מועצה", "מועצת העיר"), ("איחורים", "היעדרויות", "נוכחות", "ישיבות מליאה", "ועדות")),
+    ),
+    TopicPolicy(
+        policy_id="municipal_corporation_audit_governance",
+        root_topic_id="root_administration",
+        description_he="תיקון התנהלות, ביקורת או דו״ח מבקר על תאגידים עירוניים מסווגים למנהל עירוני ומינויים כממשל תאגידי עירוני.",
+        priority=112,
+        required_any=(("תאגידים עירוניים", "תאגיד עירוני", "חברות עירוניות", "חברה עירונית"), ("מבקר המדינה", "דו\"ח מבקר", "דוח מבקר", "ביקורת", "התנהלות", "תיקון ההתנהלות")),
     ),
     TopicPolicy(
         policy_id="local_economy_industry_employment",
@@ -370,11 +536,92 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         required_any=(("ספורט", "כדורגל", "כדוריד", "כדורסל", "ליגה", "אליפות", "גביע", "קבוצת ספורט", "ספורטאי"),),
     ),
     TopicPolicy(
+        policy_id="youth_sports_club_alternative_culture",
+        root_topic_id="root_culture_sport",
+        description_he="חלופה או פעילות לבני נוער בעקבות סגירת קבוצת/מועדון ספורט מסווגת לתרבות וספורט.",
+        priority=114,
+        required_any=(("בני נוער", "נוער", "צעירים"), ("קבוצת", "מועדון", "קבוצת ספורט", "קבוצת כדורגל", "עירוני"), ("חלופה", "סגירת", "סגירה", "במקרה של סגירת")),
+    ),
+    TopicPolicy(
+        policy_id="local_art_culture_subject",
+        root_topic_id="root_culture_sport",
+        description_he="מתן במה לאמנות מקומית ולאמנים מקומיים מסווג לתרבות וספורט.",
+        priority=113,
+        required_any=(("אמנות מקומית", "אומנות מקומית", "אמנים מקומיים", "אומנים מקומיים"),),
+    ),
+    TopicPolicy(
+        policy_id="land_lease_or_rights_allocation",
+        root_topic_id="root_allocations",
+        description_he="עסקאות חכירה, רמ\"י, ויתור על זכויות חכירה או זכויות במגרש/גוש/חלקה מסווגים להקצאות ושימושים כאשר אינם מנוסחים כהסכם התקשרות עצמאי.",
+        priority=111,
+        required_any=(("עסקאות חכירה", "זכות חכירה", "זכויות חכירה", "רמ\"י", "רמי", "רשות מקרקעי ישראל", "מגרש", "גוש", "חלקה"),),
+        negative_terms=("הסכם", "הסכמי", "החלקה", "החלקה על הקרח"),
+    ),
+    TopicPolicy(
+        policy_id="lease_right_cancellation_allocation",
+        root_topic_id="root_allocations",
+        description_he="ביטול או ויתור על זכות חכירה הוא שינוי בזכות מקרקעין ולכן מסווג להקצאות ושימושים, גם כשהמסמך המשפטי נקרא הסכם.",
+        priority=114,
+        required_any=(("ביטול זכות חכירה", "לביטול זכות חכירה", "ויתור על זכות חכירה", "ויתור על חלק מזכות חכירה"),),
+    ),
+    TopicPolicy(
+        policy_id="urban_renewal_planning",
+        root_topic_id="root_planning_building",
+        description_he="התחדשות עירונית, פינוי-בינוי או קידום מתחם בותמ\"ל הם נושאי תכנון ובנייה.",
+        priority=112,
+        required_any=(("התחדשות עירונית", "פינוי בינוי", "פינוי-בינוי", "ותמ\"ל", "ותמל", "מתחם התחדשות"),),
+        negative_terms=("היטל השבחה",),
+    ),
+    TopicPolicy(
+        policy_id="statutory_plan_rights_planning",
+        root_topic_id="root_planning_building",
+        description_he="תכנית/תוכנית סטטוטורית הכוללת איחוד וחלוקה או תוספת זכויות בנייה מסווגת לתכנון ובנייה.",
+        priority=114,
+        required_any=(("תכנית", "תוכנית", "תכנית מס", "תוכנית מס"), ("איחוד וחלוקה", "זכויות בנייה", "זכויות בניה", "תוספת זכויות")),
+    ),
+    TopicPolicy(
+        policy_id="air_rights_planning",
+        root_topic_id="root_planning_building",
+        description_he="זכויות אוויר/זכויות בנייה הן זכויות תכנוניות ולכן מסווגות לתכנון ובנייה גם כאשר הן מופיעות בשאילתה.",
+        priority=114,
+        required_any=(("זכויות אוויר", "זכויות אויר", "זכויות בנייה", "זכויות בניה"),),
+    ),
+    TopicPolicy(
+        policy_id="housing_sale_marketing_planning",
+        root_topic_id="root_planning_building",
+        description_he="פרסום, שיווק או מכירה של דירות לקבוצת אוכלוסייה מסווגים לתכנון ובנייה/דיור כאשר אין פעולה כספית או התקשרותית מפורשת.",
+        priority=113,
+        required_any=(("דירות", "דיור", "מכירת דירות", "שיווק דירות"), ("פרסום", "מכירה", "מכירת", "שיווק", "מגזר")),
+        negative_terms=("הסכם", "התקשרות", "תקציב", "ארנונה"),
+    ),
+    TopicPolicy(
+        policy_id="activity_complex_or_caravan_parking_plan_planning",
+        root_topic_id="root_planning_building",
+        description_he="תוכנית/הקמה של מתחם פעילות או פתרון חניית קרוואנים מסווגים לתכנון ובנייה כאשר מוקד הסעיף הוא מימוש תכנית או שימוש בשטח.",
+        priority=113,
+        required_any=(("תוכנית", "תכנית", "הקמה", "מימוש התוכנית", "מתחם פעילות", "חניית קרוואנים"), ("מתחם", "שטח", "חניית קרוואנים", "קרוואנים")),
+    ),
+    TopicPolicy(
+        policy_id="waterfront_public_site_operation_planning",
+        root_topic_id="root_planning_building",
+        description_he="תפעול, אחריות או החזרת פעילות של אתר ציבורי חופי/מרינה/אגם מסווגים לתכנון ובנייה בהיעדר שורש ייעודי לניהול אתרים ציבוריים.",
+        priority=112,
+        required_any=(("חוף", "חופי", "חופים", "מרינה", "אגם"), ("פעילות", "טיפול", "אחריות", "העברת האחריות", "תפעול", "כשל מתמשך")),
+        negative_terms=("מיזם", "יוזמה"),
+    ),
+    TopicPolicy(
         policy_id="public_sculpture_culture",
         root_topic_id="root_culture_sport",
         description_he="הקמת פסלים ציבוריים מסווגת לתרבות וספורט.",
         priority=92,
         required_any=(("פסל", "פסל ציבורי", "הקמת פסל"),),
+    ),
+    TopicPolicy(
+        policy_id="municipal_culture_prizes",
+        root_topic_id="root_culture_sport",
+        description_he="פרסים עירוניים, תקנוני פרסים ופרסי תיאטרון מסווגים לתרבות וספורט.",
+        priority=105,
+        required_any=(("פרסים עירוניים", "תקנוני הפרסים", "תקנון פרס", "פרס התיאטרון"),),
     ),
     TopicPolicy(
         policy_id="child_status_committee_or_welfare_committee",
@@ -397,6 +644,36 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         priority=90,
         required_any=(("ועדת תמיכות", "ועדת משנה לתמיכות", "תמיכות"),),
         negative_terms=("ועדת הקצאות", "הקצאות קרקע"),
+    ),
+    TopicPolicy(
+        policy_id="support_advance_or_donation_committee",
+        root_topic_id="root_supports",
+        description_he="מקדמות לעמותות, ועדת תרומות ופרוטוקולי תרומות מסווגים לתמיכות ולא לתקציב כללי.",
+        priority=113,
+        required_any=(("מקדמה", "מקדמות", "ועדת תרומות", "תרומה", "תרומות"), ("עמותה", "עמותות", "מוסד", "מוסדות", "ועדת תרומות")),
+    ),
+    TopicPolicy(
+        policy_id="absorption_committee_welfare",
+        root_topic_id="root_welfare_social",
+        description_he="ועדת קליטה וקליטת תושבים/עולים מסווגות לרווחה ושירותים חברתיים כאשר אינן מנוסחות כתמיכה כספית מפורשת.",
+        priority=113,
+        required_any=(("ועדת קליטה", "קליטת עולים", "קליטת תושבים", "קליטה"),),
+        negative_terms=("תמיכה", "תמיכות", "מקדמה", "מקדמות", "תקציב"),
+    ),
+    TopicPolicy(
+        policy_id="drug_abuse_committee_security",
+        root_topic_id="root_security_enforcement",
+        description_he="ועדה למאבק בנגע הסמים או מניעת שימוש בסמים מסווגות לביטחון ואכיפה/מניעה ציבורית ולא למנהל כללי.",
+        priority=114,
+        required_any=(("נגע הסמים", "סמים מסוכנים", "מאבק בסמים", "מניעת סמים"),),
+    ),
+    TopicPolicy(
+        policy_id="land_action_real_estate_allocation",
+        root_topic_id="root_allocations",
+        description_he="פעולה/עשייה במקרקעין או הצטרפות לפעולה במקרקעין מסווגת להקצאות ושימושים.",
+        priority=113,
+        required_any=(("מקרקעין",), ("הצטרפות", "עשייה", "פעולה", "ייעוד")),
+        negative_terms=("כיתת גן", "גן ילדים", "גני ילדים"),
     ),
     TopicPolicy(
         policy_id="municipal_audit_carrier_only",
@@ -493,7 +770,7 @@ def adjudicate_root_topic(*, subject: str, dicta_root_topic_id: str | None, fall
 
 
 def clean_protocol_subject_text(value: Any) -> str:
-    text = _compact(value)
+    text = strip_topic_carrier_prefixes(str(value or ""))
     if not text:
         return ""
     text = text.strip(" *•")
@@ -501,13 +778,15 @@ def clean_protocol_subject_text(value: Any) -> str:
     text = re.sub(r"בבת\(\s*,?\s*\)י\s+הספר", "בבתי הספר", text)
     text = re.sub(r"בתי\s+ספרים\b", "בתי ספר", text)
     text = re.sub(r"^\)?\(?\s*נספח\s+[\u0590-\u05FF]\s*[.)]?\s*", "", text)
-    text = re.sub(r"^(?:סעיף\s*)?\d+(?:\.\d+)?\s*[.)]?\s*:?\s*", "", text)
+    text = strip_topic_carrier_prefixes(text)
     text = re.sub(r"^(?:\)?\([^)]{0,30}\)\s*)?(?:מתאריך\s+)?\d+(?:\.\d+)?\s*['׳״.\-–,\s]*", "", text)
     text = re.sub(r"^מתאריך\s+\d+(?:\.\d+)?\s*['׳״.\-–,\s]*", "", text)
     text = re.sub(r"^(?:שאילת[אה]|שאילתה)\s+של\b.{0,120}?\s*בנושא\s+", "", text)
     text = re.sub(r"^(?:שאילת[אה]|שאילתה)\s+בנושא\s+", "", text)
     text = re.sub(r"^אישור\s+מועצת\s+העירייה\s+וכן\s+לחתום\s+על\s+חוזה\s+ל", "", text)
     text = re.sub(r"^בקשה\s+לאישור\s+", "", text)
+    text = re.sub(r"^(?:אישור\s+)?הסכם\s+ל(?=ביטול\s+זכות\s+חכירה\b)", "", text)
+    text = re.sub(r"^(ביטול\s+זכות\s+חכירה\b)\s*[.;:]\s*\d+(?:\.\d+)?\s*['׳״.]?.*$", r"\1", text)
     text = re.sub(r"^(?:הצעה\s+לסדר(?:\s+יום)?|נושא\s+לדיון)\s*[-–:]?\s+", "", text)
     text = re.sub(r"^(?:מצ\"?ל\s*[-–]?\s*)+", "", text)
     text = re.sub(r"\s*[-–]?\s*מצ\"?ל.*$", "", text)
@@ -538,6 +817,9 @@ def clean_protocol_subject_text(value: Any) -> str:
     text = re.sub(r"\s*[-–.]?\s*הצעה\s+לסדר.*$", "", text)
     text = re.sub(r"\s*[-–]\s*דיון\s+עפ\"?י\b.*$", "", text)
     text = re.sub(r"\s+מס\s*\d+(?:\.\d+)?(?:\s+מתאריך.*)?$", "", text)
+    text = re.sub(r"\s+שנבחר(?:ה)?\s+במכרז\b.*$", "", text)
+    text = re.sub(r"(מהנדס העיר|גזבר העירייה|מנכ\"ל העירייה|מנכל העירייה)\s+(?:(?:מר|גב'|גברת|ד\"ר|עו\"ד)\s+)?[\u0590-\u05FF]{2,}(?:\s+[\u0590-\u05FF]{2,}){0,2}(?=\s|$)", r"\1", text)
+    text = _strip_over_specific_subject_status_tail(text)
     text = re.sub(r"\s*\d+(?:\.\d+)?\s*$", "", text)
     text = re.sub(r"\s+מס\s*$", "", text)
     text = re.sub(r"\s+מתאריך\b.*$", "", text)
@@ -546,6 +828,51 @@ def clean_protocol_subject_text(value: Any) -> str:
     text = re.sub(r"\s+הצביעו\b.*$", "", text)
     text = _repair_unbalanced_parenthesis(text)
     return _compact(text).strip(" *•'\"׳״[]-–:.,")[:220]
+
+
+def _strip_over_specific_subject_status_tail(text: str) -> str:
+    compact = _compact(text)
+    if not compact:
+        return ""
+    patterns = (
+        r"\s+(?:המושבת(?:ת|ים|ות)?|מושבת(?:ת|ים|ות)?)\s+(?:מזה|למעלה\s+מ?|יותר\s+מ?|מעל|כבר|במשך)\b.*$",
+        r"\s+ש(?:הושבת(?:ה|ו)?|מושבת(?:ת|ים|ות)?|סגור(?:ה|ים|ות)?|אינו\s+פעיל|אינה\s+פעילה|אינם\s+פעילים|אינן\s+פעילות)\b.*$",
+        r"\s+ש(?:אינו|אינה|אינם|אינן)\s+(?:פעיל(?:ה|ים|ות)?|תקין(?:ה|ים|ות)?)\b.*$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, compact)
+        if not match:
+            continue
+        prefix = _compact(compact[: match.start()])
+        if _has_reusable_action_subject(prefix):
+            return prefix
+    return compact
+
+
+def _has_reusable_action_subject(text: str) -> bool:
+    normalized = normalize_for_search(text)
+    if len(re.findall(r"[\u0590-\u05FF]{2,}", normalized)) < 3:
+        return False
+    action_terms = (
+        "תיקון",
+        "תחזוקה",
+        "תחזוקת",
+        "טיפול",
+        "פתיחה",
+        "פתיחת",
+        "חידוש",
+        "שיקום",
+        "החלפה",
+        "שדרוג",
+        "הסדרה",
+        "הסדרת",
+        "הפעלת",
+        "הקמת",
+        "התקנת",
+        "אכיפה",
+        "מניעת",
+    )
+    return any(term in normalized for term in action_terms)
 
 
 def _strip_temporal_subject_parts(text: str) -> str:
@@ -565,6 +892,8 @@ def _best_repeated_subject(text: str) -> str:
     before, after = compact.split("החלטות", 1)
     before = _compact(before).strip(" '\"׳״()[]-–:.,")
     after = _compact(after).strip(" '\"׳״()[]-–:.,")
+    if before == "אישור":
+        return compact
     if after and len(_hebrew_tokens(after)) >= 3 and not _looks_like_vote_fragment(after):
         return after
     return before or compact

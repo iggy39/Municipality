@@ -56,6 +56,7 @@ def main() -> int:
     parser.add_argument("--city", default="ashdod")
     parser.add_argument("--years", default="2025")
     parser.add_argument("--packet", type=Path, help="Specific meeting packet folder to process")
+    parser.add_argument("--flat-files", action="store_true", help="Treat direct PDF files under --input-root as one-file packets")
     parser.add_argument("--limit-packets", type=int)
     parser.add_argument("--limit-pdfs", type=int, help="Stop after this many PDFs across selected packets")
     parser.add_argument("--protocol-mode", choices=["preferred", "all", "full-only", "short-only"], default="preferred", help="preferred selects one protocol per packet, using a short protocol when available")
@@ -75,7 +76,7 @@ def main() -> int:
     output_root = args.output_root.expanduser().resolve()
     scripts_dir = args.pipeline_scripts.expanduser().resolve()
     _require_v4_scripts(scripts_dir)
-    packets = _select_packets(input_root=input_root, years=_parse_years(str(args.years)), packet=args.packet, limit=args.limit_packets)
+    packets = _select_packets(input_root=input_root, years=_parse_years(str(args.years)), packet=args.packet, limit=args.limit_packets, flat_files=bool(args.flat_files))
     if not packets:
         raise SystemExit(f"no meeting packets found under {input_root}")
     selected_pdf_count = sum(len(packet.attachments) + len(_filter_protocols(packet.protocols, mode=str(args.protocol_mode))) for packet in packets)
@@ -303,10 +304,13 @@ def _compact_json(response: httpx.Response) -> Any:
     return payload[:3] if isinstance(payload, list) else payload
 
 
-def _select_packets(*, input_root: Path, years: list[int], packet: Path | None, limit: int | None) -> list[Packet]:
+def _select_packets(*, input_root: Path, years: list[int], packet: Path | None, limit: int | None, flat_files: bool = False) -> list[Packet]:
     if packet is not None:
         packet_path = packet.expanduser().resolve()
         return [_packet_from_path(packet_path)]
+    if flat_files:
+        packets = [_packet_from_single_pdf(path) for path in sorted(input_root.glob("*.pdf"), key=_pdf_sort_key) if path.is_file()]
+        return packets[: max(0, limit)] if limit is not None else packets
     packets = []
     for year in years:
         year_dir = input_root / str(year)
@@ -320,6 +324,8 @@ def _select_packets(*, input_root: Path, years: list[int], packet: Path | None, 
 
 
 def _packet_from_path(path: Path) -> Packet:
+    if path.is_file() and path.suffix.casefold() == ".pdf":
+        return _packet_from_single_pdf(path)
     pdfs = sorted(item for item in path.rglob("*.pdf") if item.is_file())
     attachments = sorted([item for item in pdfs if _is_attachment(item)], key=_pdf_sort_key)
     protocols = sorted([item for item in pdfs if item not in set(attachments)], key=_pdf_sort_key)
@@ -327,6 +333,10 @@ def _packet_from_path(path: Path) -> Packet:
         protocols = sorted([item for item in pdfs if any(marker.casefold() in item.name.casefold() for marker in PROTOCOL_MARKERS)], key=_pdf_sort_key)
         attachments = sorted([item for item in pdfs if item not in set(protocols)], key=_pdf_sort_key)
     return Packet(path=path, attachments=attachments, protocols=protocols)
+
+
+def _packet_from_single_pdf(path: Path) -> Packet:
+    return Packet(path=path.parent / path.stem, attachments=[], protocols=[path])
 
 
 def _is_attachment(path: Path) -> bool:
