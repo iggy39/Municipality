@@ -357,15 +357,13 @@ def build_govmap_dashboard_payload(
         "focus": "govmap_resident_point",
         "visual_context": {
             "mode": "govmap_native",
-            "status": "official_native_with_osm_fallback",
-            "tile_url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-            "basemap_label_he": "GovMap רשמי · OSM רק אם GovMap נכשל",
+            "status": "official_native_only",
+            "basemap_label_he": "GovMap רשמי בלבד",
         },
         "basemap": {
             "provider": "GovMap",
             "display_status": "official",
-            "attribution": "GovMap / Survey of Israel and public layer publishers; OSM only as runtime fallback",
-            "tile_url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+            "attribution": "GovMap / Survey of Israel and public layer publishers",
         },
         "govmap": {
             "enabled": True,

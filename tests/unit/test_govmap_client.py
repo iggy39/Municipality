@@ -108,8 +108,9 @@ def test_build_govmap_dashboard_payload_degrades_without_live_calls(monkeypatch)
     assert payload["govmap"]["address_marker"]["geometry"]["type"] == "Point"
     assert "z=8" in payload["govmap"]["iframe_url"]
     assert payload["visual_context"]["mode"] == "govmap_native"
+    assert payload["visual_context"]["status"] == "official_native_only"
     assert payload["basemap"]["display_status"] == "official"
-    assert payload["basemap"]["tile_url"] == "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    assert "tile_url" not in payload["basemap"]
     assert payload["layers"]["address_points"]["status"] == "degraded"
 
 

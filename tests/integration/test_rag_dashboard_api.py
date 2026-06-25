@@ -262,40 +262,24 @@ def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None
     assert "GOVMAP_IFRAME_CONFIG_ENDPOINT" in body
     assert "loadGovMapIframeConfig" in body
     assert "setVisibleLayers" in body
-    assert "updateMountedGovMapIframeUrl" in body
-    assert "govMapOfficialIframeUrl" in body
-    assert "govMapNativeCommandReady" in body
-    assert "url.searchParams.set(\"laym\"" in body
     assert "displayGeometries" in body
     assert "clearGeometriesByName" in body
     assert "data-govmap-layer-toggle" in body
     assert "default_visible_layers" in body
-    assert "payload.govmap.default_visible_layers = []" in body
-    assert "story_filters_enabled" in body
-    assert "compatibleLayerAliases" in body
-    assert "GovMap layers active for this story" in body
-    assert "nativeGovMapEnabled: true" in body
+    assert "const aliases = new Set(payload?.govmap?.default_visible_layers" in body
     assert "selectFeaturesOnMap" in body
     assert "GOVMAP_SELECTED_NEIGHBORHOOD_RADIUS_M" in body
-    assert "GOVMAP_SELECTED_NEIGHBORHOOD_RADIUS_M = 12" in body
     assert "selectOnMap: false" in body
     assert "selectOnMap: true" in body
     assert "govMapSelectedAreaRing" in body
-    assert "selectedRadius * 3" not in body
     assert "waitForGovMapNativeCommand" in body
-    assert "onLoad: () => finish(true)" in body
-    assert ".then(() => finish(true))" in body
-    assert "finishIfNativeMapMounted" in body
-    assert "nativeMap.childElementCount > 0" in body
-    assert "onError: (event) => finish(false" in body
-    assert "govmap_native_onload_timeout" in body
+    assert "12000" in body
     assert "האזור הנבחר יוצג רק כאשר GovMap מאשר פקודות API לדומיין הנוכחי" in body
+    assert "GovMap הרשמי לא נטען" in body
     assert "renderGovMapFallback" not in body
-    assert "renderGovMapTileBasemap(payload)" not in body
-    assert "GovMap נטען" not in body
-    assert "GovMap לא נטען" in body
     assert "OSM גיבוי" not in body
-    assert "native_ready" in body
+    assert "govmap-fallback-osm-rendered" not in body
+    assert "renderGovMapOverlay(payload, { showDistrictLabels: false, showMarkers: false })" not in body
     assert "renderGovMapOverlay(payload, {\n            showSelectedArea: true" not in body
     assert "whereClause" in body
     assert "clearSelection" in body
@@ -304,18 +288,7 @@ def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None
     assert "govmap_address_marker_failed" in body
     assert "displayGovMapHouseMarker" in body
     assert "displayGovMapPointWkt" in body
-    assert "size: 3" in body
     assert "gisSignature" in body
-    assert "selectedTimelineEventId" in body
-    assert "timeline_event_id" in body
-    assert "hasExplicitCenter" in body
-    assert "window.setTimeout(() => syncGovMapNativeLayers(payload), 700)" in body
-    assert "window.setTimeout(() => syncGovMapNativeLayers(payload), 1600)" in body
-    assert "window.setTimeout(() => syncGovMapNativeLayers(payload), 4500)" in body
-    assert "window.setTimeout(() => syncGovMapNativeLayers(payload), 9000)" in body
-    assert "window.setTimeout(() => syncGovMapNativeLayers(payload), 1200)" in body
-    assert "mountedFrame?.addEventListener(\"load\"" in body
-    assert "loadDashboardGisMap();" in body
     assert "__municipalDashboardLastGisSkipped" in body
     assert "__municipalDashboardWheelZoomBlocked" in body
     assert 'aliases.add("neighborhoods_area")' not in body
@@ -324,9 +297,6 @@ def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None
     assert "updateGovMapFilterAvailability" in body
     assert "window.__municipalDashboardGisMapFromServer=true" not in body
     assert "מפת GIS אמיתית" in body
-    assert "isDetailCollapsed" in body
-    assert "data-detail-drawer-collapsed" in body
-    assert "detail-drawer-content" in body
 
 
 def test_govmap_iframe_config_allows_prefixed_approved_origin(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -426,8 +396,9 @@ def test_rag_dashboard_gis_map_endpoint_defaults_to_govmap(monkeypatch: pytest.M
     assert payload["real_gis_available"] is True
     assert payload["govmap"]["iframe_url"].startswith("https://www.govmap.gov.il/")
     assert payload["visual_context"]["mode"] == "govmap_native"
+    assert payload["visual_context"]["status"] == "official_native_only"
     assert payload["basemap"]["display_status"] == "official"
-    assert payload["basemap"]["tile_url"] == "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    assert "tile_url" not in payload["basemap"]
     assert payload["govmap"]["spatial_status"] == "degraded"
     assert payload["govmap"]["spatial_error"] == "initial_metadata_only"
     assert {layer["alias"] for layer in payload["govmap"]["layer_filters"]} >= {"PARCEL_ALL", "bus_stops", "GASSTATIONS"}
