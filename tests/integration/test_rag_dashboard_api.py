@@ -265,6 +265,20 @@ def test_rag_dashboard_page_wires_real_gis_map_progressive_enhancement() -> None
     assert "displayGeometries" in body
     assert "clearGeometriesByName" in body
     assert "data-govmap-layer-toggle" in body
+    assert "mapLegendStack" in body
+    assert "id=\"map-active-filters\"" in body
+    assert "updateMapActiveFilterOverlay" in body
+    assert "activeGovMapLayerCount" in body
+    assert "window.__renderMapLayerCounts = renderMapLayerCounts" in body
+    assert "window.__applyRealGisLegendLabels = applyRealGisLegendLabels" in body
+    assert "window.__renderMapLayerCounts?.(window.__municipalDashboardGisMap)" in body
+    assert "window.__applyRealGisLegendLabels?.(window.__municipalDashboardGisMap)" in body
+    assert body.count("renderMapLayerCounts(window.__municipalDashboardGisMap);") == 1
+    assert "שכבות GovMap פעילות" in body
+    assert "סמלים ושמות מתוך GovMap" in body
+    assert "מקרא מפה; הרקע" not in body
+    assert "מבנה הקשר OSM" not in body
+    assert "מוקד הקשר OSM" not in body
     assert "default_visible_layers" in body
     assert "const aliases = new Set(payload?.govmap?.default_visible_layers" in body
     assert "selectFeaturesOnMap" in body
