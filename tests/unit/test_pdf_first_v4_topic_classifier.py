@@ -133,6 +133,35 @@ def test_short_hebrew_keyword_allows_attached_prefix() -> None:
     assert any(row["root_topic_id"] == "root_religious_services" for row in result["candidates"])
 
 
+def test_policy_routes_religious_council_to_religious_services() -> None:
+    matches = topic_policy_matches("שאילתא בנושא מינוי מועצה דתית")
+
+    assert matches[0]["root_topic_id"] == "root_religious_services"
+    assert infer_root_topic_id("מינוי מועצה דתית") == "root_religious_services"
+
+
+def test_generic_root_keywords_cover_finance_and_notice_board_actions() -> None:
+    assert infer_root_topic_id("הנפקת כרטיס אשראי טעון", allow_procedural_default=False) == "root_budget_finance"
+    assert infer_root_topic_id("ביצוע פעולות מול בנק הדואר", allow_procedural_default=False) == "root_budget_finance"
+    assert infer_root_topic_id("פתיחת חשבון בבנק מזרחי", allow_procedural_default=False) == "root_budget_finance"
+    assert infer_root_topic_id("העמדת לוח מודעות אלקטרוני", allow_procedural_default=False) == "root_administration"
+
+
+def test_canonicalizes_substantive_fragment_subjects() -> None:
+    examples = {
+        "הצעת הגזברות לעדכון בצו הארנונה לשנת2024 הוספת תת סיווג חדש": "עדכון בצו הארנונה הוספת תת סיווג",
+        "הקמת חניון מוניציפלי חכם בסמוך לתחנת רכבת ופארק הייטק": "הקמת חניון מוניציפלי חכם",
+        "שיפוץ מרכז מסחרי רובע ו' ,עדכון תבחינים שנתקבלו במועצה": "שיפוץ מרכז מסחרי ועדכון תבחינים",
+        "סקירה שנתית של מפקד תחנת אשדוד סנ\"צ אילן שושן": "סקירה שנתית של מפקד תחנת משטרה",
+        "אישור מתן פטור לבעלי עסקים מאגרת שילוט בשל גל תחלואה": "פטור מאגרת שילוט לבעלי עסקים",
+    }
+
+    for raw, expected in examples.items():
+        canonical, reason = canonicalize_topic_label(raw)
+        assert canonical == expected
+        assert reason in {"semantic_canonicalized", None}
+
+
 def test_section_only_label_is_cleaned_consistently() -> None:
     canonical, reason = canonicalize_topic_label("סעיף5")
 
@@ -460,7 +489,7 @@ def test_curated_child_topic_seeds_are_unique_and_valid() -> None:
         assert normalize_for_search(row["child_label_he"])
         keys.append((row["root_topic_id"], normalize_for_search(row["child_label_he"])))
 
-    assert len(CURATED_V4_CHILD_TOPICS) == 87
+    assert len(CURATED_V4_CHILD_TOPICS) == 93
     assert len(keys) == len(set(keys))
 
 

@@ -48,7 +48,7 @@ from municipality.topic_label_quality import canonicalize_topic_label, is_low_qu
 DEFAULT_MODEL = "dicta-il/DictaLM-3.0-24B-Thinking:bf16"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 EXCLUDED_STRUCTURAL_ROLES = {"noise", "table_header_only"}
-CACHE_VERSION = "step4_v4_global_topic_assign_v56_safe_tree_v3_hints_benchmark"
+CACHE_VERSION = "step4_v4_global_topic_assign_v58_geo_people_v3_fallback"
 DICTA_FULL_MODEL_MODES = {"required", "dicta_authoritative", "dicta_contextual"}
 ACTION_DOMINANT_ROOT_IDS = {"root_agreements", "root_budget_finance", "root_travel_approvals", "root_hr_labor", "root_allocations", "root_supports", "root_administration"}
 CONTEXTUAL_NON_INDEXABLE_STATUSES = {"duplicate_reference", "evidence_fragment", "procedural_only", "insufficient_context"}
@@ -130,6 +130,7 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=float, default=300.0)
     parser.add_argument("--max-units-per-call", type=int, default=4)
     parser.add_argument("--max-raw-chars", type=int, default=1200)
+    parser.add_argument("--disable-govmap-geo-fallback", action="store_true", help="Disable live GovMap search for ambiguous location-only topic fallback")
     parser.add_argument("--dicta-mode", choices=["auto", "disabled", "required", "dicta_authoritative", "dicta_contextual"], default="auto", help="auto uses Dicta only for ambiguous items; disabled imports ambiguous items as candidate topics; required sends topic-bearing items to Dicta; dicta_authoritative makes valid Dicta roots authoritative; dicta_contextual first normalizes event context and then classifies with compact root/child context")
     args = parser.parse_args()
 
@@ -225,6 +226,8 @@ def main() -> int:
     if str(args.dicta_mode) == "dicta_contextual":
         assignments, child_errors, child_only_judged_count = _apply_child_only_dicta_judgements(assignments=assignments, items=items, model=str(args.model), base_url=str(args.ollama_base_url).rstrip("/"), timeout_seconds=max(1.0, float(args.timeout_seconds)), model_call_dir=model_call_dir)
         model_errors.extend(child_errors)
+    assignments = _apply_structured_fallbacks(assignments=assignments, items=items, enable_govmap_geo=not bool(args.disable_govmap_geo_fallback))
+    assignments = _apply_topic_arbitration(assignments=assignments, items=items, enable_govmap_geo=not bool(args.disable_govmap_geo_fallback))
     assignments = _mark_inherited_duplicate_topic_rows(assignments)
     assignments = _normalize_protocol_non_topic_assignments(assignments)
 
@@ -333,6 +336,7 @@ def _build_item(*, unit: dict[str, Any], facts: list[dict[str, Any]], max_raw_ch
         "skip_model_assignment": _skip_model_for_row_type(row_type=row_type, packet_role=packet_role),
         "section_id": unit.get("section_id"),
         "section_number": unit.get("section_number"),
+        "continuation_of_unit_id": unit.get("continuation_of_unit_id"),
         "outline_title_he": unit.get("header_text") or unit.get("title_he") or unit.get("section_title_he"),
         "topic_identification_context": classification_text[:600],
         "topic_headline_he": topic_text[:600],
@@ -2633,7 +2637,27 @@ def _deterministic_decision_supports_root(*, item: dict[str, Any], root_topic_id
 
 
 def _preassign_without_model(item: dict[str, Any]) -> bool:
-    return _skip_model_for_row_type(row_type=str(item.get("row_type") or ""), packet_role=str((item.get("document_context") or {}).get("packet_role") or ""))
+    row_type = str(item.get("row_type") or "")
+    packet_role = str((item.get("document_context") or {}).get("packet_role") or "")
+    if not _skip_model_for_row_type(row_type=row_type, packet_role=packet_role):
+        return False
+    return not _fragment_should_get_model_review(item=item, row_type=row_type, packet_role=packet_role)
+
+
+def _fragment_should_get_model_review(*, item: dict[str, Any], row_type: str, packet_role: str) -> bool:
+    if packet_role != "protocol" or row_type not in {"fragment", "attribution_fragment"}:
+        return False
+    text = _compact(_join_unique([item.get("topic_identification_context"), item.get("topic_headline_he"), item.get("raw_text")]))
+    if not text or len(text) > 420 or len(_hebrew_tokens(text)) > 70:
+        return False
+    if _looks_like_protocol_listing(text) or _looks_like_speaker_dialogue_fragment(text):
+        return False
+    if not (_has_explicit_local_topic_marker(text) or _has_bounded_substantive_topic_signal(text)):
+        return False
+    subject = _clean_topic_subject(text)
+    if not subject or len(_hebrew_tokens(subject)) < 2:
+        return False
+    return infer_root_topic_id(subject, allow_procedural_default=False) in ROOT_BY_ID
 
 
 def _preassign_with_candidate_finder(item: dict[str, Any]) -> bool:
@@ -2943,6 +2967,1161 @@ def _strong_body_evidence_root(item: dict[str, Any], *, own_text_only: bool = Fa
     return None
 
 
+def _apply_structured_fallbacks(*, assignments: list[dict[str, Any]], items: list[dict[str, Any]], enable_govmap_geo: bool) -> list[dict[str, Any]]:
+    item_by_id = {str(item.get("structure_unit_id") or ""): item for item in items}
+    out: list[dict[str, Any]] = []
+    for row in assignments:
+        current = dict(row)
+        item = item_by_id.get(str(current.get("structure_unit_id") or ""))
+        replacement = _structured_fallback_assignment(row=current, item=item, enable_govmap_geo=enable_govmap_geo) if item else None
+        out.append(replacement or current)
+    return out
+
+
+def _structured_fallback_assignment(*, row: dict[str, Any], item: dict[str, Any], enable_govmap_geo: bool) -> dict[str, Any] | None:
+    if not _should_try_structured_fallback(row=row, item=item):
+        return None
+    subject = _structured_fallback_subject(row=row, item=item)
+    if subject:
+        municipality = str((item.get("document_context") or {}).get("municipality_he") or "") or None
+        geo = _resolve_geo_fallback(subject=subject, municipality=municipality, enable_govmap_geo=enable_govmap_geo)
+        if geo:
+            status = "active" if geo.get("source") == "govmap_search" and geo.get("confidence") == "high" else "candidate"
+            assignment = _assignment_payload(
+                item=item,
+                root_topic_id="root_geo",
+                root_label=root_label_for_id("root_geo") or "מיקומים וגיאוגרפיה",
+                child_label=str(geo.get("child_label_he") or "כתובות ורחובות"),
+                raw_child_label=str(geo.get("child_label_he") or "כתובות ורחובות"),
+                status=status,
+                reject_reason=None if status == "active" else "non_blocking_topic_review:geo_fallback_unverified_location",
+                aliases=[],
+                confidence=0.76 if status == "active" else 0.58,
+                quote=str(item.get("raw_text") or item.get("unit_raw_text") or "")[:500],
+                route=f"deterministic_v4_structured_fallback:geo:{geo.get('source') or 'unknown'}",
+                rationale_he="location-only subject routed through generic geo fallback",
+                parsed_contract={"is_topic_bearing": True, "topic_subject_he": subject, "clean_subject_he": subject},
+            )
+            assignment["geo_resolution"] = geo
+            return assignment
+        people = _resolve_people_role_fallback(subject)
+        if people:
+            assignment = _assignment_payload(
+                item=item,
+                root_topic_id="root_people_roles",
+                root_label=root_label_for_id("root_people_roles") or "אנשים ותפקידים",
+                child_label="נבחרי ציבור ובעלי תפקידים",
+                raw_child_label="נבחרי ציבור ובעלי תפקידים",
+                status="candidate",
+                reject_reason="non_blocking_topic_review:people_role_fallback_unverified_alias",
+                aliases=list(people.get("aliases_he") or []),
+                confidence=0.52,
+                quote=str(item.get("raw_text") or item.get("unit_raw_text") or "")[:500],
+                route=f"deterministic_v4_structured_fallback:people_role:{people.get('source') or 'unknown'}",
+                rationale_he="person or role-only subject routed through generic people/roles fallback",
+                parsed_contract={"is_topic_bearing": True, "topic_subject_he": subject, "clean_subject_he": subject},
+            )
+            assignment["people_role_resolution"] = people
+            return assignment
+    return _v3_structured_fallback_assignment(row=row, item=item)
+
+
+def _should_try_structured_fallback(*, row: dict[str, Any], item: dict[str, Any]) -> bool:
+    if not _is_protocol_item(item):
+        return False
+    if str(row.get("topic_reject_reason") or "") == "inherited_duplicate_topic_subject":
+        return False
+    route = str(row.get("topic_assignment_route") or "")
+    root_topic_id = str(row.get("root_topic_id") or "")
+    has_trusted_active_topic = (
+        str(row.get("topic_node_status") or "") == "active"
+        and row.get("is_topic_bearing") is True
+        and root_topic_id in ROOT_BY_ID
+        and root_topic_id not in {"root_agenda_queries", "root_order_proposals"}
+        and bool(_compact(row.get("topic_subject_he")))
+        and not any(marker in route for marker in ("weak_candidate", "ambiguous", "model_error", "model_omitted", "topic_subject_rejected"))
+    )
+    return not has_trusted_active_topic
+
+
+def _structured_fallback_subject(*, row: dict[str, Any], item: dict[str, Any]) -> str | None:
+    for value in [row.get("topic_subject_he"), item.get("topic_subject_he")]:
+        subject = _clean_structured_fallback_subject(value)
+        if subject and not is_low_quality_topic_label(subject):
+            return subject
+    text = _join_unique([item.get("topic_headline_he"), item.get("topic_identification_context"), item.get("unit_raw_text")])
+    if not _has_explicit_local_topic_marker(text):
+        return None
+    contract = _topic_contract_from_headline(text, structural_role=str(item.get("structural_role") or ""), packet_role="protocol")
+    subject = _clean_structured_fallback_subject(contract.get("topic_subject_he"))
+    if subject and not is_low_quality_topic_label(subject):
+        return subject
+    quoted = _quoted_subject_after_topic_marker(text)
+    subject = _clean_structured_fallback_subject(quoted)
+    return subject if subject and not is_low_quality_topic_label(subject) else None
+
+
+def _quoted_subject_after_topic_marker(text: str) -> str | None:
+    compact = _compact(text)
+    match = re.search(r"\bבנושא\b\s*[\"'׳״]?\s*(.{3,180}?)(?=[\"'׳״]|\s+גב['׳]?|\s+מר\b|\s+ד[\"”]?ר\b|\s+עו[\"”]?ד\b|\s+השאלה|\s+מצ\"?ל|$)", compact)
+    return match.group(1) if match else None
+
+
+def _clean_structured_fallback_subject(value: Any) -> str | None:
+    text = _compact(value)
+    if not text:
+        return None
+    text = re.sub(r"(?<=[\u0590-\u05FF])\s*\d{1,2}\s*[\"'׳״]+\s*(?=[\u0590-\u05FF])", " ", text)
+    text = text.replace('"', " ").replace("׳", " ").replace("״", " ")
+    text = clean_protocol_subject_text(text)
+    text = re.sub(r"\s+", " ", text).strip(" '()[]-–:.,")
+    return text or None
+
+
+def _resolve_geo_fallback(*, subject: str, municipality: str | None, enable_govmap_geo: bool) -> dict[str, Any] | None:
+    if _subject_has_action_dominant_terms(subject):
+        return None
+    local = _local_geo_resolution(subject)
+    if local:
+        return local
+    if not enable_govmap_geo:
+        return None
+    return _govmap_geo_resolution(subject=subject, municipality=municipality)
+
+
+def _subject_has_action_dominant_terms(subject: str) -> bool:
+    normalized = _norm(subject)
+    action_terms = (
+        "אישור", "לאשר", "הסכם", "התקשרות", "מכרז", "מינוי", "הקמת", "הקמה", "שיפוץ", "שדרוג", "ביטול", "דיון",
+        "סקירה", "מענק", "פטור", "הקצאה", "הסדרת", "הפעלת", "תבחינים", "תוכנית", "תכנית", "תקציב", "שאילתה",
+    )
+    return any(term in normalized for term in action_terms)
+
+
+def _local_geo_resolution(subject: str) -> dict[str, Any] | None:
+    normalized = _norm(subject)
+    if not normalized:
+        return None
+    if any(term in normalized for term in ("גוש", "חלקה", "מגרש")):
+        return {"source": "local_geo_pattern", "confidence": "medium", "child_label_he": "גושים וחלקות", "matched_name_he": subject, "matched_type": "parcel_reference"}
+    if "כיכר" in normalized or "צומת" in normalized:
+        return {"source": "local_geo_pattern", "confidence": "medium", "child_label_he": "כיכרות וצמתים", "matched_name_he": subject, "matched_type": "square_or_intersection"}
+    road_terms = [term for term in ("רחוב", "רח", "דרך", "שדרות", "שדרה") if re.search(rf"(?:^|\s){re.escape(term)}(?:\s|$)", normalized)]
+    if len(road_terms) >= 2:
+        return {"source": "local_geo_pattern", "confidence": "medium", "child_label_he": "כיכרות וצמתים", "matched_name_he": subject, "matched_type": "street_intersection"}
+    if road_terms:
+        return {"source": "local_geo_pattern", "confidence": "medium", "child_label_he": "כתובות ורחובות", "matched_name_he": subject, "matched_type": "street_or_address"}
+    if any(term in normalized for term in ("שכונה", "רובע", "אזור")):
+        return {"source": "local_geo_pattern", "confidence": "medium", "child_label_he": "שכונות ואזורים", "matched_name_he": subject, "matched_type": "neighborhood_or_area"}
+    if any(term in normalized for term in ("פארק", "גן", "חוף", "מתנס", "מתנ ס", "מרכז קהילתי", "בית ספר")):
+        return {"source": "local_geo_pattern", "confidence": "medium", "child_label_he": "אתרים ומבני ציבור", "matched_name_he": subject, "matched_type": "public_site"}
+    return None
+
+
+def _govmap_geo_resolution(*, subject: str, municipality: str | None) -> dict[str, Any] | None:
+    query = _compact(" ".join(part for part in [municipality, subject] if part))
+    if not query:
+        return None
+    try:
+        from municipality.govmap_client import GovMapClient  # noqa: PLC0415
+
+        payload = GovMapClient(timeout_seconds=3.0).search(query, max_results=5)
+    except Exception:  # noqa: BLE001 - GovMap is an optional external resolver.
+        return None
+    result = _best_govmap_geo_result(results=payload.get("results") if isinstance(payload, dict) else [], subject=subject)
+    if not result:
+        return None
+    return {
+        "source": "govmap_search",
+        "confidence": "high" if result.get("centroid") else "medium",
+        "query": query,
+        "child_label_he": _geo_child_label_for_govmap_result(result),
+        "matched_name_he": _compact(result.get("originalText") or result.get("text") or subject),
+        "matched_type": str(result.get("type") or result.get("layerName") or "govmap_result"),
+        "centroid": result.get("centroid"),
+    }
+
+
+def _best_govmap_geo_result(*, results: Any, subject: str) -> dict[str, Any] | None:
+    rows = [row for row in (results or []) if isinstance(row, dict)]
+    if not rows:
+        return None
+    subject_tokens = set(_hebrew_tokens(_norm(subject)))
+    scored: list[tuple[int, dict[str, Any]]] = []
+    for row in rows:
+        label = _norm(_join_unique([row.get("originalText"), row.get("text"), row.get("name")]))
+        if not label:
+            continue
+        row_tokens = set(_hebrew_tokens(label))
+        overlap = len(subject_tokens & row_tokens)
+        if overlap == 0 and subject_tokens:
+            continue
+        type_bonus = 2 if str(row.get("type") or "").lower() in {"address", "street", "settlement"} else 0
+        centroid_bonus = 2 if row.get("centroid") else 0
+        scored.append((overlap * 10 + type_bonus + centroid_bonus, row))
+    if not scored:
+        return None
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return scored[0][1]
+
+
+def _geo_child_label_for_govmap_result(result: dict[str, Any]) -> str:
+    result_type = str(result.get("type") or result.get("layerName") or "").lower()
+    if result_type in {"address", "street"}:
+        return "כתובות ורחובות"
+    if result_type in {"settlement", "neighborhood", "neighborhoods_area"}:
+        return "שכונות ואזורים"
+    return "אתרים ומבני ציבור"
+
+
+def _resolve_people_role_fallback(subject: str) -> dict[str, Any] | None:
+    if _subject_has_action_dominant_terms(subject):
+        return None
+    normalized = _norm(subject)
+    role_terms = ("ראש העיר", "ראש העירייה", "חבר מועצה", "חברי מועצה", "חברת מועצה", "מנכל", "מנכ ל", "מהנדס העיר", "גזבר", "יועץ משפטי")
+    title_pattern = r"(?:^|\s)(?:מר|גב['׳]?|גברת|ד[\"”]?ר|עו[\"”]?ד|הרב)\s+[\u0590-\u05FF]{2,}"
+    if any(term in normalized for term in role_terms) or re.search(title_pattern, subject):
+        return {"source": "generic_people_role_pattern", "matched_name_he": subject, "aliases_he": [subject]}
+    return None
+
+
+def _v3_structured_fallback_assignment(*, row: dict[str, Any], item: dict[str, Any]) -> dict[str, Any] | None:
+    selection = _select_v3_fallback_hint(item=item)
+    if not selection:
+        return None
+    if selection.get("status") == "ambiguous":
+        best = selection.get("best") if isinstance(selection.get("best"), dict) else {}
+        root_topic_id = str(best.get("root_topic_id") or "root_agenda_queries")
+        root_label = root_label_for_id(root_topic_id) or root_label_for_id("root_agenda_queries") or ""
+        assignment = _assignment_payload(item=item, root_topic_id=root_topic_id, root_label=root_label, child_label=None, raw_child_label=None, status="candidate", reject_reason="non_blocking_topic_review:v3_multiple_topic_candidates", aliases=[], confidence=0.35, quote=str(item.get("raw_text") or item.get("unit_raw_text") or "")[:500], route="deterministic_v4_structured_fallback:v3_multiple_topic_candidates", rationale_he="multiple accepted V3 event/subject hints remained ambiguous")
+        assignment["v3_fallback_selection"] = selection
+        return assignment
+    hint = selection.get("best") if isinstance(selection.get("best"), dict) else {}
+    root_topic_id = str(hint.get("root_topic_id") or "")
+    subject = _clean_structured_fallback_subject(hint.get("topic_subject_he") or hint.get("matter_he"))
+    if root_topic_id not in ROOT_BY_ID or not subject:
+        return None
+    root_label = root_label_for_id(root_topic_id) or ""
+    child_label = _existing_child_label_for_subject(root_topic_id=root_topic_id, subject=subject)
+    assignment = _assignment_payload(item=item, root_topic_id=root_topic_id, root_label=root_label, child_label=child_label, raw_child_label=child_label, status="active", reject_reason=None, aliases=[], confidence=0.64, quote=str(hint.get("source_quote_he") or item.get("raw_text") or "")[:500], route="deterministic_v4_structured_fallback:v3_event_subject", rationale_he="accepted entailed V3 event/subject hint mapped back through the Step 4 topic tree", parsed_contract={"is_topic_bearing": True, "topic_subject_he": subject, "clean_subject_he": subject})
+    assignment["v3_fallback_selection"] = selection
+    return assignment
+
+
+def _select_v3_fallback_hint(*, item: dict[str, Any]) -> dict[str, Any] | None:
+    hints = [hint for hint in item.get("topic_subject_v3_hints") or [] if isinstance(hint, dict)]
+    scored: list[dict[str, Any]] = []
+    for hint in hints:
+        for basis_row in _v3_hint_basis_rows(hint):
+            matter = _clean_structured_fallback_subject(basis_row.get("matter_he"))
+            action = _clean_structured_fallback_subject(basis_row.get("action_type_he"))
+            if not matter and not action:
+                continue
+            basis = _join_unique([action, matter, basis_row.get("source_quote_he")])
+            root_topic_id = infer_root_topic_id(basis, allow_procedural_default=False)
+            if root_topic_id not in ROOT_BY_ID or root_topic_id in {"root_agenda_queries", "root_order_proposals", "root_geo", "root_people_roles"}:
+                continue
+            quote = _compact(basis_row.get("source_quote_he"))
+            raw = _join_unique([item.get("unit_raw_text"), item.get("raw_text"), item.get("topic_identification_context"), item.get("topic_headline_he")])
+            quote_overlap = bool(quote and (_tokens_supported(quote, raw) or _tokens_supported(raw, quote)))
+            exact_unit = str(hint.get("source_structure_unit_id") or "") == str(item.get("structure_unit_id") or "")
+            score = 0
+            score += 80 if exact_unit else 0
+            score += 40 if quote_overlap else 0
+            score += 20 if matter and action else 0
+            score += 10 if not _subject_has_action_dominant_terms(matter or "") else 0
+            score += 8 if basis_row.get("selected_candidate") else 0
+            scored.append({**hint, **basis_row, "root_topic_id": root_topic_id, "topic_subject_he": matter or action, "selection_score": score, "quote_overlap": quote_overlap, "exact_unit_match": exact_unit})
+    if not scored:
+        return None
+    scored.sort(key=lambda row: int(row.get("selection_score") or 0), reverse=True)
+    top = scored[0]
+    competing = [row for row in scored[1:] if int(top.get("selection_score") or 0) - int(row.get("selection_score") or 0) <= 10 and _norm(row.get("topic_subject_he")) != _norm(top.get("topic_subject_he"))]
+    if competing:
+        return {"status": "ambiguous", "best": top, "competing": competing[:3]}
+    return {"status": "selected", "best": top, "competing": scored[1:3]}
+
+
+def _v3_hint_basis_rows(hint: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = [
+        {
+            "matter_he": hint.get("matter_he"),
+            "action_type_he": hint.get("action_type_he"),
+            "source_quote_he": hint.get("source_quote_he"),
+            "candidate_id": hint.get("selected_candidate_id"),
+            "selected_candidate": True,
+        }
+    ]
+    selected_id = str(hint.get("selected_candidate_id") or "")
+    for candidate in hint.get("event_candidates") or []:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_id = str(candidate.get("candidate_id") or "")
+        rows.append(
+            {
+                "matter_he": candidate.get("matter_he"),
+                "action_type_he": candidate.get("action_type_he"),
+                "source_quote_he": _join_unique([candidate.get("matter_quote_he"), candidate.get("action_quote_he"), candidate.get("phase_quote_he"), candidate.get("decision_quote_he")]),
+                "candidate_id": candidate_id or None,
+                "selected_candidate": bool(selected_id and candidate_id == selected_id),
+                "candidate_confidence": candidate.get("confidence"),
+            }
+        )
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = _norm(_join_unique([row.get("matter_he"), row.get("action_type_he"), row.get("source_quote_he")]))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    return out
+
+
+def _apply_topic_arbitration(*, assignments: list[dict[str, Any]], items: list[dict[str, Any]], enable_govmap_geo: bool) -> list[dict[str, Any]]:
+    item_by_id = {str(item.get("structure_unit_id") or ""): item for item in items}
+    assignment_by_id = {str(row.get("structure_unit_id") or ""): row for row in assignments}
+    ordered_unit_ids = [str(item.get("structure_unit_id") or "") for item in items]
+    order_by_id = {unit_id: index for index, unit_id in enumerate(ordered_unit_ids) if unit_id}
+    out: list[dict[str, Any]] = []
+    emitted_by_id: dict[str, dict[str, Any]] = {}
+    for row in assignments:
+        current = dict(row)
+        item = item_by_id.get(str(current.get("structure_unit_id") or ""))
+        if not item or not _is_protocol_item(item):
+            out.append(current)
+            if str(current.get("structure_unit_id") or ""):
+                emitted_by_id[str(current.get("structure_unit_id") or "")] = current
+            continue
+        evidence_reason = _evidence_only_arbitration_reason(row=current, item=item)
+        proposal = _best_topic_arbitration_proposal(row=current, item=item, enable_govmap_geo=enable_govmap_geo)
+        if evidence_reason and not _topic_proposal_overrides_evidence_only(proposal):
+            context = _select_inherited_topic_context(row=current, item=item, items=items, assignment_by_id=assignment_by_id, emitted_by_id=emitted_by_id, order_by_id=order_by_id)
+            if context:
+                updated = _assignment_from_inherited_topic_context(row=current, item=item, context=context, reason=evidence_reason)
+            else:
+                updated = _convert_assignment_to_non_topic_fragment(current, reason=f"topic_arbitration:{evidence_reason}")
+                updated["topic_arbitration"] = {"decision": "evidence_only", "reason": evidence_reason}
+            out.append(updated)
+            emitted_by_id[str(updated.get("structure_unit_id") or "")] = updated
+            continue
+        if proposal and _topic_proposal_should_replace(row=current, proposal=proposal):
+            updated = _assignment_from_topic_proposal(row=current, item=item, proposal=proposal)
+            out.append(updated)
+            emitted_by_id[str(updated.get("structure_unit_id") or "")] = updated
+            continue
+        compound = _compound_child_subject_arbitration_assignment(row=current, item=item)
+        final_row = compound or current
+        out.append(final_row)
+        emitted_by_id[str(final_row.get("structure_unit_id") or "")] = final_row
+    return out
+
+
+def _best_topic_arbitration_proposal(*, row: dict[str, Any], item: dict[str, Any], enable_govmap_geo: bool) -> dict[str, Any] | None:
+    proposals = _topic_arbitration_proposals(row=row, item=item, enable_govmap_geo=enable_govmap_geo)
+    if not proposals:
+        return None
+    proposals.sort(key=_topic_proposal_sort_key, reverse=True)
+    return proposals[0]
+
+
+def _topic_proposal_sort_key(proposal: dict[str, Any]) -> tuple[float, int, float]:
+    root_topic_id = str(proposal.get("root_topic_id") or "")
+    # A location mention inside an action row is often secondary evidence; keep it only when it clearly wins.
+    non_geo_tie_break = 0 if root_topic_id == "root_geo" else 1
+    return (float(proposal.get("score") or 0.0), non_geo_tie_break, float(proposal.get("confidence") or 0.0))
+
+
+def _topic_arbitration_proposals(*, row: dict[str, Any], item: dict[str, Any], enable_govmap_geo: bool) -> list[dict[str, Any]]:
+    proposals: list[dict[str, Any]] = []
+    proposals.extend(_v3_topic_proposals(item=item))
+    proposals.extend(_explicit_action_topic_proposals(row=row, item=item))
+    proposals.extend(_candidate_span_topic_proposals(row=row, item=item))
+    proposals.extend(_existing_assignment_topic_proposals(row=row, item=item))
+    proposals.extend(_headline_topic_proposals(row=row, item=item))
+    proposals.extend(_local_marker_topic_proposals(row=row, item=item))
+    return _dedupe_topic_proposals(proposals=proposals, item=item, enable_govmap_geo=enable_govmap_geo)
+
+
+def _v3_topic_proposals(*, item: dict[str, Any]) -> list[dict[str, Any]]:
+    selection = _select_v3_fallback_hint(item=item)
+    if not selection or selection.get("status") != "selected":
+        return []
+    hint = selection.get("best") if isinstance(selection.get("best"), dict) else {}
+    subject = _clean_structured_fallback_subject(hint.get("topic_subject_he") or hint.get("matter_he") or hint.get("action_type_he"))
+    root_topic_id = str(hint.get("root_topic_id") or "")
+    if not subject or root_topic_id not in ROOT_BY_ID or root_topic_id in {"root_agenda_queries", "root_order_proposals"}:
+        return []
+    score = 94 if bool(hint.get("exact_unit_match")) else 82
+    return [
+        {
+            "source": "v3_event_subject",
+            "subject_he": subject,
+            "root_topic_id": root_topic_id,
+            "child_label_he": _existing_child_label_for_subject(root_topic_id=root_topic_id, subject=subject),
+            "score": score,
+            "confidence": 0.82 if score >= 90 else 0.68,
+            "quote": _compact(hint.get("source_quote_he")) or _compact(item.get("unit_raw_text") or item.get("raw_text")),
+            "v3_selection": selection,
+        }
+    ]
+
+
+def _explicit_action_topic_proposals(*, row: dict[str, Any], item: dict[str, Any]) -> list[dict[str, Any]]:
+    proposals: list[dict[str, Any]] = []
+    evidence_text = _join_unique([item.get("unit_raw_text"), item.get("topic_headline_he"), item.get("topic_identification_context")])
+    for action in item.get("explicit_actions") or []:
+        proposal = _topic_proposal_from_text(
+            row=row,
+            item=item,
+            text=str(action),
+            evidence_text=_join_unique([action, evidence_text]),
+            source="explicit_action_span",
+            base_score=88,
+        )
+        if proposal:
+            proposals.append(proposal)
+    return proposals
+
+
+def _candidate_span_topic_proposals(*, row: dict[str, Any], item: dict[str, Any]) -> list[dict[str, Any]]:
+    proposals: list[dict[str, Any]] = []
+    evidence_text = _join_unique([item.get("topic_subject_he"), item.get("topic_headline_he"), item.get("topic_identification_context"), item.get("unit_raw_text"), item.get("raw_text")])
+    candidates = [candidate for candidate in item.get("root_topic_candidates") or [] if isinstance(candidate, dict)]
+    for candidate in candidates[:8]:
+        root_topic_id = str(candidate.get("root_topic_id") or "")
+        if root_topic_id not in ROOT_BY_ID or root_topic_id in {"root_agenda_queries", "root_order_proposals", "root_people_roles"}:
+            continue
+        score = float(candidate.get("score") or 0.0)
+        matched_terms = [str(term) for term in candidate.get("matched_terms") or [] if str(term).strip()]
+        child_label = clean_topic_label(candidate.get("child_label_he"))
+        if score < 0.72 and not matched_terms and not child_label:
+            continue
+        span_text = _best_supported_candidate_span(text=evidence_text, candidate=candidate)
+        if not span_text:
+            continue
+        proposal = _topic_proposal_from_text(
+            row=row,
+            item=item,
+            text=span_text,
+            evidence_text=evidence_text,
+            source="classifier_candidate_span",
+            base_score=min(90.0, 58.0 + score * 30.0),
+            root_topic_id=root_topic_id,
+            child_label=child_label,
+        )
+        if proposal:
+            proposal["candidate"] = candidate
+            proposals.append(proposal)
+    for match in item.get("topic_policy_matches") or []:
+        if not isinstance(match, dict):
+            continue
+        root_topic_id = str(match.get("root_topic_id") or "")
+        if root_topic_id not in ROOT_BY_ID or root_topic_id in {"root_agenda_queries", "root_order_proposals"}:
+            continue
+        span_text = _best_supported_candidate_span(text=evidence_text, candidate=match)
+        if not span_text:
+            continue
+        proposal = _topic_proposal_from_text(
+            row=row,
+            item=item,
+            text=span_text,
+            evidence_text=evidence_text,
+            source="topic_policy_span",
+            base_score=86,
+            root_topic_id=root_topic_id,
+        )
+        if proposal:
+            proposal["policy_match"] = match
+            proposals.append(proposal)
+    return proposals
+
+
+def _existing_assignment_topic_proposals(*, row: dict[str, Any], item: dict[str, Any]) -> list[dict[str, Any]]:
+    subject = _clean_structured_fallback_subject(row.get("topic_subject_he") or row.get("raw_topic_subject_he"))
+    root_topic_id = str(row.get("root_topic_id") or "")
+    if not subject or root_topic_id not in ROOT_BY_ID or root_topic_id in {"root_agenda_queries", "root_order_proposals"}:
+        return []
+    if root_topic_id == "root_geo" and not _resolve_geo_fallback(subject=subject, municipality=None, enable_govmap_geo=False):
+        return []
+    if is_low_quality_topic_label(subject):
+        return []
+    return [
+        {
+            "source": "existing_assignment_subject",
+            "subject_he": subject,
+            "root_topic_id": root_topic_id,
+            "child_label_he": row.get("child_label_he") or _existing_child_label_for_subject(root_topic_id=root_topic_id, subject=subject),
+            "score": 80 if str(row.get("topic_node_status") or "") == "active" else 68,
+            "confidence": _confidence(row.get("topic_assignment_confidence")) or 0.7,
+            "quote": _compact(row.get("topic_supporting_quote_he") or item.get("unit_raw_text") or item.get("raw_text")),
+        }
+    ]
+
+
+def _headline_topic_proposals(*, row: dict[str, Any], item: dict[str, Any]) -> list[dict[str, Any]]:
+    proposals: list[dict[str, Any]] = []
+    evidence_text = _join_unique([item.get("topic_subject_he"), item.get("topic_headline_he"), item.get("topic_identification_context"), item.get("unit_raw_text")])
+    raw_text = _compact(item.get("unit_raw_text"))
+    rows: list[tuple[str, Any, int]] = [
+        ("item_topic_subject", item.get("topic_subject_he"), 82),
+        ("topic_headline", item.get("topic_headline_he"), 76),
+        ("topic_identification_context", item.get("topic_identification_context"), 72),
+    ]
+    if raw_text and len(raw_text) <= 120 and len(_hebrew_tokens(raw_text)) <= 10:
+        rows.insert(0, ("raw_short_heading", raw_text, 84))
+    for source, text, score in rows:
+        proposal = _topic_proposal_from_text(row=row, item=item, text=str(text or ""), evidence_text=evidence_text, source=source, base_score=score)
+        if proposal:
+            proposals.append(proposal)
+    return proposals
+
+
+def _local_marker_topic_proposals(*, row: dict[str, Any], item: dict[str, Any]) -> list[dict[str, Any]]:
+    # These are weak fallback proposals. They recover OCR carrier spans, but do not decide the topic alone.
+    proposals: list[dict[str, Any]] = []
+    evidence_text = _join_unique([item.get("unit_raw_text"), item.get("topic_headline_he"), item.get("topic_identification_context")])
+    for subject in [_local_hendon_subject(item), _best_explicit_topic_subject(item), _local_committee_protocol_subject(item)]:
+        base_score = 86 if subject else 66
+        proposal = _topic_proposal_from_text(row=row, item=item, text=str(subject or ""), evidence_text=evidence_text, source="weak_carrier_span", base_score=base_score)
+        if proposal:
+            proposals.append(proposal)
+    return proposals
+
+
+def _topic_proposal_from_text(*, row: dict[str, Any], item: dict[str, Any], text: str, evidence_text: str, source: str, base_score: float, root_topic_id: str | None = None, child_label: str | None = None) -> dict[str, Any] | None:
+    subject = _clean_structured_fallback_subject(text)
+    if not subject:
+        return None
+    preliminary_root = _proposal_root_topic_id(row=row, item=item, subject=subject, evidence_text=subject, root_topic_id=root_topic_id)
+    preliminary_root_label = root_label_for_id(preliminary_root) or ""
+    canonical_subject, canonical_reason = canonicalize_topic_label(subject, root_label_he=preliminary_root_label, evidence_text=evidence_text)
+    if canonical_subject:
+        subject = canonical_subject
+    elif is_low_quality_topic_label(subject):
+        return None
+    root_topic_id = _proposal_root_topic_id(row=row, item=item, subject=subject, evidence_text=evidence_text, root_topic_id=root_topic_id)
+    if root_topic_id not in ROOT_BY_ID or root_topic_id in {"root_agenda_queries", "root_order_proposals", "root_people_roles", "root_mayor_updates"}:
+        return None
+    root_label = root_label_for_id(root_topic_id) or ""
+    if not _tokens_supported(subject, evidence_text) and not _tokens_supported(subject, text):
+        return None
+    if source == "classifier_candidate_span" and _looks_like_carrier_contaminated_subject(subject):
+        base_score = max(60.0, float(base_score) - 14.0)
+    if source == "explicit_action_span" and item.get("unit_raw_text") and not _tokens_supported(subject, str(item.get("unit_raw_text") or "")):
+        base_score = max(66.0, float(base_score) - 8.0)
+    child = child_label or _arbitrated_child_label(row=row, item=item, root_topic_id=root_topic_id, subject=subject)
+    return {
+        "source": source,
+        "subject_he": subject,
+        "root_topic_id": root_topic_id,
+        "child_label_he": child,
+        "score": float(base_score),
+        "confidence": min(0.9, max(0.55, float(base_score) / 100.0)),
+        "quote": _compact(text or evidence_text),
+        "canonical_reason": canonical_reason,
+    }
+
+
+def _looks_like_carrier_contaminated_subject(subject: str) -> bool:
+    normalized = _norm(subject)
+    if not normalized:
+        return False
+    carrier_terms = {"סעיף", "שאילתה", "שאילתא", "הצעה", "פרוטוקול", "מצ ל"}
+    if any(term in normalized for term in carrier_terms):
+        return True
+    return _subject_noise_score(subject) >= 5
+
+
+def _proposal_root_topic_id(*, row: dict[str, Any], item: dict[str, Any], subject: str, evidence_text: str, root_topic_id: str | None) -> str:
+    excluded_roots = {"root_agenda_queries", "root_order_proposals", "root_people_roles", "root_mayor_updates"}
+    policy = topic_policy_matches(subject, limit=1)
+    if policy:
+        policy_root = str(policy[0].get("root_topic_id") or "")
+        if policy_root in ROOT_BY_ID and policy_root not in excluded_roots:
+            return policy_root
+    inferred = infer_root_topic_id(subject, allow_procedural_default=False)
+    if inferred in ROOT_BY_ID and inferred not in excluded_roots:
+        return inferred
+    if root_topic_id in ROOT_BY_ID and root_topic_id not in excluded_roots:
+        if root_topic_id != "root_geo" or _resolve_geo_fallback(subject=subject, municipality=None, enable_govmap_geo=False):
+            return str(root_topic_id)
+    candidate = _best_candidate_for_subject(item=item, subject=subject)
+    candidate_root = str((candidate or {}).get("root_topic_id") or "")
+    if candidate_root in ROOT_BY_ID and candidate_root not in excluded_roots:
+        if candidate_root != "root_geo" or _resolve_geo_fallback(subject=subject, municipality=None, enable_govmap_geo=False):
+            return candidate_root
+    inferred_from_evidence = infer_root_topic_id(_join_unique([subject, evidence_text]), allow_procedural_default=False)
+    if inferred_from_evidence in ROOT_BY_ID and inferred_from_evidence not in excluded_roots:
+        return inferred_from_evidence
+    row_root = str(row.get("root_topic_id") or "")
+    if row_root in ROOT_BY_ID and row_root not in excluded_roots:
+        return row_root
+    return inferred or inferred_from_evidence or row_root
+
+
+def _best_supported_candidate_span(*, text: str, candidate: dict[str, Any]) -> str | None:
+    text = _compact(text)
+    if not text:
+        return None
+    terms = _candidate_terms(candidate)
+    spans = _candidate_bounded_spans(text)
+    if not terms:
+        return spans[0] if spans else text[:220]
+    scored: list[tuple[int, int, str]] = []
+    for span in spans:
+        span_norm = _norm(span)
+        hits = sum(1 for term in terms if _norm(term) and _norm(term) in span_norm)
+        if hits <= 0:
+            continue
+        scored.append((hits, -abs(len(_hebrew_tokens(span)) - 6), span))
+    if scored:
+        scored.sort(reverse=True)
+        return scored[0][2]
+    text_norm = _norm(text)
+    if any(_norm(term) and _norm(term) in text_norm for term in terms):
+        return text[:220]
+    return None
+
+
+def _candidate_terms(candidate: dict[str, Any]) -> list[str]:
+    terms = [str(term) for term in candidate.get("matched_terms") or [] if str(term).strip()]
+    for key in ("child_label_he", "label_he", "description_he"):
+        value = str(candidate.get(key) or "").strip()
+        if value:
+            terms.append(value)
+    return _dedupe_strings(terms)
+
+
+def _candidate_bounded_spans(text: str) -> list[str]:
+    raw = _compact(text)
+    if not raw:
+        return []
+    quoted_spans = [match.group(1).strip(" '()[]-–:.,") for match in re.finditer(r"[\"׳״']([^\"׳״']{4,180})[\"׳״']", raw) if match.group(1).strip()]
+    spans = [part.strip(" '()[]-–:.,") for part in re.split(r"\s+(?:\d+(?:\.\d+)?\s*[.)]\s*)|[;\n]|\s+[–-]\s+", raw) if part.strip()]
+    spans = [*quoted_spans, *spans]
+    if not spans:
+        spans = [raw]
+    out: list[str] = []
+    for span in spans:
+        if len(_hebrew_tokens(span)) > 18:
+            pieces = [piece.strip(" '()[]-–:.,") for piece in re.split(r"[.]\s+|\s{2,}", span) if piece.strip()]
+            out.extend(piece for piece in pieces if len(_hebrew_tokens(piece)) >= 2)
+        elif len(_hebrew_tokens(span)) >= 2:
+            out.append(span)
+    return _dedupe_strings(out)[:16]
+
+
+def _dedupe_topic_proposals(*, proposals: list[dict[str, Any]], item: dict[str, Any], enable_govmap_geo: bool) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    municipality = str((item.get("document_context") or {}).get("municipality_he") or "") or None
+    for proposal in proposals:
+        subject = _clean_structured_fallback_subject(proposal.get("subject_he"))
+        root_topic_id = str(proposal.get("root_topic_id") or "")
+        if not subject or root_topic_id not in ROOT_BY_ID:
+            continue
+        if root_topic_id == "root_geo":
+            geo = _resolve_geo_fallback(subject=subject, municipality=municipality, enable_govmap_geo=enable_govmap_geo)
+            if not geo:
+                continue
+            proposal = {**proposal, "geo_resolution": geo, "child_label_he": str(geo.get("child_label_he") or proposal.get("child_label_he") or "כתובות ורחובות")}
+        key = (root_topic_id, _norm(subject), str(proposal.get("child_label_he") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({**proposal, "subject_he": subject, "root_topic_id": root_topic_id})
+    return out
+
+
+def _topic_proposal_should_replace(*, row: dict[str, Any], proposal: dict[str, Any]) -> bool:
+    score = float(proposal.get("score") or 0.0)
+    if score < 66:
+        return False
+    root_topic_id = str(row.get("root_topic_id") or "")
+    proposed_root = str(proposal.get("root_topic_id") or "")
+    current_subject = _compact(row.get("topic_subject_he"))
+    route = str(row.get("topic_assignment_route") or "")
+    if str(row.get("topic_node_status") or "") == "candidate" or str(row.get("topic_review_status") or "") == "needs_review":
+        return True
+    if row.get("is_topic_bearing") is not True or not current_subject:
+        return True
+    if root_topic_id in {"root_agenda_queries", "root_order_proposals", "root_people_roles", "root_mayor_updates"} and proposed_root not in {root_topic_id, "root_agenda_queries", "root_order_proposals"}:
+        return True
+    if "topic_subject_rejected" in route or "ambiguous" in route or "weak_candidate" in route:
+        return True
+    if is_low_quality_topic_label(current_subject):
+        return True
+    if str(proposal.get("source") or "") in {"classifier_candidate_span", "raw_short_heading", "item_topic_subject", "topic_headline", "weak_carrier_span"}:
+        headline = _norm(_join_unique([row.get("topic_headline_he"), row.get("topic_identification_context"), row.get("topic_supporting_quote_he")]))
+        proposed_subject = _norm(proposal.get("subject_he"))
+        if proposed_subject and proposed_subject in headline and _norm(current_subject) not in headline:
+            return True
+    if score >= 86 and proposed_root != root_topic_id and proposed_root not in {"root_geo", "root_people_roles"}:
+        return True
+    return False
+
+
+def _topic_proposal_overrides_evidence_only(proposal: dict[str, Any] | None) -> bool:
+    if not proposal:
+        return False
+    source = str(proposal.get("source") or "")
+    return source in {"v3_event_subject", "explicit_action_span", "topic_policy_span", "raw_short_heading", "item_topic_subject", "topic_headline", "weak_carrier_span"} and float(proposal.get("score") or 0.0) >= 76
+
+
+def _assignment_from_topic_proposal(*, row: dict[str, Any], item: dict[str, Any], proposal: dict[str, Any]) -> dict[str, Any]:
+    root_topic_id = str(proposal.get("root_topic_id") or "")
+    root_label = root_label_for_id(root_topic_id) or ""
+    subject = _clean_structured_fallback_subject(proposal.get("subject_he")) or ""
+    source = str(proposal.get("source") or "proposal")
+    if source == "classifier_candidate_span" and _looks_like_carrier_contaminated_subject(subject):
+        repaired_subject = _clean_structured_fallback_subject(_best_explicit_topic_subject(item))
+        repaired_root = _proposal_root_topic_id(row=row, item=item, subject=repaired_subject or "", evidence_text=_join_unique([repaired_subject, item.get("unit_raw_text"), item.get("topic_headline_he")]), root_topic_id=root_topic_id) if repaired_subject else ""
+        if repaired_subject and repaired_root == root_topic_id:
+            subject = repaired_subject
+            source = "classifier_candidate_span:clean_carrier_subject"
+    child_label = clean_topic_label(proposal.get("child_label_he")) if proposal.get("child_label_he") else _existing_child_label_for_subject(root_topic_id=root_topic_id, subject=subject)
+    status = _arbitrated_topic_status(row=row, item=item, subject=subject, child_label=child_label)
+    if proposal.get("geo_resolution") and str((proposal.get("geo_resolution") or {}).get("source") or "") != "govmap_search":
+        status = "candidate"
+    reject_reason = "non_blocking_topic_review:topic_arbitration:proposal_ambiguous" if status == "candidate" else None
+    assignment = _assignment_payload(
+        item=item,
+        root_topic_id=root_topic_id,
+        root_label=root_label,
+        child_label=child_label,
+        raw_child_label=child_label,
+        status=status,
+        reject_reason=reject_reason,
+        aliases=[],
+        confidence=float(proposal.get("confidence") or 0.7),
+        quote=str(proposal.get("quote") or item.get("unit_raw_text") or item.get("raw_text") or "")[:500],
+        route=f"deterministic_v4_topic_arbitration:{source}",
+        rationale_he="topic proposal arbitration selected the best grounded subject/root evidence",
+        parsed_contract={"is_topic_bearing": True, "topic_subject_he": subject, "clean_subject_he": subject},
+    )
+    assignment["topic_arbitration"] = {
+        "decision": "topic_proposal",
+        "source": source,
+        "subject_he": subject,
+        "root_topic_id": root_topic_id,
+        "score": proposal.get("score"),
+    }
+    if proposal.get("geo_resolution"):
+        assignment["geo_resolution"] = proposal.get("geo_resolution")
+    if proposal.get("v3_selection"):
+        assignment["v3_fallback_selection"] = proposal.get("v3_selection")
+    return assignment
+
+
+def _select_inherited_topic_context(*, row: dict[str, Any], item: dict[str, Any], items: list[dict[str, Any]], assignment_by_id: dict[str, dict[str, Any]], emitted_by_id: dict[str, dict[str, Any]], order_by_id: dict[str, int]) -> dict[str, Any] | None:
+    unit_id = str(item.get("structure_unit_id") or row.get("structure_unit_id") or "")
+    candidates: list[dict[str, Any]] = []
+    for parent_id in _inherited_context_parent_ids(item):
+        if parent_id == unit_id:
+            continue
+        context = _context_from_assignment_or_item(unit_id=parent_id, assignment_by_id=assignment_by_id, emitted_by_id=emitted_by_id, items=items, source="continuation_parent")
+        if context:
+            candidates.append(context)
+    current_index = order_by_id.get(unit_id, -1)
+    if current_index >= 0:
+        for offset in range(1, 5):
+            previous_index = current_index - offset
+            if previous_index < 0:
+                break
+            previous = items[previous_index]
+            if not _nearby_item_can_provide_context(current=item, candidate=previous):
+                continue
+            context = _context_from_assignment_or_item(unit_id=str(previous.get("structure_unit_id") or ""), assignment_by_id=assignment_by_id, emitted_by_id=emitted_by_id, items=items, source="nearby_previous_topic")
+            if context:
+                candidates.append(context)
+        current_text = _norm(item.get("unit_raw_text") or item.get("raw_text"))
+        current_page = item.get("source_page")
+        if current_text and len(current_text) >= 20 and current_page is not None:
+            for previous in reversed(items[:current_index]):
+                if previous.get("source_page") != current_page:
+                    continue
+                previous_text = _norm(previous.get("unit_raw_text") or previous.get("raw_text"))
+                if current_text not in previous_text:
+                    continue
+                context = _context_from_assignment_or_item(unit_id=str(previous.get("structure_unit_id") or ""), assignment_by_id=assignment_by_id, emitted_by_id=emitted_by_id, items=items, source="same_page_containing_row")
+                if context:
+                    candidates.append(context)
+                    break
+    explicit_context = _context_from_explicit_actions(item=item)
+    if explicit_context:
+        candidates.append(explicit_context)
+    if not candidates:
+        return None
+    candidates.sort(key=lambda context: float(context.get("score") or 0.0), reverse=True)
+    return candidates[0]
+
+
+def _inherited_context_parent_ids(item: dict[str, Any]) -> list[str]:
+    return _dedupe_strings([str(item.get("continuation_of_unit_id") or ""), str(item.get("parent_agenda_unit_id") or "")])
+
+
+def _context_from_assignment_or_item(*, unit_id: str, assignment_by_id: dict[str, dict[str, Any]], emitted_by_id: dict[str, dict[str, Any]], items: list[dict[str, Any]], source: str) -> dict[str, Any] | None:
+    if not unit_id:
+        return None
+    assignment = emitted_by_id.get(unit_id) or assignment_by_id.get(unit_id) or {}
+    item = next((candidate for candidate in items if str(candidate.get("structure_unit_id") or "") == unit_id), None)
+    candidates = [_context_from_assignment(assignment=assignment, source=source)]
+    if item:
+        candidates.extend([_context_from_explicit_actions(item=item), _context_from_item_subject(item=item, source=source)])
+    valid = [candidate for candidate in candidates if candidate]
+    if not valid:
+        return None
+    valid.sort(key=lambda context: float(context.get("score") or 0.0), reverse=True)
+    return valid[0]
+
+
+def _context_from_assignment(*, assignment: dict[str, Any], source: str) -> dict[str, Any] | None:
+    root_topic_id = str(assignment.get("root_topic_id") or "")
+    subject = _clean_structured_fallback_subject(assignment.get("topic_subject_he") or assignment.get("raw_topic_subject_he") or assignment.get("child_label_he"))
+    if root_topic_id not in ROOT_BY_ID or root_topic_id in {"root_agenda_queries", "root_order_proposals", "root_people_roles", "root_geo"}:
+        return None
+    if _assignment_has_mismatched_geo_child(assignment):
+        return None
+    if not subject or is_low_quality_topic_label(subject):
+        return None
+    return {
+        "source": source,
+        "source_unit_id": assignment.get("structure_unit_id"),
+        "root_topic_id": root_topic_id,
+        "subject_he": subject,
+        "child_label_he": assignment.get("child_label_he"),
+        "score": 86 if str(assignment.get("topic_node_status") or "") == "active" else 72,
+        "quote": assignment.get("topic_supporting_quote_he"),
+    }
+
+
+def _assignment_has_mismatched_geo_child(assignment: dict[str, Any]) -> bool:
+    root_topic_id = str(assignment.get("root_topic_id") or "")
+    child = _norm(assignment.get("child_label_he"))
+    if not child or root_topic_id == "root_geo":
+        return False
+    return child in {_norm("כתובות ורחובות"), _norm("כיכרות וצמתים"), _norm("שכונות ואזורים"), _norm("אתרים ומבני ציבור")}
+
+
+def _context_from_explicit_actions(*, item: dict[str, Any]) -> dict[str, Any] | None:
+    best: dict[str, Any] | None = None
+    for action in item.get("explicit_actions") or []:
+        text = _compact(action)
+        if not text:
+            continue
+        root_topic_id = infer_root_topic_id(text, allow_procedural_default=False)
+        policy = topic_policy_matches(text, limit=1)
+        if policy:
+            root_topic_id = str(policy[0].get("root_topic_id") or root_topic_id or "")
+        if root_topic_id not in ROOT_BY_ID or root_topic_id in {"root_agenda_queries", "root_order_proposals", "root_people_roles", "root_geo"}:
+            continue
+        root_label = root_label_for_id(root_topic_id) or ""
+        subject, _reason = canonicalize_topic_label(text, root_label_he=root_label, evidence_text=_join_unique([text, item.get("unit_raw_text")]))
+        subject = _clean_structured_fallback_subject(subject or text)
+        if not subject or is_low_quality_topic_label(subject):
+            continue
+        context = {
+            "source": "explicit_action_context",
+            "source_unit_id": item.get("structure_unit_id"),
+            "root_topic_id": root_topic_id,
+            "subject_he": subject,
+            "child_label_he": _existing_child_label_for_subject(root_topic_id=root_topic_id, subject=subject),
+            "score": 92,
+            "quote": text,
+        }
+        if best is None or float(context["score"]) > float(best.get("score") or 0.0):
+            best = context
+    return best
+
+
+def _context_from_item_subject(*, item: dict[str, Any], source: str) -> dict[str, Any] | None:
+    subject = _clean_structured_fallback_subject(item.get("topic_subject_he") or item.get("topic_headline_he") or item.get("topic_identification_context"))
+    if not subject or is_low_quality_topic_label(subject):
+        return None
+    root_topic_id = infer_root_topic_id(subject, allow_procedural_default=False)
+    if root_topic_id not in ROOT_BY_ID or root_topic_id in {"root_agenda_queries", "root_order_proposals", "root_people_roles", "root_geo"}:
+        return None
+    return {
+        "source": source,
+        "source_unit_id": item.get("structure_unit_id"),
+        "root_topic_id": root_topic_id,
+        "subject_he": subject,
+        "child_label_he": _existing_child_label_for_subject(root_topic_id=root_topic_id, subject=subject),
+        "score": 66,
+        "quote": item.get("unit_raw_text"),
+    }
+
+
+def _nearby_item_can_provide_context(*, current: dict[str, Any], candidate: dict[str, Any]) -> bool:
+    if current.get("source_window_id") and current.get("source_window_id") == candidate.get("source_window_id"):
+        return True
+    if current.get("section_id") and current.get("section_id") == candidate.get("section_id"):
+        return True
+    current_text = _norm(current.get("unit_raw_text") or current.get("raw_text"))
+    candidate_text = _norm(candidate.get("unit_raw_text") or candidate.get("raw_text"))
+    if current_text and candidate_text and len(current_text) >= 20:
+        # Visual/OCR rows often split a short detail row out of a longer transcript row.
+        # In that case the longer row is the safest available topic context.
+        return current_text in candidate_text
+    return False
+
+
+def _assignment_from_inherited_topic_context(*, row: dict[str, Any], item: dict[str, Any], context: dict[str, Any], reason: str) -> dict[str, Any]:
+    root_topic_id = str(context.get("root_topic_id") or "")
+    subject = _clean_structured_fallback_subject(context.get("subject_he")) or ""
+    child_label = clean_topic_label(context.get("child_label_he")) if context.get("child_label_he") else _existing_child_label_for_subject(root_topic_id=root_topic_id, subject=subject)
+    assignment = _assignment_payload(
+        item=item,
+        root_topic_id=root_topic_id,
+        root_label=root_label_for_id(root_topic_id) or "",
+        child_label=child_label,
+        raw_child_label=child_label,
+        status="active",
+        reject_reason=None,
+        aliases=[],
+        confidence=0.62,
+        quote=str(item.get("unit_raw_text") or item.get("raw_text") or context.get("quote") or "")[:500],
+        route=f"deterministic_v4_topic_arbitration:inherited_context:{context.get('source') or 'context'}",
+        rationale_he="dependent row inherited the closest grounded topic context instead of becoming topicless",
+        parsed_contract={"is_topic_bearing": True, "topic_subject_he": subject, "clean_subject_he": subject},
+    )
+    assignment["row_type"] = "inherited_topic_context"
+    assignment["topic_context_role"] = "dependent_detail"
+    assignment["inherited_topic_from_unit_id"] = context.get("source_unit_id")
+    assignment["topic_arbitration"] = {"decision": "inherited_context", "reason": reason, "source": context.get("source"), "subject_he": subject, "root_topic_id": root_topic_id}
+    return assignment
+
+
+def _local_topic_arbitration_assignment(*, row: dict[str, Any], item: dict[str, Any], enable_govmap_geo: bool) -> dict[str, Any] | None:
+    local_subject = _local_hendon_subject(item) or _best_explicit_topic_subject(item) or _local_committee_protocol_subject(item)
+    if not local_subject:
+        return None
+    subject = _clean_structured_fallback_subject(local_subject)
+    if not subject or is_low_quality_topic_label(subject):
+        return None
+    geo = _resolve_geo_fallback(subject=subject, municipality=str((item.get("document_context") or {}).get("municipality_he") or "") or None, enable_govmap_geo=enable_govmap_geo)
+    if geo:
+        assignment = _assignment_payload(
+            item=item,
+            root_topic_id="root_geo",
+            root_label=root_label_for_id("root_geo") or "מיקומים וגיאוגרפיה",
+            child_label=str(geo.get("child_label_he") or "כתובות ורחובות"),
+            raw_child_label=str(geo.get("child_label_he") or "כתובות ורחובות"),
+            status="active" if geo.get("source") == "govmap_search" and geo.get("confidence") == "high" else "candidate",
+            reject_reason=None if geo.get("source") == "govmap_search" and geo.get("confidence") == "high" else "non_blocking_topic_review:geo_fallback_unverified_location",
+            aliases=[],
+            confidence=0.76 if geo.get("source") == "govmap_search" and geo.get("confidence") == "high" else 0.58,
+            quote=str(item.get("unit_raw_text") or item.get("raw_text") or "")[:500],
+            route=f"deterministic_v4_topic_arbitration:local_subject:geo:{geo.get('source') or 'unknown'}",
+            rationale_he="local topic evidence selected over weaker topic-pipeline proposal",
+            parsed_contract={"is_topic_bearing": True, "topic_subject_he": subject, "clean_subject_he": subject},
+        )
+        assignment["geo_resolution"] = geo
+        assignment["topic_arbitration"] = {"decision": "local_geo_subject", "subject_he": subject, "source": "local_topic_marker"}
+        return assignment
+    root_topic_id = _arbitrated_root_topic_id(row=row, item=item, subject=subject)
+    if root_topic_id not in ROOT_BY_ID or root_topic_id in {"root_agenda_queries", "root_order_proposals"}:
+        return None
+    root_label = root_label_for_id(root_topic_id) or ""
+    child_label = _arbitrated_child_label(row=row, item=item, root_topic_id=root_topic_id, subject=subject)
+    status = _arbitrated_topic_status(row=row, item=item, subject=subject, child_label=child_label)
+    reject_reason = "non_blocking_topic_review:topic_arbitration:local_subject_ambiguous" if status == "candidate" else None
+    assignment = _assignment_payload(
+        item=item,
+        root_topic_id=root_topic_id,
+        root_label=root_label,
+        child_label=child_label,
+        raw_child_label=child_label,
+        status=status,
+        reject_reason=reject_reason,
+        aliases=[],
+        confidence=0.86 if status == "active" else 0.62,
+        quote=str(item.get("unit_raw_text") or item.get("raw_text") or "")[:500],
+        route="deterministic_v4_topic_arbitration:local_subject",
+        rationale_he="local agenda/title evidence selected over inherited or noisy context",
+        parsed_contract={"is_topic_bearing": True, "topic_subject_he": subject, "clean_subject_he": subject},
+    )
+    assignment["topic_arbitration"] = {"decision": "local_subject", "subject_he": subject, "root_topic_id": root_topic_id, "child_label_he": child_label}
+    return assignment
+
+
+def _best_explicit_topic_subject(item: dict[str, Any]) -> str | None:
+    text = _preclean_topic_marker_text(_join_unique([item.get("unit_raw_text"), item.get("topic_headline_he"), item.get("topic_identification_context")]))
+    if not _has_explicit_local_topic_marker(text):
+        return None
+    candidates: list[str] = []
+    for match in re.finditer(r"\bבנושא\b\s*[\"'׳״]?\s*(.{3,240})", text):
+        tail = match.group(1)
+        tail = re.split(r"\s+(?:גב[׳']?|גברת|מר|ד[\"”]?ר|עו[\"”]?ד)\b|\s+השאלה\b|\s+התשובה\b|\s+מצורפ|\s+מצ[\"׳״']?ל\b|[.;]\s", tail, maxsplit=1)[0]
+        candidate = _clean_structured_fallback_subject(tail)
+        if candidate and len(_hebrew_tokens(candidate)) >= 2:
+            candidates.append(candidate)
+    if not candidates:
+        return None
+    candidates = _dedupe_strings(candidates)
+    candidates.sort(key=lambda value: (_subject_noise_score(value), abs(len(_hebrew_tokens(value)) - 5), len(value)))
+    return candidates[0]
+
+
+def _preclean_topic_marker_text(value: Any) -> str:
+    text = _compact(value)
+    text = re.sub(r"\bבנו\s+[\"'׳״]?שא[\"'׳״]?\b", "בנושא", text)
+    # OCR often inserts a footnote number and a quote in the middle of the quoted subject.
+    text = re.sub(r"(?<=[\u0590-\u05FF])\s*\d{1,2}\s*[\"'׳״]+\s*(?=[\u0590-\u05FF])", " ", text)
+    text = text.replace("”", '"').replace("“", '"')
+    return _compact(text)
+
+
+def _subject_noise_score(value: str) -> int:
+    text = _compact(value)
+    score = 0
+    score += 8 if re.search(r"\b(?:גב[׳']?|גברת|מר|ד[\"”]?ר|עו[\"”]?ד)\b", text) else 0
+    score += 5 if any(term in text for term in ("השאלה", "התשובה", "מצורפ", "פרוטוקול")) else 0
+    score += 3 if len(_hebrew_tokens(text)) > 12 else 0
+    score += text.count('"') + text.count("׳") + text.count("״")
+    return score
+
+
+def _local_hendon_subject(item: dict[str, Any]) -> str | None:
+    raw = _preclean_topic_marker_text(item.get("unit_raw_text") or item.get("raw_text"))
+    match = re.search(r"^\s*:?\s*(?:הנדון|נידון|נדון)\s*[:'\"׳״\-–]?\s*(.{3,160})", raw)
+    if not match:
+        return None
+    subject = match.group(1)
+    if "להלן רשימת" in subject or "רשימת ההישגים" in subject:
+        return None
+    subject = re.split(r"[.;]\s|\s+להלן\b|\s+מצ[\"׳״']?ל\b", subject, maxsplit=1)[0]
+    return _clean_structured_fallback_subject(subject)
+
+
+def _local_committee_protocol_subject(item: dict[str, Any]) -> str | None:
+    raw = _preclean_topic_marker_text(item.get("unit_raw_text") or item.get("raw_text"))
+    match = re.search(r"(?:פרוטוקול\s+)?מישיבת\s+(ועדת\s+.{3,100}?)(?=\s+מס\b|\s+מיום\b|\s+מתאריך\b|\s+ד[\"”]?ר\b|\s+גב[׳']?\b|[.;–-]|$)", raw)
+    if not match:
+        return None
+    return _clean_structured_fallback_subject(match.group(1))
+
+
+def _arbitrated_root_topic_id(*, row: dict[str, Any], item: dict[str, Any], subject: str) -> str:
+    candidate = _best_candidate_for_subject(item=item, subject=subject)
+    if candidate and str(candidate.get("root_topic_id") or "") in ROOT_BY_ID:
+        return str(candidate.get("root_topic_id"))
+    inferred = infer_root_topic_id(subject, allow_procedural_default=False)
+    if inferred in ROOT_BY_ID and inferred not in {"root_agenda_queries", "root_order_proposals"}:
+        return inferred
+    row_root = str(row.get("root_topic_id") or "")
+    if row_root in ROOT_BY_ID and row_root not in {"root_agenda_queries", "root_order_proposals", "root_mayor_updates"}:
+        return row_root
+    return inferred or row_root
+
+
+def _arbitrated_child_label(*, row: dict[str, Any], item: dict[str, Any], root_topic_id: str, subject: str) -> str | None:
+    candidate = _best_candidate_for_subject(item=item, subject=subject, root_topic_id=root_topic_id)
+    child = clean_topic_label((candidate or {}).get("child_label_he")) if candidate else None
+    if child:
+        return child
+    return _existing_child_label_for_subject(root_topic_id=root_topic_id, subject=subject)
+
+
+def _best_candidate_for_subject(*, item: dict[str, Any], subject: str, root_topic_id: str | None = None) -> dict[str, Any] | None:
+    subject_norm = _norm(subject)
+    best: tuple[float, dict[str, Any]] | None = None
+    for candidate in item.get("root_topic_candidates") or []:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_root = str(candidate.get("root_topic_id") or "")
+        if candidate_root in {"root_agenda_queries", "root_order_proposals"}:
+            continue
+        if candidate_root == "root_people_roles" and not _resolve_people_role_fallback(subject):
+            continue
+        if root_topic_id and str(candidate.get("root_topic_id") or "") != root_topic_id:
+            continue
+        label = _norm(candidate.get("child_label_he") or "")
+        terms = _norm(" ".join(str(term) for term in candidate.get("matched_terms") or []))
+        overlap = len(set(_hebrew_tokens(subject_norm)) & set(_hebrew_tokens(" ".join([label, terms]))))
+        score = float(candidate.get("score") or 0.0) + overlap / 10.0
+        if label and (label in subject_norm or subject_norm in label):
+            score += 0.4
+        if overlap <= 0 and not (label and (label in subject_norm or subject_norm in label)):
+            continue
+        if best is None or score > best[0]:
+            best = (score, candidate)
+    return best[1] if best else None
+
+
+def _arbitrated_topic_status(*, row: dict[str, Any], item: dict[str, Any], subject: str, child_label: str | None) -> str:
+    if _resolve_geo_fallback(subject=subject, municipality=None, enable_govmap_geo=False):
+        return "candidate"
+    if _looks_like_multifacet_subject(subject):
+        return "candidate"
+    if child_label or infer_root_topic_id(subject, allow_procedural_default=False) in ROOT_BY_ID:
+        return "active"
+    return str(row.get("topic_node_status") or "candidate") if str(row.get("topic_node_status") or "") == "active" else "candidate"
+
+
+def _looks_like_multifacet_subject(subject: str) -> bool:
+    normalized = _norm(subject)
+    separators = subject.count(",") + subject.count(";") + subject.count("/")
+    facet_terms = sum(1 for term in ("פעילות", "עלויות", "מנוי", "הנחות", "זכאים") if term in normalized)
+    return separators >= 1 and facet_terms >= 3
+
+
+def _compound_child_subject_arbitration_assignment(*, row: dict[str, Any], item: dict[str, Any]) -> dict[str, Any] | None:
+    if row.get("is_topic_bearing") is not True:
+        return None
+    subject = _compact(row.get("topic_subject_he"))
+    if not subject or len(_hebrew_tokens(subject)) > 3:
+        return None
+    candidate = _best_candidate_for_subject(item=item, subject=_join_unique([subject, item.get("unit_raw_text"), item.get("topic_identification_context")]))
+    child = clean_topic_label((candidate or {}).get("child_label_he")) if candidate else None
+    root_topic_id = str((candidate or {}).get("root_topic_id") or row.get("root_topic_id") or "")
+    if not child or root_topic_id not in ROOT_BY_ID:
+        return None
+    if len(_hebrew_tokens(child)) < 2 or _norm(subject) == _norm(child):
+        return None
+    assignment = _assignment_payload(
+        item=item,
+        root_topic_id=root_topic_id,
+        root_label=root_label_for_id(root_topic_id) or "",
+        child_label=child,
+        raw_child_label=child,
+        status="active",
+        reject_reason=None,
+        aliases=[subject],
+        confidence=max(0.72, _confidence((candidate or {}).get("score"))),
+        quote=str(item.get("unit_raw_text") or item.get("raw_text") or "")[:500],
+        route="deterministic_v4_topic_arbitration:compound_child_subject",
+        rationale_he="existing child topic preserved a compound municipal subject that the subject cleaner over-compressed",
+        parsed_contract={"is_topic_bearing": True, "topic_subject_he": child, "clean_subject_he": child},
+    )
+    assignment["topic_arbitration"] = {"decision": "compound_child_subject", "previous_subject_he": subject, "subject_he": child}
+    return assignment
+
+
+def _evidence_only_arbitration_reason(*, row: dict[str, Any], item: dict[str, Any]) -> str | None:
+    raw = _compact(item.get("unit_raw_text") or item.get("raw_text") or row.get("topic_supporting_quote_he") or row.get("topic_identification_context"))
+    if not raw:
+        return None
+    normalized = _norm(raw)
+    role = str(item.get("structural_role") or row.get("structural_role") or "")
+    if role == "continuation" and ("להלן רשימת" in normalized or "רשימת ההישגים" in normalized):
+        return "attachment_or_list_heading"
+    if _has_explicit_local_topic_marker(raw) or _local_hendon_subject(item) or _local_committee_protocol_subject(item):
+        return None
+    if _looks_like_numeric_or_partial_evidence_fragment(row={**row, "topic_identification_context": raw}, subject=str(row.get("topic_subject_he") or ""), text=raw):
+        return "numeric_or_partial_evidence"
+    if re.search(r"\bולפיו\b.*(?:%|אחוז|עלות|סכום)", normalized) and not _has_bounded_substantive_topic_signal(raw):
+        return "amount_or_percentage_clause"
+    if "?" in raw and re.search(r"(?:ד[\"”]?ר|עו[\"”]?ד|אינג[׳']?|גב[׳']?)", raw) and not any(term in normalized for term in ("בנושא", "שאילתה", "הנדון")):
+        return "speaker_qa_dependent_detail"
+    if _looks_like_reply_attachment_tail(raw) and not _has_bounded_substantive_topic_signal(raw):
+        return "reply_attachment_dependent_detail"
+    if str(row.get("topic_node_status") or "") == "candidate" and row.get("is_topic_bearing") is False and re.match(r"^(?:\d|כ\s*\d|[%₪])", raw):
+        return "candidate_evidence_fragment"
+    return None
+
+
 def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label: str, child_label: str | None, raw_child_label: str | None, status: str, reject_reason: str | None, aliases: list[str], confidence: float, quote: str, route: str, rationale_he: str, parsed_contract: dict[str, Any] | None = None, root_adjudication: dict[str, Any] | None = None) -> dict[str, Any]:
     parsed_contract = parsed_contract or {}
     root_adjudication = root_adjudication or {}
@@ -2969,6 +4148,8 @@ def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label:
                     canonical_root_topic_id in ROOT_BY_ID
                     and canonical_root_topic_id not in {"root_agenda_queries", "root_order_proposals"}
                     and canonical_root_topic_id != root_topic_id
+                    and root_topic_id not in {"root_geo", "root_people_roles"}
+                    and "topic_arbitration:local_subject" not in route
                     and not root_adjudication.get("policy_id")
                     and not _has_valid_dicta_root_without_policy(root_adjudication)
                 ):
@@ -3020,6 +4201,7 @@ def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label:
         "structural_role": item.get("structural_role"),
         "section_id": item.get("section_id"),
         "section_number": item.get("section_number"),
+        "continuation_of_unit_id": item.get("continuation_of_unit_id"),
         "row_type": row_type,
         "skip_model_assignment": bool(item.get("skip_model_assignment")),
         "packet_role": str((item.get("document_context") or {}).get("packet_role") or ""),
@@ -3127,6 +4309,9 @@ def _repair_rejected_topic_subject(*, raw_subject: Any, item: dict[str, Any], ro
             item.get("topic_identification_context"),
             _generic_subject_prefix(raw_subject),
             _generic_subject_prefix(quote),
+            _generic_allocation_subject_compaction(raw_subject),
+            _generic_allocation_subject_compaction(item.get("topic_headline_he")),
+            _generic_allocation_subject_compaction(quote),
             *_generic_action_subject_candidates(raw_subject),
             *_generic_action_subject_candidates(item.get("topic_headline_he")),
             *_generic_action_subject_candidates(quote),
@@ -3147,7 +4332,7 @@ def _repair_rejected_topic_subject(*, raw_subject: Any, item: dict[str, Any], ro
             continue
         if _norm(cleaned) == _norm(root_label):
             continue
-        if not _tokens_supported(cleaned, evidence):
+        if not _tokens_supported(cleaned, evidence) and not _tokens_supported(str(candidate), evidence):
             continue
         return cleaned, f"subject_repaired:{reason or 'alternate_source'}"
     return None, None
@@ -3158,6 +4343,9 @@ def _generic_agreement_subject_compaction(value: Any, *, root_label: str) -> str
     normalized = _norm(_join_unique([root_label, text]))
     if not text or not any(term in normalized for term in ("הסכם", "התקשרות", "חוזה", "רשות שימוש")):
         return ""
+    qualified = _qualified_agreement_phrase(text)
+    if qualified:
+        return qualified
     if any(term in normalized for term in ("עמותה", "עמותת", "עמותות", "מלכ ר", "חל צ")):
         if any(term in normalized for term in ("גני ילדים", "גן ילדים", "בית ספר", "כיתות", "חינוך", "תורני")):
             return "הסכם רשות למוסדות חינוך"
@@ -3173,6 +4361,29 @@ def _generic_agreement_subject_compaction(value: Any, *, root_label: str) -> str
     return "אישור הסכם" if "אישור" in normalized or "לאשר" in normalized else "הסכם"
 
 
+def _qualified_agreement_phrase(value: Any) -> str:
+    text = _compact(value)
+    match = re.search(r"\b(?:אישור\s+)?(הסכם|התקשרות|חוזה)\s+([\w\u0590-\u05FF'\"׳״-]+(?:\s+[\w\u0590-\u05FF'\"׳״-]+){0,3})", text)
+    if not match:
+        return ""
+    phrase = _compact(match.group(0))
+    words = phrase.split()
+    if len(words) > 2:
+        kept = words[:2]
+        for word in words[2:]:
+            normalized_word = _norm(word)
+            if normalized_word in {"עד", "עכשיו", "לאחר", "לפני"} or (normalized_word.startswith("ו") and len(normalized_word) > 1):
+                break
+            kept.append(word)
+        phrase = _compact(" ".join(kept))
+    normalized = _norm(phrase)
+    if any(term in normalized for term in ("בין", "עם", "ללא", "פטור", "עיריית", "העירייה")):
+        return ""
+    if len(_hebrew_tokens(phrase)) < 2 or len(_hebrew_tokens(phrase)) > 5:
+        return ""
+    return phrase.strip(" '()[]-–:.,")
+
+
 def _generic_public_building_subject_compaction(value: Any) -> str:
     text = _compact(value)
     normalized = _norm(text)
@@ -3185,6 +4396,28 @@ def _generic_public_building_subject_compaction(value: Any) -> str:
     if district:
         return f"{prefix} {district.group(0)}"
     return prefix
+
+
+def _generic_allocation_subject_compaction(value: Any) -> str:
+    text = _compact(value)
+    normalized = _norm(text)
+    if not normalized or not any(term in normalized for term in ("הקצאה", "הקצאת", "הקצאות", "ועדת הקצאות")):
+        return ""
+    if not any(term in normalized for term in ("בית כנסת", "מרכז רוחני", "מוסד ציבור", "מבנה ציבור", "מקרקעין", "קרקע")):
+        return "הקצאה"
+    uses: list[str] = []
+    if "בית כנסת" in normalized:
+        uses.append("בית כנסת")
+    if "מרכז רוחני" in normalized:
+        uses.append("מרכז רוחני")
+    if not uses and "מוסד ציבור" in normalized:
+        uses.append("מוסד ציבור")
+    if not uses and "מבנה ציבור" in normalized:
+        uses.append("מבנה ציבור")
+    if uses:
+        prefix = "הקצאות ל" if "הקצאות" in normalized and "הקצאה" not in normalized else "הקצאה ל"
+        return prefix + " ו".join(uses)
+    return "הקצאת מקרקעין"
 
 
 def _generic_budget_subject_compaction(value: Any, *, root_label: str) -> str:
@@ -3277,9 +4510,10 @@ def _mark_inherited_duplicate_topic_rows(assignments: list[dict[str, Any]]) -> l
             parent = seen_section_root.get(section_root_key)
         if parent is not None:
             current["row_type"] = "inherited_topic_context"
-            current["is_topic_bearing"] = False
+            current["is_topic_bearing"] = True
             current["skip_model_assignment"] = True
             current["inherited_topic_from_unit_id"] = parent.get("structure_unit_id")
+            current["topic_context_role"] = "duplicate_or_dependent_detail"
             current["topic_assignment_route"] = f"{current.get('topic_assignment_route') or 'unknown'}:inherited_duplicate_topic"
             current["topic_reject_reason"] = current.get("topic_reject_reason") or "inherited_duplicate_topic_subject"
         elif key:
@@ -3316,6 +4550,8 @@ def _normalize_protocol_non_topic_assignments(assignments: list[dict[str, Any]])
 
 
 def _post_assignment_non_topic_reason(row: dict[str, Any]) -> str | None:
+    if str(row.get("row_type") or "") == "inherited_topic_context" or row.get("topic_context_role"):
+        return None
     if row.get("topic_provenance_reject_reason"):
         return str(row.get("topic_provenance_reject_reason"))
     rejected_subject_reason = _rejected_subject_non_topic_reason(row)
@@ -3374,6 +4610,8 @@ def _rejected_subject_has_supported_action(row: dict[str, Any]) -> bool:
 def _active_subject_non_topic_reason(row: dict[str, Any]) -> str | None:
     if str(row.get("topic_node_status") or "") != "active" or row.get("is_topic_bearing") is not True:
         return None
+    if "deterministic_v4_topic_arbitration:local_subject" in str(row.get("topic_assignment_route") or ""):
+        return None
     subject = _compact(row.get("topic_subject_he"))
     if not subject:
         return None
@@ -3381,7 +4619,13 @@ def _active_subject_non_topic_reason(row: dict[str, Any]) -> str | None:
     if root_topic_id not in ROOT_BY_ID or root_topic_id in {"root_agenda_queries", "root_order_proposals"}:
         return None
     text = _join_unique([subject, row.get("topic_headline_he"), row.get("topic_identification_context")])
+    if str(row.get("topic_assignment_route") or "").startswith("deterministic_v4_topic_arbitration") and _tokens_supported(subject, text):
+        return None
+    if row.get("topic_policy_matches") and _tokens_supported(subject, text):
+        return None
     normalized = _norm(text)
+    if _looks_like_numeric_or_partial_evidence_fragment(row=row, subject=subject, text=text):
+        return "active_numeric_or_partial_evidence_fragment"
     if _looks_like_dialogue_exchange_subject(subject=subject, text=text):
         return "active_conversational_subject"
     if _has_explicit_local_topic_marker(normalized) or _has_bounded_substantive_topic_signal(subject):
@@ -3389,6 +4633,24 @@ def _active_subject_non_topic_reason(row: dict[str, Any]) -> str | None:
     if _looks_like_active_conversational_subject(subject):
         return "active_conversational_subject"
     return None
+
+
+def _looks_like_numeric_or_partial_evidence_fragment(*, row: dict[str, Any], subject: str, text: str) -> bool:
+    if _has_explicit_local_topic_marker(text):
+        return False
+    raw = _compact(row.get("topic_identification_context") or row.get("topic_supporting_quote_he") or "")
+    if not raw:
+        return False
+    subject_tokens = _hebrew_tokens(subject)
+    if len(subject_tokens) > 8:
+        return False
+    normalized = _norm(raw)
+    numeric_or_amount_start = bool(re.match(r"^(?:סעיף\s*)?\d+(?:[.,]\d+)?|^כ\s*\d|^[%₪]", raw))
+    if numeric_or_amount_start and any(term in normalized for term in ("סכום", "שח", "₪", "אחוז", "עלות", "אירועים", "מתקשרים", "מבקשים", "תקציב", "חניות")):
+        return True
+    if "?" in raw and len(subject_tokens) <= 5 and not any(term in normalized for term in ("בנושא", "שאילתה", "הסכם", "אישור", "מינוי")):
+        return True
+    return False
 
 
 def _looks_like_dialogue_exchange_subject(*, subject: str, text: str) -> bool:
@@ -3703,6 +4965,10 @@ def _non_topic_protocol_reason(*, headline: str, raw_text: str, structural_role:
         return "empty_fragment"
     if _looks_like_container_heading(text):
         return "container_heading"
+    if _looks_like_ceremonial_notice_heading(text):
+        return "ceremonial_notice_heading"
+    if _looks_like_protocol_cover_metadata(text):
+        return "protocol_cover_metadata"
     if raw and raw != text and _looks_like_protocol_listing(raw):
         if not (_has_bounded_substantive_topic_signal(text) and _can_ignore_listing_for_bounded_subject(raw_text=raw, role=structural_role)):
             return "protocol_listing"
@@ -3902,6 +5168,34 @@ def _looks_like_protocol_metadata(text: str) -> bool:
     normalized = re.sub(r"נ:ושא", "נושא", normalized)
     hits = sum(1 for term in metadata_terms if term in normalized)
     return hits >= 2 or (hits >= 1 and len(_hebrew_tokens(compact)) <= 12)
+
+
+def _looks_like_protocol_cover_metadata(text: str) -> bool:
+    compact = _compact(text)
+    normalized = _norm(compact)
+    if not normalized or "פרוטוקול" not in normalized:
+        return False
+    if _has_bounded_substantive_topic_signal(compact):
+        return False
+    has_municipality = "עיריית" in normalized or "עיריה" in normalized or "עירייה" in normalized
+    has_serial = re.search(r"\b(?:מס|מספר)(?:\s*[/\d])?", normalized) is not None
+    has_date = "מתאריך" in normalized or "מיום" in normalized or re.search(r"\b\d{1,2}\.\d{1,2}\.\d{2,4}\b", compact)
+    return has_municipality and has_serial and (bool(has_date) or len(_hebrew_tokens(normalized)) <= 14)
+
+
+def _looks_like_ceremonial_notice_heading(text: str) -> bool:
+    compact = _clean_heading(text)
+    normalized = _norm(compact)
+    if not normalized:
+        return False
+    normalized = re.sub(r"^סעיף\s*\d+\s*:?\s*", "", normalized).strip(" :.-–")
+    if not normalized or _has_bounded_substantive_topic_signal(normalized):
+        return False
+    ceremonial_terms = {"ברכות", "הוקרות", "הודעות", "ברכה", "הוקרה", "הודעה"}
+    tokens = [token[1:] if token.startswith("ו") and token[1:] in ceremonial_terms else token for token in _hebrew_tokens(normalized) if token]
+    if not tokens:
+        return False
+    return set(tokens).issubset(ceremonial_terms) and any(token in ceremonial_terms for token in tokens)
 
 
 def _looks_like_container_heading(text: str) -> bool:
@@ -4139,6 +5433,16 @@ def _looks_like_reply_attachment_procedure_fragment(text: str) -> bool:
     if sum(1 for cue in attachment_cues if cue in normalized) < 2:
         return False
     return not _has_bounded_substantive_topic_signal(normalized)
+
+
+def _looks_like_reply_attachment_tail(text: str) -> bool:
+    normalized = _norm(text)
+    if not normalized:
+        return False
+    if not any(cue in normalized for cue in ("השאלה והתשובה מצורפות", "השאלה והתשובה מצורפת", "תשובה מצורפת לפרוטוקול", "תשובה מצורפות לפרוטוקול")):
+        return False
+    tail_cues = ("אני אשמח", "מחכים לו", "מצורפות לפרוטוקול", "מצורפת לפרוטוקול", "כנספח")
+    return sum(1 for cue in tail_cues if cue in normalized) >= 1
 
 
 def _looks_like_personal_topic_reference(text: str) -> bool:
@@ -4887,6 +6191,7 @@ def _document_context(*, input_pdf: str | None, packet_role: str, units: list[di
     return {
         "pdf_file_stem": file_stem,
         "packet_role": packet_role or "unknown",
+        "municipality_he": _municipality_from_units(units) if packet_role == "protocol" else None,
         "document_title_candidates": _title_candidates_from_filename(file_stem),
         "protocol_subject_he": protocol_subject or None,
         "protocol_subject_source": subject.get("source"),
@@ -4895,6 +6200,34 @@ def _document_context(*, input_pdf: str | None, packet_role: str, units: list[di
         "topic_carrier_mode": topic_carrier_mode,
         "explicit_actions": all_actions[:12],
     }
+
+
+def _municipality_from_units(units: list[dict[str, Any]]) -> str | None:
+    text = _compact(" ".join(str(unit.get("raw_text") or "") for unit in units[: min(len(units), 12)]))
+    if not text:
+        return None
+    patterns = (
+        r"עיריית\s+([\u0590-\u05FF][\u0590-\u05FF\s\-]{1,28})",
+        r"מועצה\s+מקומית\s+([\u0590-\u05FF][\u0590-\u05FF\s\-]{1,28})",
+        r"מועצה\s+אזורית\s+([\u0590-\u05FF][\u0590-\u05FF\s\-]{1,28})",
+    )
+    stop_words = {"לבין", "מחלקה", "מנהל", "בגוש", "רח", "רובע", "הנדסה", "גזבר"}
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        candidate = _compact(match.group(1)).strip(" '()[]-–:.,")
+        words = []
+        for word in candidate.split():
+            if word in stop_words:
+                break
+            words.append(word)
+            if len(words) >= 3:
+                break
+        value = _compact(" ".join(words))
+        if value:
+            return value
+    return None
 
 
 def _protocol_subject_from_title_or_first_pages(*, file_stem: str, units: list[dict[str, Any]]) -> dict[str, Any]:
@@ -5538,17 +6871,56 @@ def _topic_subject_v3_hint_from_row(row: dict[str, Any]) -> dict[str, Any] | Non
     quote = _compact(matter_assessment.get("source_quote_he") or action_assessment.get("source_quote_he") or row.get("raw_text_he") or row.get("anchor_source_text_he"))
     if not matter and not action:
         return None
+    event_candidates = _topic_subject_v3_event_candidates(payload)
+    artifact_id = str(row.get("artifact_id") or event.get("artifact_id") or "")
+    source_unit_id = str(row.get("source_structure_unit_id") or first_source_row.get("source_structure_unit_id") or first_source_row.get("structure_unit_id") or "")
+    if not source_unit_id:
+        match = re.search(r"(s\d{4}_\d{2}_[0-9a-f]{12})", artifact_id)
+        source_unit_id = match.group(1) if match else ""
     return {
         "source": "topic_subject_v3",
+        "artifact_id": artifact_id or None,
+        "source_structure_unit_id": source_unit_id or None,
         "matter_he": matter or None,
         "action_type_he": action or None,
         "event_phase": _compact(payload.get("event_phase")) or None,
         "source_quote_he": quote[:300] or None,
+        "selected_candidate_id": _compact(payload.get("selected_candidate_id")) or None,
+        "event_candidates": event_candidates,
         "quality_status": quality,
         "row_role": row_role,
         "event_role": event_role,
         "entailment_status": "entailed",
     }
+
+
+def _topic_subject_v3_event_candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates = payload.get("event_candidates") if isinstance(payload.get("event_candidates"), list) else []
+    out: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("is_event") is False:
+            continue
+        matter = _compact(candidate.get("matter_he"))
+        action = _compact(candidate.get("action_type_he"))
+        if not matter and not action:
+            continue
+        out.append(
+            {
+                "candidate_id": _compact(candidate.get("candidate_id")) or None,
+                "matter_he": matter or None,
+                "action_type_he": action or None,
+                "action_quote_he": _compact(candidate.get("action_quote_he"))[:300] or None,
+                "matter_quote_he": _compact(candidate.get("matter_quote_he"))[:300] or None,
+                "phase_quote_he": _compact(candidate.get("phase_quote_he"))[:300] or None,
+                "decision_quote_he": _compact(candidate.get("decision_quote_he"))[:300] or None,
+                "is_current_action": bool(candidate.get("is_current_action")),
+                "is_title_only": bool(candidate.get("is_title_only")),
+                "confidence": _optional_confidence(candidate.get("confidence")),
+            }
+        )
+    return out[:5]
 
 
 def _topic_subject_v3_hint_keys(*, row: dict[str, Any]) -> list[str]:

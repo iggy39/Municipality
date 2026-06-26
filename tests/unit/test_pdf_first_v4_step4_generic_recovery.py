@@ -36,6 +36,125 @@ def test_noisy_query_carrier_extracts_semantic_subject() -> None:
     assert "העמדת לוח מודעות" in contract["topic_subject_he"]
 
 
+def test_substantive_fragment_gets_model_review() -> None:
+    item = {
+        "row_type": "fragment",
+        "document_context": {"packet_role": "protocol"},
+        "topic_identification_context": "סעיף20 : הצעת הגזברות לעדכון בצו הארנונה לשנת2024 הוספת תת סיווג חדש",
+        "topic_headline_he": "",
+        "raw_text": "סעיף20 : הצעת הגזברות לעדכון בצו הארנונה לשנת2024 הוספת תת סיווג חדש",
+    }
+
+    assert step4._fragment_should_get_model_review(item=item, row_type="fragment", packet_role="protocol") is True
+
+
+def test_numeric_evidence_fragment_is_not_active_topic() -> None:
+    row = {
+        "topic_subject_he": "עזרה משטרתית",
+        "topic_identification_context": "100 .ומבקשים את עזרת המשטרה, שזה מספר משמעותי מאוד",
+    }
+
+    assert step4._looks_like_numeric_or_partial_evidence_fragment(
+        row=row,
+        subject="עזרה משטרתית",
+        text="עזרה משטרתית 100 .ומבקשים את עזרת המשטרה",
+    ) is True
+
+
+def _structured_fallback_item(text: str, *, topic_subject: str | None = None, hints: list[dict] | None = None) -> dict:
+    return {
+        "structure_unit_id": "s0001_01_aaaaaaaaaaaa",
+        "semantic_unit_id": "s0001_01_aaaaaaaaaaaa",
+        "source_window_id": "w1",
+        "source_region_ids": [],
+        "source_block_ids": [],
+        "source_page": 1,
+        "structural_role": "body",
+        "row_type": "topic_item",
+        "skip_model_assignment": False,
+        "section_id": "section-a",
+        "section_number": None,
+        "topic_identification_context": text,
+        "topic_headline_he": text,
+        "topic_subject_he": topic_subject,
+        "agenda_carrier_he": None,
+        "attribution_he": None,
+        "is_topic_bearing": bool(topic_subject),
+        "agenda_item_title_he": None,
+        "parent_agenda_unit_id": None,
+        "topic_context_source": None,
+        "topic_headline_source": "test",
+        "topic_provenance_reject_reason": None,
+        "topic_anchor_quote_he": None,
+        "protocol_subject_he": None,
+        "topic_carrier_mode": "headline_topics",
+        "unit_raw_text": text,
+        "raw_text": text,
+        "document_context": {"packet_role": "protocol", "municipality_he": "אשדוד"},
+        "topic_subject_v3_hints": hints or [],
+        "deterministic_topic_decision": {},
+        "root_topic_candidates": [],
+    }
+
+
+def test_geo_fallback_routes_place_only_query_to_geo_candidate() -> None:
+    text = 'שאילתה של ד"ר לחמני בנושא "כיכר רמון בעיר ודרך מנחם בגין"'
+    item = _structured_fallback_item(text)
+    row = {"structure_unit_id": item["structure_unit_id"], "root_topic_id": "root_agenda_queries", "topic_subject_he": None, "topic_node_status": "active", "is_topic_bearing": False, "topic_assignment_route": "deterministic_v4_row_type:fragment"}
+
+    assignment = step4._structured_fallback_assignment(row=row, item=item, enable_govmap_geo=False)
+
+    assert assignment is not None
+    assert assignment["root_topic_id"] == "root_geo"
+    assert assignment["child_label_he"] == "כיכרות וצמתים"
+    assert assignment["topic_subject_he"] == "כיכר רמון בעיר ודרך מנחם בגין"
+    assert assignment["topic_node_status"] == "candidate"
+    assert assignment["geo_resolution"]["source"] == "local_geo_pattern"
+
+
+def test_geo_fallback_does_not_steal_action_topic() -> None:
+    assert step4._resolve_geo_fallback(
+        subject="הקמת חניון מוניציפלי חכם בסמוך לתחנת רכבת",
+        municipality="אשדוד",
+        enable_govmap_geo=False,
+    ) is None
+
+
+def test_people_role_fallback_routes_role_only_subject() -> None:
+    item = _structured_fallback_item('שאילתה בנושא "ראש העיר"', topic_subject="ראש העיר")
+    row = {"structure_unit_id": item["structure_unit_id"], "root_topic_id": "root_agenda_queries", "topic_subject_he": "ראש העיר", "topic_node_status": "candidate", "is_topic_bearing": True, "topic_assignment_route": "deterministic_v4_candidate_review:weak_candidate"}
+
+    assignment = step4._structured_fallback_assignment(row=row, item=item, enable_govmap_geo=False)
+
+    assert assignment is not None
+    assert assignment["root_topic_id"] == "root_people_roles"
+    assert assignment["child_label_he"] == "נבחרי ציבור ובעלי תפקידים"
+    assert assignment["topic_node_status"] == "candidate"
+
+
+def test_v3_fallback_maps_single_entailed_hint_through_topic_tree() -> None:
+    hint = {
+        "source": "topic_subject_v3",
+        "source_structure_unit_id": "s0001_01_aaaaaaaaaaaa",
+        "matter_he": "מועצה דתית",
+        "action_type_he": "מינוי",
+        "source_quote_he": "שאילתא בנושא מינוי מועצה דתית",
+        "quality_status": "accepted",
+        "row_role": "action_anchor",
+        "event_role": "primary",
+        "entailment_status": "entailed",
+    }
+    item = _structured_fallback_item("שאילתא בנושא מינוי מועצה דתית", hints=[hint])
+    row = {"structure_unit_id": item["structure_unit_id"], "root_topic_id": "root_agenda_queries", "topic_subject_he": None, "topic_node_status": "active", "is_topic_bearing": False, "topic_assignment_route": "deterministic_v4_row_type:fragment"}
+
+    assignment = step4._structured_fallback_assignment(row=row, item=item, enable_govmap_geo=False)
+
+    assert assignment is not None
+    assert assignment["root_topic_id"] == "root_religious_services"
+    assert assignment["topic_subject_he"] == "מועצה דתית"
+    assert assignment["v3_fallback_selection"]["status"] == "selected"
+
+
 def test_order_proposal_discussion_subject_is_trimmed() -> None:
     contract = step4._topic_contract_from_headline(
         "הצעה לסדר שעסקה בנושא המיגון. וביקשנו לקיים דיון נוסף בוועדת החירום",
@@ -861,6 +980,94 @@ def test_prompt_schema_converts_to_ollama_json_schema() -> None:
     assert schema["type"] == "object"
     assert schema["properties"]["status"]["enum"] == ["accepted", "needs_review", "rejected"]
     assert schema["properties"]["items"]["items"]["properties"]["enabled"]["type"] == ["boolean", "null"]
+
+
+def test_ceremonial_notice_heading_is_non_topic() -> None:
+    reason = step4._non_topic_protocol_reason(
+        headline="סעיף2 : ברכות,הוקרות והודעות",
+        raw_text="סעיף2 : ברכות,הוקרות והודעות",
+        structural_role="outline_item",
+        packet_role="protocol",
+    )
+
+    assert reason == "ceremonial_notice_heading"
+
+
+def test_protocol_cover_metadata_is_non_topic() -> None:
+    reason = step4._non_topic_protocol_reason(
+        headline="פרוטוקול הו ו עדה המקצועית עיריית אשדוד מספר15 / 2022 מתאריך22.11.2022",
+        raw_text="פרוטוקול הו ו עדה המקצועית עיריית אשדוד מספר15 / 2022 מתאריך22.11.2022",
+        structural_role="outline_item",
+        packet_role="protocol",
+    )
+
+    assert reason == "protocol_cover_metadata"
+
+
+def test_reply_attachment_tail_is_inheritable_evidence() -> None:
+    item = {
+        "unit_raw_text": "ג ב' מרק .: אני אשמח שההורים ידעו .השאלה והתשובה מצורפות לפרוטוקול זה כנספח",
+        "structural_role": "outline_item",
+    }
+    row = {"topic_subject_he": None, "topic_node_status": "candidate", "is_topic_bearing": False}
+
+    assert step4._evidence_only_arbitration_reason(row=row, item=item) == "reply_attachment_dependent_detail"
+
+
+def test_nearby_contained_visual_split_can_inherit_context() -> None:
+    current = {"unit_raw_text": "המתנ\"ס. שתושבי רובע ט\"ו מחכים לו כל כך הרבה שנים", "source_window_id": "visual_page_6"}
+    candidate = {"unit_raw_text": "שאילתה בנושא אי בניית מבני ציבור ומתנ\"סים. המתנ\"ס. שתושבי רובע ט\"ו מחכים לו כל כך הרבה שנים", "source_window_id": "p6_w16"}
+
+    assert step4._nearby_item_can_provide_context(current=current, candidate=candidate) is True
+
+
+def test_inherited_context_ignores_self_parent_id() -> None:
+    previous = {
+        "structure_unit_id": "parent",
+        "unit_raw_text": "דיון בנושא החזר תשלומי הורים. אני אשמח שההורים ידעו",
+        "source_window_id": "p11_w23",
+    }
+    current = {
+        "structure_unit_id": "child",
+        "unit_raw_text": "אני אשמח שההורים ידעו",
+        "source_window_id": "visual_page_11",
+        "parent_agenda_unit_id": "child",
+    }
+    assignments = {
+        "parent": {"structure_unit_id": "parent", "root_topic_id": "root_education", "topic_subject_he": "החזר תשלומי הורים", "topic_node_status": "active"},
+        "child": {"structure_unit_id": "child", "root_topic_id": "root_education", "topic_subject_he": "אני אשמח שההורים ידעו", "topic_node_status": "candidate"},
+    }
+
+    context = step4._select_inherited_topic_context(
+        row=assignments["child"],
+        item=current,
+        items=[previous, current],
+        assignment_by_id=assignments,
+        emitted_by_id={},
+        order_by_id={"parent": 0, "child": 1},
+    )
+
+    assert context["source_unit_id"] == "parent"
+    assert context["subject_he"] == "החזר תשלומי הורים"
+
+
+def test_allocation_repair_keeps_public_use_subject() -> None:
+    raw = "ביטול החלטת ועדת הקצאות עבור הקמה של בית כנסת -ומרכז רוחני של עמותת הדור הרביעי רובע יג"
+    item = {
+        "topic_headline_he": raw,
+        "topic_identification_context": raw,
+        "raw_text": raw,
+    }
+
+    repaired, reason = step4._repair_rejected_topic_subject(
+        raw_subject=raw,
+        item=item,
+        root_label="הקצאות ושימושים",
+        quote=raw,
+    )
+
+    assert repaired == "הקצאה לבית כנסת ומרכז רוחני"
+    assert reason is not None
 
 
 def test_model_error_fallback_can_be_active_with_strong_deterministic_policy() -> None:

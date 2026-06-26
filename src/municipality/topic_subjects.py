@@ -508,6 +508,16 @@ APPROVAL_DECISION_QUOTE_CUES = (
     "התקבלה",
 )
 
+REJECTION_DECISION_CUES = (
+    "נדחה",
+    "נדחתה",
+    "לא אושר",
+    "לא אושרה",
+    "לא מאשרים",
+    "דחו את",
+    "דחתה את",
+)
+
 FORMAL_DECISION_MARKER_CUES = (
     "החלטה",
     "החליטה",
@@ -3114,28 +3124,157 @@ def run_topic_subject_v3_research(
     return result
 
 
-def build_topic_subject_v3_event_contexts(*, artifacts: list[TopicDecisionArtifact], max_context_rows: int = 5) -> list[TopicSubjectV3EventContext]:
+def build_topic_subject_v3_event_contexts(
+    *,
+    artifacts: list[TopicDecisionArtifact],
+    max_context_rows: int = 5,
+    context_artifacts: list[TopicDecisionArtifact] | None = None,
+) -> list[TopicSubjectV3EventContext]:
     contexts: list[TopicSubjectV3EventContext] = []
-    artifacts_by_docver: dict[int, list[TopicDecisionArtifact]] = {}
+    context_artifacts = context_artifacts or artifacts
+    window_artifacts_by_docver: dict[int, list[TopicDecisionArtifact]] = {}
+    context_artifacts_by_docver: dict[int, list[TopicDecisionArtifact]] = {}
     for artifact in artifacts:
-        artifacts_by_docver.setdefault(artifact.source_document_version_id, []).append(artifact)
+        window_artifacts_by_docver.setdefault(artifact.source_document_version_id, []).append(artifact)
+    for artifact in context_artifacts:
+        context_artifacts_by_docver.setdefault(artifact.source_document_version_id, []).append(artifact)
     width = max(1, int(max_context_rows or 5))
     before_count = min(2, max(0, width - 1))
     after_count = max(0, width - before_count - 1)
-    for doc_artifacts in artifacts_by_docver.values():
+    target_artifacts = sorted(artifacts, key=lambda item: (item.source_document_version_id, item.source_ordinal, item.artifact_id))
+    for artifact in target_artifacts:
+        doc_artifacts = list(window_artifacts_by_docver.get(artifact.source_document_version_id, []))
+        if not any(item.artifact_id == artifact.artifact_id for item in doc_artifacts):
+            doc_artifacts.append(artifact)
         doc_artifacts.sort(key=lambda item: (item.source_ordinal, item.artifact_id))
-        for index, artifact in enumerate(doc_artifacts):
-            start = max(0, index - before_count)
-            end = min(len(doc_artifacts), index + after_count + 1)
-            rows = doc_artifacts[start:end]
-            contexts.append(
-                TopicSubjectV3EventContext(
-                    context_id=topic_subject_v3_context_id(artifact=artifact, rows=rows),
-                    target_artifact=artifact,
-                    rows=rows,
-                )
+        index = next((idx for idx, item in enumerate(doc_artifacts) if item.artifact_id == artifact.artifact_id), None)
+        if index is None:
+            continue
+        start = max(0, index - before_count)
+        end = min(len(doc_artifacts), index + after_count + 1)
+        rows_by_id = {row.artifact_id: row for row in doc_artifacts[start:end]}
+        linked_inventory = list(context_artifacts_by_docver.get(artifact.source_document_version_id, doc_artifacts))
+        for linked in topic_subject_v3_structurally_linked_context_artifacts(
+            artifact=artifact,
+            doc_artifacts=linked_inventory,
+            ordinal_radius=max(width, 3),
+        ):
+            rows_by_id.setdefault(linked.artifact_id, linked)
+        for neighbor in topic_subject_v3_attached_neighbor_artifacts(artifact):
+            rows_by_id.setdefault(neighbor.artifact_id, neighbor)
+        rows = sorted(rows_by_id.values(), key=lambda item: (item.source_ordinal, item.artifact_id))
+        contexts.append(
+            TopicSubjectV3EventContext(
+                context_id=topic_subject_v3_context_id(artifact=artifact, rows=rows),
+                target_artifact=artifact,
+                rows=rows,
             )
+        )
     return contexts
+
+
+def topic_subject_v3_structurally_linked_context_artifacts(*, artifact: TopicDecisionArtifact, doc_artifacts: list[TopicDecisionArtifact], ordinal_radius: int) -> list[TopicDecisionArtifact]:
+    target_keys = topic_subject_v3_context_link_keys(artifact)
+    if not any(target_keys.values()):
+        return []
+    linked: list[TopicDecisionArtifact] = []
+    radius = max(1, int(ordinal_radius or 1))
+    for candidate in doc_artifacts:
+        if candidate.artifact_id == artifact.artifact_id:
+            continue
+        if abs(int(candidate.source_ordinal) - int(artifact.source_ordinal)) > radius:
+            continue
+        candidate_keys = topic_subject_v3_context_link_keys(candidate)
+        same_section = bool(target_keys.get("section_id") and target_keys.get("section_id") == candidate_keys.get("section_id"))
+        continuation_link = bool(
+            (target_keys.get("structure_unit_id") and target_keys.get("structure_unit_id") == candidate_keys.get("continuation_of_unit_id"))
+            or (candidate_keys.get("structure_unit_id") and candidate_keys.get("structure_unit_id") == target_keys.get("continuation_of_unit_id"))
+        )
+        parent_link = bool(
+            (target_keys.get("structure_unit_id") and target_keys.get("structure_unit_id") == candidate_keys.get("parent_agenda_unit_id"))
+            or (candidate_keys.get("structure_unit_id") and candidate_keys.get("structure_unit_id") == target_keys.get("parent_agenda_unit_id"))
+            or (target_keys.get("parent_agenda_unit_id") and target_keys.get("parent_agenda_unit_id") == candidate_keys.get("parent_agenda_unit_id"))
+        )
+        if same_section or continuation_link or parent_link:
+            linked.append(candidate)
+    return linked
+
+
+def topic_subject_v3_context_link_keys(artifact: TopicDecisionArtifact) -> dict[str, str]:
+    artifact_metadata = topic_subject_v3_artifact_metadata(artifact)
+    structure_metadata = topic_subject_v3_structure_metadata(artifact)
+    step4_item = artifact_metadata.get("step4_item") if isinstance(artifact_metadata.get("step4_item"), dict) else {}
+    return {
+        "structure_unit_id": compact_text(structure_metadata.get("structure_unit_id") or step4_item.get("structure_unit_id")),
+        "semantic_unit_id": compact_text(structure_metadata.get("semantic_unit_id") or step4_item.get("semantic_unit_id")),
+        "section_id": compact_text(structure_metadata.get("section_id") or step4_item.get("section_id")),
+        "continuation_of_unit_id": compact_text(structure_metadata.get("continuation_of_unit_id") or step4_item.get("continuation_of_unit_id")),
+        "parent_agenda_unit_id": compact_text(structure_metadata.get("parent_agenda_unit_id") or step4_item.get("parent_agenda_unit_id")),
+    }
+
+
+def topic_subject_v3_attached_neighbor_artifacts(artifact: TopicDecisionArtifact) -> list[TopicDecisionArtifact]:
+    """Convert raw DB neighbor rows into V3 context rows without making them targets."""
+    neighbors: list[TopicDecisionArtifact] = []
+    for index, context in enumerate(artifact.neighbor_contexts or [], start=1):
+        if not isinstance(context, dict):
+            continue
+        raw_text = compact_text(context.get("raw_text") or context.get("decision_context_text"))
+        if not raw_text:
+            continue
+        artifact_id = compact_text(context.get("artifact_id")) or f"{artifact.artifact_id}:neighbor:{index}"
+        if artifact_id == artifact.artifact_id:
+            continue
+        ordinal = topic_subject_v3_neighbor_ordinal(context=context, fallback=artifact.source_ordinal)
+        page_span = context.get("page_span") if isinstance(context.get("page_span"), dict) else {}
+        neighbors.append(
+            TopicDecisionArtifact(
+                artifact_id=artifact_id,
+                semantic_node_id=artifact.semantic_node_id,
+                topic_label_he=compact_text(context.get("relation")) or artifact.topic_label_he,
+                root_topic_id=artifact.root_topic_id,
+                root_label_he=artifact.root_label_he,
+                child_topic_id=artifact.child_topic_id,
+                child_label_he=artifact.child_label_he,
+                source_kind=f"{artifact.source_kind}_neighbor",
+                source_document_id=artifact.source_document_id,
+                source_document_version_id=artifact.source_document_version_id,
+                source_ordinal=ordinal,
+                source_title=artifact.source_title,
+                source_url=artifact.source_url,
+                artifact_kind="neighbor_protocol_row",
+                start_page=topic_subject_v3_neighbor_page(page_span.get("start")),
+                end_page=topic_subject_v3_neighbor_page(page_span.get("end")),
+                header_path=[str(value) for value in context.get("header_path") or [] if str(value).strip()],
+                real_text=raw_text,
+                retrieval_text=raw_text,
+                topic_confidence=artifact.topic_confidence,
+                existing_decision_candidate_id=None,
+                metadata={
+                    "artifact_metadata": {
+                        "neighbor_relation": context.get("relation"),
+                        "raw_neighbor_context": context,
+                    },
+                    "link_metadata": {"neighbor_context_only": True},
+                },
+            )
+        )
+    return neighbors
+
+
+def topic_subject_v3_neighbor_ordinal(*, context: dict[str, Any], fallback: int) -> int:
+    try:
+        return int(context.get("ordinal"))
+    except (TypeError, ValueError):
+        return int(fallback)
+
+
+def topic_subject_v3_neighbor_page(value: Any) -> int | None:
+    try:
+        page = int(value)
+    except (TypeError, ValueError):
+        return None
+    return page if page > 0 else None
 
 
 def topic_subject_v3_context_id(*, artifact: TopicDecisionArtifact, rows: list[TopicDecisionArtifact]) -> str:
@@ -3285,6 +3424,13 @@ def process_topic_subject_v3_context(
                 event_payload=event_payload,
                 repair_payload=reconsidered,
             ),
+            context=context,
+            action_confidence_threshold=config.action_confidence_threshold,
+        )
+    linked_outcome_repair = topic_subject_v3_repair_linked_decision_outcome_locally(context=context, event_payload=event_payload)
+    if linked_outcome_repair is not event_payload:
+        event_payload = normalize_topic_subject_v3_event_payload(
+            payload=linked_outcome_repair,
             context=context,
             action_confidence_threshold=config.action_confidence_threshold,
         )
@@ -3709,6 +3855,7 @@ def normalize_topic_subject_v3_event_payload(
         "v3_outcome_quote_repair": raw.get("v3_outcome_quote_repair") if isinstance(raw.get("v3_outcome_quote_repair"), dict) else None,
         "v3_evidence_entailment": raw.get("v3_evidence_entailment") if isinstance(raw.get("v3_evidence_entailment"), dict) else None,
         "v3_formal_decision_repair": raw.get("v3_formal_decision_repair") if isinstance(raw.get("v3_formal_decision_repair"), dict) else None,
+        "v3_linked_outcome_local_repair": raw.get("v3_linked_outcome_local_repair") if isinstance(raw.get("v3_linked_outcome_local_repair"), dict) else None,
         "raw_model_payload": compact_payload_for_prompt(payload),
     }
     return repair_topic_subject_v3_request_outcome_payload(context=context, event_payload=normalized)
@@ -3894,6 +4041,133 @@ def merge_topic_subject_v3_non_event_reconsideration(*, event_payload: dict[str,
     metadata["repair_applied"] = True
     repaired["v3_non_event_reconsideration"] = metadata
     return repaired
+
+
+def topic_subject_v3_repair_linked_decision_outcome_locally(*, context: TopicSubjectV3EventContext, event_payload: dict[str, Any]) -> dict[str, Any]:
+    if not bool(event_payload.get("is_event")) or bool(event_payload.get("outcome_is_decision")):
+        return event_payload
+    evidence = topic_subject_v3_best_linked_decision_outcome(context=context, event_payload=event_payload)
+    if evidence is None:
+        return event_payload
+    repaired = dict(event_payload)
+    outcome_type = evidence["outcome_type"]
+    action_type = compact_text(repaired.get("action_type_he"))
+    if outcome_type == "approved" and action_type in {"", "אחר", "בקשה", "התקשרות", "דיון"}:
+        repaired["action_type_he"] = "אישור"
+        repaired["other_action_type_he"] = ""
+        repaired["action_type_confidence"] = max(clamp_float(repaired.get("action_type_confidence"), default=0.0), 0.88)
+        repaired["action_type_status"] = "repaired_approval_from_linked_result_row"
+    elif outcome_type == "rejected" and action_type in {"", "אחר", "בקשה", "דיון"}:
+        repaired["action_type_he"] = "דחייה"
+        repaired["other_action_type_he"] = ""
+        repaired["action_type_confidence"] = max(clamp_float(repaired.get("action_type_confidence"), default=0.0), 0.88)
+        repaired["action_type_status"] = "repaired_rejection_from_linked_result_row"
+    elif outcome_type == "removed" and action_type in {"", "אחר", "בקשה", "דיון"}:
+        repaired["action_type_he"] = "הסרה מסדר היום"
+        repaired["other_action_type_he"] = ""
+        repaired["action_type_confidence"] = max(clamp_float(repaired.get("action_type_confidence"), default=0.0), 0.88)
+        repaired["action_type_status"] = "repaired_removal_from_linked_result_row"
+    elif outcome_type == "referred" and action_type in {"", "אחר", "בקשה", "דיון"}:
+        repaired["action_type_he"] = "הפניה לוועדה"
+        repaired["other_action_type_he"] = ""
+        repaired["action_type_confidence"] = max(clamp_float(repaired.get("action_type_confidence"), default=0.0), 0.88)
+        repaired["action_type_status"] = "repaired_referral_from_linked_result_row"
+    repaired["action_quote_he"] = evidence["quote_he"]
+    repaired["action_focus_quote_he"] = evidence["quote_he"]
+    repaired["outcome_is_decision"] = True
+    repaired["outcome"] = {
+        "outcome_type": outcome_type,
+        "outcome_label_he": evidence["outcome_label_he"],
+        "outcome_summary_he": evidence["outcome_label_he"],
+        "outcome_quote_he": evidence["quote_he"],
+        "confidence": evidence["confidence"],
+        "limitations": [],
+    }
+    repaired["event_status"] = {
+        "approved": "approved",
+        "rejected": "rejected",
+        "removed": "removed",
+        "referred": "referred",
+    }.get(outcome_type, "unknown")
+    existing_repairs = repaired.get("semantic_repairs") if isinstance(repaired.get("semantic_repairs"), list) else []
+    repaired["semantic_repairs"] = unique_strings([*existing_repairs, "repaired_decision_outcome_from_structurally_linked_context_row"])
+    repaired["v3_linked_outcome_local_repair"] = {
+        "repair_applied": True,
+        "repair_reason": "exact_decision_outcome_quote_in_structurally_linked_context_row",
+        "source_artifact_id": evidence["artifact_id"],
+        "source_ordinal": evidence["source_ordinal"],
+        "outcome_type": outcome_type,
+        "source_quote_he": evidence["quote_he"],
+        "identity_overlap": evidence["identity_overlap"],
+    }
+    return repaired
+
+
+def topic_subject_v3_best_linked_decision_outcome(*, context: TopicSubjectV3EventContext, event_payload: dict[str, Any]) -> dict[str, Any] | None:
+    query_text = compact_text(
+        " ".join(
+            part
+            for part in (
+                context.target_artifact.real_text,
+                event_payload.get("matter_he"),
+                event_payload.get("action_details_he"),
+                event_payload.get("action_quote_he"),
+            )
+            if compact_text(part)
+        )
+    )
+    query_tokens = topic_subject_v3_identity_tokens(query_text)
+    candidates: list[tuple[float, int, dict[str, Any]]] = []
+    for artifact in context.rows:
+        if artifact.artifact_id == context.target_artifact.artifact_id:
+            continue
+        outcome = topic_subject_v3_decision_outcome_from_text(artifact.real_text)
+        if outcome is None:
+            continue
+        artifact_tokens = topic_subject_v3_identity_tokens(artifact.real_text)
+        overlap = len(query_tokens & artifact_tokens) if query_tokens else 0
+        if len(query_tokens) >= 3 and overlap < 2:
+            continue
+        quote = exact_source_quote_around_cue(raw_text=artifact.real_text, cues=outcome["cues"], max_words=28) or compact_text(artifact.real_text)[:300]
+        if not quote_supported_by_text(quote=quote, text=artifact.real_text):
+            continue
+        structure_role = topic_subject_v3_structural_role(artifact)
+        row_type = compact_text(topic_subject_v3_topic_assignment_metadata(artifact).get("row_type"))
+        score = float(overlap)
+        if structure_role == "vote_or_result" or row_type == "vote_or_result":
+            score += 3.0
+        score -= abs(int(artifact.source_ordinal) - int(context.target_artifact.source_ordinal)) * 0.05
+        candidates.append(
+            (
+                score,
+                -abs(int(artifact.source_ordinal) - int(context.target_artifact.source_ordinal)),
+                {
+                    "artifact_id": artifact.artifact_id,
+                    "source_ordinal": artifact.source_ordinal,
+                    "outcome_type": outcome["outcome_type"],
+                    "outcome_label_he": outcome["outcome_label_he"],
+                    "quote_he": quote,
+                    "confidence": min(0.97, max(0.82, 0.72 + score * 0.03)),
+                    "identity_overlap": overlap,
+                },
+            )
+        )
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: (item[0], item[1]))[2]
+
+
+def topic_subject_v3_decision_outcome_from_text(text: str) -> dict[str, Any] | None:
+    text_norm = normalize_for_search(corrected_hebrew_text(text))
+    if text_has_any(text_norm, REJECTION_DECISION_CUES):
+        return {"outcome_type": "rejected", "outcome_label_he": "דחייה", "cues": REJECTION_DECISION_CUES}
+    if text_has_any(text_norm, AGENDA_REMOVAL_CUES):
+        return {"outcome_type": "removed", "outcome_label_he": "הסרה מסדר היום", "cues": AGENDA_REMOVAL_CUES}
+    if text_has_any(text_norm, COMMITTEE_REFERRAL_CUES):
+        return {"outcome_type": "referred", "outcome_label_he": "הפניה לוועדה", "cues": COMMITTEE_REFERRAL_CUES}
+    if text_has_any(text_norm, APPROVAL_DECISION_QUOTE_CUES + STRONG_APPROVAL_ACTION_CUES):
+        return {"outcome_type": "approved", "outcome_label_he": "אישור", "cues": APPROVAL_DECISION_QUOTE_CUES + STRONG_APPROVAL_ACTION_CUES}
+    return None
 
 
 def topic_subject_v3_repair_event_quotes_locally(*, context: TopicSubjectV3EventContext, event_payload: dict[str, Any], quote_failures: list[str]) -> dict[str, Any]:

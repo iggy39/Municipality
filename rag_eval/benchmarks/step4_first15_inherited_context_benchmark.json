@@ -1,0 +1,350 @@
+{
+  "schema_version": "pdf_first_v4_step4_hard_rows_v1",
+  "purpose": "Stable DB-free Step 4 benchmark for the first 15 hard arbitration rows. It checks grounded topic recovery and inherited topic context for connected/detail rows.",
+  "case_count": 20,
+  "input_structure_units_json": "/Users/igor/Desktop/projects/Municipality/rag_eval/runs/step4_first15_failures_cherrypick_20260625/input/structure_units.json",
+  "target_unit_ids": [
+    "s0003_07_6a62f1711b20",
+    "s0004_12_ad5c1839c8ce",
+    "s0004_16_f8db3e79be30",
+    "s0007_02_8d3a3c63a1a7",
+    "s0011_01_114beff4d7b6",
+    "s0013_01_2b32b1f8c186",
+    "s0014_01_c22b47624b2e",
+    "s0020_05_7e1497e3e60f",
+    "s0025_01_c16dc2594f71",
+    "s0025_02_ea3d38119e71",
+    "s0055_01_ce18488c8902",
+    "s0063_03_58fb09a7b37a",
+    "s0083_02_4902c0e1fe27",
+    "s0088_01_7272634e8556",
+    "s0093_01_9f39e5f3315c",
+    "vh006_07_01_966a6a09f777",
+    "vh017_10_01_245c78c15ef6",
+    "vh037_02_01_603ef5dacc04",
+    "vh003_14_01_705dafc85108",
+    "vh011_06_01_d798fd5305c2"
+  ],
+  "cases": [
+    {
+      "case_id": "s0003_07_6a62f1711b20:d0af5f55cb46",
+      "source_path": "",
+      "structure_unit_id": "s0003_07_6a62f1711b20",
+      "source_page": 1,
+      "row_type": "topic_item",
+      "source_text": "22 )- .יועבר בהמשך 5 \".שאילתה של ד\"ר לחמני בנושא \"כיכר רמון בעיר ודרך מנחם בגין– ( 23.11.",
+      "expected": {
+        "root_topic_id": "any",
+        "child_label_he": "any",
+        "topic_subject_he": "כיכר רמון בעיר ודרך מנחם בגין",
+        "topic_node_status": "candidate",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Place-only query; keep as safe candidate with subject evidence."
+    },
+    {
+      "case_id": "s0004_12_ad5c1839c8ce:ad5c1839c8ce",
+      "source_path": "",
+      "structure_unit_id": "s0004_12_ad5c1839c8ce",
+      "source_page": 2,
+      "row_type": "fragment",
+      "source_text": "18 .הצעת הגזברות לעדכון בצו הארנונה לשנת2024 הוספת תת סיווג חדש– )(עודד– .מצ\"ל",
+      "expected": {
+        "root_topic_id": "root_budget_finance",
+        "child_label_he": "any",
+        "topic_subject_he": "עדכון בצו הארנונה הוספת תת סיווג",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Tax order subtype is a substantive finance topic; label should be built around ארנונה plus nearby action words, not a fixed phrase."
+    },
+    {
+      "case_id": "s0004_16_f8db3e79be30:54dcd3123eb4",
+      "source_path": "",
+      "structure_unit_id": "s0004_16_f8db3e79be30",
+      "source_page": 2,
+      "row_type": "topic_item",
+      "source_text": "25 .פרוטוקול מישיבת ועדת רווחה מיום20.9.22 – )(צור- .מצ\"ל 26 \".שאילתה ישירה של עו\"ד גלבר בנושא \"בדיקת מבנים מסוכנים ברחבי העיר– .מצ\"ל",
+      "expected": {
+        "root_topic_id": "root_planning_building",
+        "child_label_he": "מבנים מסוכנים",
+        "topic_subject_he": "בדיקת מבנים מסוכנים",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Dangerous building inspection belongs to planning/building."
+    },
+    {
+      "case_id": "s0007_02_8d3a3c63a1a7:4a16efec58f6",
+      "source_path": "",
+      "structure_unit_id": "s0007_02_8d3a3c63a1a7",
+      "source_page": 3,
+      "row_type": "topic_item",
+      "source_text": "700 .יחידות דיור שיהיו ברובע במסגרת הסכם הגג ועד עכשיו הצטרפו למעלה מ1,000 זוגות שזכו בהגרלות ואנחנו משתפים גם בהגרלה הקרובה בתחילת ינואר עם",
+      "expected": {
+        "root_topic_id": "root_planning_building",
+        "child_label_he": "הסכם הגג",
+        "topic_subject_he": "הסכם הגג",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Housing units under umbrella agreement."
+    },
+    {
+      "case_id": "s0011_01_114beff4d7b6:075962c8df0c",
+      "source_path": "",
+      "structure_unit_id": "s0011_01_114beff4d7b6",
+      "source_page": 4,
+      "row_type": "topic_item",
+      "source_text": "סעיף5 : .שאילתה של אינג' ממן בנושא \"פעילות הקאנטרי,עלויות מנוי3 \"והנחות לזכאים גב' דינה בר אולפן הקריאה את תשובת ראש העיר לשאלה של אינג' ממן בנושא \"פעילות הקאנ,טרי עלויות מנוי \"והנחות לזכאים .השאלה והתשובה מצורפות לפרוטוקול זה כנספח",
+      "expected": {
+        "root_topic_id": "any",
+        "child_label_he": "any",
+        "topic_subject_he": "פעילות הקאנטרי, עלויות מנוי והנחות לזכאים",
+        "topic_node_status": "candidate",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Country club fees/discounts is substantive but root is ambiguous."
+    },
+    {
+      "case_id": "s0013_01_2b32b1f8c186:151ab62c862e",
+      "source_path": "",
+      "structure_unit_id": "s0013_01_2b32b1f8c186",
+      "source_page": 5,
+      "row_type": "topic_item",
+      "source_text": "סעיף7 : .שאילתה של ד\"ר לחמני בנושא \"כיכר רמון בעיר ודרך מנחם5 \"בגין גב' דינה בר אולפן הקריאה את תשובת ראש העיר לשאלה שלד\"ר לחמני בנושא \"כיכר רמו ן בעיר ודרך מנחם \"בגין ד”ר לחמני?: מה זה מינורי גב’ :בר אולפן מינורית זה לא יותר מ",
+      "expected": {
+        "root_topic_id": "any",
+        "child_label_he": "any",
+        "topic_subject_he": "כיכר רמון בעיר ודרך מנחם בגין",
+        "topic_node_status": "candidate",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Place-only query; safe candidate expected."
+    },
+    {
+      "case_id": "s0014_01_c22b47624b2e:3b8c31a4dd52",
+      "source_path": "",
+      "structure_unit_id": "s0014_01_c22b47624b2e",
+      "source_page": 5,
+      "row_type": "fragment",
+      "source_text": "סעיף8 : .שאילתה של עו\"ד לסרי בנושא \"המשך התגברות תופעת6 \"האלימות והפשע ברחובות העיר גב' דינה בר אולפן הקריאה את תשובת ראש העיר לשאלה של עו\"ד לסרי בנושא \"המשך התגברות תופעת \"האלימות והפשע ברחובות העיר .השאלה והתשובה מצורפות לפרוטוקול זה כנספח",
+      "expected": {
+        "root_topic_id": "root_security_enforcement",
+        "child_label_he": "any",
+        "topic_subject_he": "אלימות ופשע ברחובות העיר",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Fragment still contains the full violence/crime query."
+    },
+    {
+      "case_id": "s0020_05_7e1497e3e60f:ed9f1fd96ff6",
+      "source_path": "",
+      "structure_unit_id": "s0020_05_7e1497e3e60f",
+      "source_page": 7,
+      "row_type": "topic_item",
+      "source_text": "סעיף198 א בוצעו. יש חוות דעת של הוועדה המקצועית, שמצביע על כך .שכלכלית יש תועלת בבנייה על ידי היזם ד”ר לחמני? : כמה חניות יבנו בסה\"כ אינג’ כצנלסון : במתחם יהיו684 חניות, בחלק הציבורי אנחנו הולכים לבצע בערך",
+      "expected": {
+        "root_topic_id": "root_planning_building",
+        "child_label_he": "any",
+        "topic_subject_he": "הקמת חניון תת קרקעי ומעליו מבני ציבור",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Discussion fragment should inherit the connected planning/building context instead of becoming topicless."
+    },
+    {
+      "case_id": "s0025_01_c16dc2594f71:c16dc2594f71",
+      "source_path": "",
+      "structure_unit_id": "s0025_01_c16dc2594f71",
+      "source_page": 11,
+      "row_type": "topic_item",
+      "source_text": "כ 62,000 אירועים שבהם מתקשרים לקו",
+      "expected": {
+        "root_topic_id": "root_security_enforcement",
+        "child_label_he": "any",
+        "topic_subject_he": "סקירה שנתית של מפקד תחנת משטרה",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Police call statistics fragment should inherit security/police context instead of becoming topicless."
+    },
+    {
+      "case_id": "s0025_02_ea3d38119e71:ea3d38119e71",
+      "source_path": "",
+      "structure_unit_id": "s0025_02_ea3d38119e71",
+      "source_page": 11,
+      "row_type": "topic_item",
+      "source_text": "100 .ומבקשים את עזרת המשטרה, שזה מספר משמעותי מאוד התחנה מטפלת ב8,",
+      "expected": {
+        "root_topic_id": "root_security_enforcement",
+        "child_label_he": "any",
+        "topic_subject_he": "סקירה שנתית של מפקד תחנת משטרה",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Police workload fragment should inherit security/police context instead of becoming topicless."
+    },
+    {
+      "case_id": "s0055_01_ce18488c8902:d867788e744d",
+      "source_path": "",
+      "structure_unit_id": "s0055_01_ce18488c8902",
+      "source_page": 26,
+      "row_type": "fragment",
+      "source_text": "סעיף25 : מיום 3/22 'מישיבת ועדת מלגות השכלה גבוהה מס .פרוטוקול24 21.11.22 ד” :ר לחמני כמה סטודנטים יש באשדוד ביחס למס' המלגות? גב’ :בר אולפן . תעביר התשובה החלטות",
+      "expected": {
+        "root_topic_id": "root_supports",
+        "child_label_he": "any",
+        "topic_subject_he": "ועדת מלגות השכלה גבוהה",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Scholarship committee protocol heading is substantive."
+    },
+    {
+      "case_id": "s0063_03_58fb09a7b37a:58fb09a7b37a",
+      "source_path": "",
+      "structure_unit_id": "s0063_03_58fb09a7b37a",
+      "source_page": 30,
+      "row_type": "topic_item",
+      "source_text": "סעיף 2.2 :.ג ולפיו 25% מעלות השיפוץ ליחידת דיור (עד לסכום מקסימלי של 6,",
+      "expected": {
+        "root_topic_id": "root_planning_building",
+        "child_label_he": "any",
+        "topic_subject_he": "תבחינים לשיפוץ חזיתות",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Cost percentage fragment should inherit the connected facade-renovation criteria topic."
+    },
+    {
+      "case_id": "s0083_02_4902c0e1fe27:4902c0e1fe27",
+      "source_path": "",
+      "structure_unit_id": "s0083_02_4902c0e1fe27",
+      "source_page": 38,
+      "row_type": "inherited_topic_context",
+      "source_text": "800 .₪ (סכום נוסף זה י עמיד את התמיכה השנתית ליד לבנים על סך700,000 ₪ )",
+      "expected": {
+        "root_topic_id": "root_supports",
+        "child_label_he": "any",
+        "topic_subject_he": "any",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Inherited support amount should carry support topic context, not become topicless."
+    },
+    {
+      "case_id": "s0088_01_7272634e8556:7272634e8556",
+      "source_path": "",
+      "structure_unit_id": "s0088_01_7272634e8556",
+      "source_page": 41,
+      "row_type": "inherited_topic_context",
+      "source_text": ":הנדון המלצה ל מענקי הישגי ות– ספורט א. להלן רשימת ההישגים והמענקים לאישורכם.",
+      "expected": {
+        "root_topic_id": "root_culture_sport",
+        "child_label_he": "any",
+        "topic_subject_he": "מענקי הישגיות ספורט",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Appendix heading is a connected sports-grant topic context, not topicless."
+    },
+    {
+      "case_id": "s0093_01_9f39e5f3315c:9f39e5f3315c",
+      "source_path": "",
+      "structure_unit_id": "s0093_01_9f39e5f3315c",
+      "source_page": 43,
+      "row_type": "fragment",
+      "source_text": ":הנדון 'מענק עליה לשלב ב",
+      "expected": {
+        "root_topic_id": "root_culture_sport",
+        "child_label_he": "any",
+        "topic_subject_he": "מענק עליה לשלב ב",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Sports grant heading is substantive."
+    },
+    {
+      "case_id": "vh006_07_01_966a6a09f777:b2af8aa015aa",
+      "source_path": "",
+      "structure_unit_id": "vh006_07_01_966a6a09f777",
+      "source_page": 6,
+      "row_type": "topic_item",
+      "source_text": "המתנ\"ס. .שתושבי רובע ט\"ו מחכים לו כל כך הרבה שנים .השאלה והתשובה מצורפות לפרוטוקול זה כנספח",
+      "expected": {
+        "root_topic_id": "root_planning_building",
+        "child_label_he": "any",
+        "topic_subject_he": "any",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Dependent row should inherit the connected public-building/community-center topic; the district mention is secondary evidence."
+    },
+    {
+      "case_id": "vh017_10_01_245c78c15ef6:810185f1708a",
+      "source_path": "",
+      "structure_unit_id": "vh017_10_01_245c78c15ef6",
+      "source_page": 17,
+      "row_type": "topic_item",
+      "source_text": "סעיף19 : .ביטול החלטת ועדת הקצאות עבור הקמה של בית כנסת12 -'ומרכז רוחני של עמותת הדור הרביעי\" רובע יג",
+      "expected": {
+        "root_topic_id": "root_allocations",
+        "child_label_he": "any",
+        "topic_subject_he": "הקצאה לבית כנסת ומרכז רוחני",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Allocation/action subject should win over location words such as district name."
+    },
+    {
+      "case_id": "vh037_02_01_603ef5dacc04:ef96b3e125f4",
+      "source_path": "",
+      "structure_unit_id": "vh037_02_01_603ef5dacc04",
+      "source_page": 37,
+      "row_type": "topic_item",
+      "source_text": "פרוטוקול הו ו עדה המקצועית עיריית אשדוד מספר15 / 2022 מתאריך22.11.2022 - כח' חשוון תשפ\"ג",
+      "expected": {
+        "root_topic_id": "any",
+        "child_label_he": "any",
+        "topic_subject_he": "any",
+        "topic_node_status": "active",
+        "is_topic_bearing": false
+      },
+      "judge_notes": "Protocol/committee cover heading is structural metadata, not a standalone municipal topic."
+    },
+    {
+      "case_id": "vh003_14_01_705dafc85108:23ebd85b0788",
+      "source_path": "",
+      "structure_unit_id": "vh003_14_01_705dafc85108",
+      "source_page": 3,
+      "row_type": "topic_item",
+      "source_text": "סעיף2 : ברכות,הוקרות והודעות",
+      "expected": {
+        "root_topic_id": "any",
+        "child_label_he": "any",
+        "topic_subject_he": "any",
+        "topic_node_status": "active",
+        "is_topic_bearing": false
+      },
+      "judge_notes": "Ceremonial/greeting heading should not be classified as security or another substantive root."
+    },
+    {
+      "case_id": "vh011_06_01_d798fd5305c2:d798fd5305c2",
+      "source_path": "",
+      "structure_unit_id": "vh011_06_01_d798fd5305c2",
+      "source_page": 11,
+      "row_type": "fragment",
+      "source_text": "ג ב' מרק .: אני אשמח שההורים ידעו .השאלה והתשובה מצורפות לפרוטוקול זה כנספח",
+      "expected": {
+        "root_topic_id": "root_education",
+        "child_label_he": "any",
+        "topic_subject_he": "any",
+        "topic_node_status": "active",
+        "is_topic_bearing": true
+      },
+      "judge_notes": "Dependent discussion detail should inherit the connected education/query context, not become topicless."
+    }
+  ]
+}

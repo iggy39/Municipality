@@ -272,7 +272,7 @@ def _load_rows(*, module: Any, row_specs: list[dict[str, Any]]) -> list[dict[str
             if not matches:
                 raise SystemExit("No accepted V3 artifact found for row " + spec["key"])
             artifact = sorted(matches, key=lambda item: item.artifact_id)[0]
-            context = module.build_topic_subject_v3_event_contexts(artifacts=[artifact], max_context_rows=5)[0]
+            context = module.build_topic_subject_v3_event_contexts(artifacts=[artifact], context_artifacts=artifacts, max_context_rows=5)[0]
             rows.append({"spec": spec, "artifact": artifact, "context": context})
         session.rollback()
     return rows
@@ -291,7 +291,8 @@ def _load_json_rows(*, module: Any, paths: list[Path], municipality_slug: str, j
     rows = []
     row_filter = set(json_rows)
     for path_index, path in enumerate(paths):
-        artifacts = _topic_assignment_artifacts(path=path, source_document_version_id=900000 + path_index)
+        all_artifacts = _topic_assignment_artifacts(path=path, source_document_version_id=900000 + path_index)
+        artifacts = list(all_artifacts)
         if row_filter:
             artifacts = [artifact for artifact in artifacts if artifact.source_ordinal in row_filter]
         else:
@@ -306,8 +307,16 @@ def _load_json_rows(*, module: Any, paths: list[Path], municipality_slug: str, j
         if not artifacts:
             raise SystemExit(f"No JSON profile rows selected from {path}")
         slug = municipality_slug if municipality_slug != "json" else _infer_municipality_slug_from_path(path)
+        contexts_by_artifact_id = {
+            context.target_artifact.artifact_id: context
+            for context in module.build_topic_subject_v3_event_contexts(
+                artifacts=artifacts,
+                context_artifacts=all_artifacts,
+                max_context_rows=5,
+            )
+        }
         for artifact in artifacts:
-            context = module.build_topic_subject_v3_event_contexts(artifacts=[artifact], max_context_rows=5)[0]
+            context = contexts_by_artifact_id[artifact.artifact_id]
             spec = {
                 "key": f"{slug}:json{path_index}:ord{artifact.source_ordinal}",
                 "municipality_slug": slug,

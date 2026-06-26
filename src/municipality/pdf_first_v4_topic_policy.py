@@ -120,6 +120,13 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         required_any=(("ביוב", "מים וביוב", "תאגיד המים", "ניהול המים", "תחנת שאיבת", "מאגר חירום"),),
     ),
     TopicPolicy(
+        policy_id="religious_council_services",
+        root_topic_id="root_religious_services",
+        description_he="מועצה דתית ושירותיה מסווגים לדת ושירותי דת, גם כאשר הפעולה היא מינוי או הרכב המועצה.",
+        priority=116,
+        required_any=(("מועצה דתית",),),
+    ),
+    TopicPolicy(
         policy_id="air_pollution_odors_environment",
         root_topic_id="root_infrastructure_environment",
         description_he="זיהום אוויר, ריחות קשים ומפגעי ריח עירוניים מסווגים לתשתיות וסביבה.",

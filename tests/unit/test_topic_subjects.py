@@ -3369,6 +3369,160 @@ def test_topic_subject_v3_context_normalization_recovers_composite_row_roles() -
     assert any("row_role_normalized" in warning for warning in normalized["schema_warnings"])
 
 
+def test_topic_subject_v3_context_uses_full_source_inventory_for_selected_target() -> None:
+    target = _artifact_dataclass(
+        real_text="סעיף21 : מינוי נציג ציבור והארכת כהונה החלטות",
+        topic_label_he="מינוי נציג ציבור והארכת כהונה",
+        artifact_id="artifact-heading",
+        source_ordinal=63,
+        metadata={"artifact_metadata": {"structure_metadata": {"structural_role": "section_heading", "section_id": "section-21"}}},
+    )
+    vote_result = _artifact_dataclass(
+        real_text="חברי המועצה מאשרים פה אחד את מינוי נציג הציבור והארכת הכהונה 152296 08/01/2025",
+        topic_label_he="vote_or_result",
+        artifact_id="artifact-vote-result",
+        source_ordinal=64,
+        metadata={
+            "artifact_metadata": {
+                "structure_metadata": {"structural_role": "vote_or_result", "section_id": "section-21"},
+                "topic_assignment": {"is_topic_bearing": False, "row_type": "vote_or_result"},
+            }
+        },
+    )
+
+    context = build_topic_subject_v3_event_contexts(
+        artifacts=[target],
+        context_artifacts=[target, vote_result],
+        max_context_rows=5,
+    )[0]
+    source_context = topic_subjects_module.topic_subject_v3_source_context(context=context, max_text_chars=1000)
+
+    assert [row.artifact_id for row in context.rows] == ["artifact-heading", "artifact-vote-result"]
+    assert source_context["nearby_rows"][0]["artifact_id"] == "artifact-vote-result"
+    assert "מאשרים פה אחד" in source_context["nearby_rows"][0]["raw_text"]
+    assert topic_subjects_module.topic_subject_v3_quote_supported(context=context, quote="מאשרים פה אחד את מינוי נציג הציבור")
+
+
+def test_topic_subject_v3_context_includes_attached_raw_neighbor_rows() -> None:
+    target = _artifact_dataclass(
+        real_text="סעיף21 : מינוי נציג ציבור והארכת כהונה החלטות",
+        topic_label_he="מינוי נציג ציבור והארכת כהונה",
+        artifact_id="artifact-heading",
+        source_ordinal=63,
+    )
+    target.neighbor_contexts = [
+        {
+            "relation": "next_protocol_row",
+            "artifact_id": "artifact-raw-next",
+            "ordinal": 64,
+            "page_span": {"start": 9, "end": 9},
+            "header_path": ["תחבורה ובטיחות"],
+            "raw_text": "חברי המועצה מאשרים פה אחד את מינוי נציג הציבור והארכת הכהונה 152296 08/01/2025",
+            "decision_context_text": "חברי המועצה מאשרים פה אחד את מינוי נציג הציבור והארכת הכהונה",
+        }
+    ]
+
+    context = build_topic_subject_v3_event_contexts(artifacts=[target], max_context_rows=5)[0]
+    source_context = topic_subjects_module.topic_subject_v3_source_context(context=context, max_text_chars=1000)
+
+    assert [row.artifact_id for row in context.rows] == ["artifact-heading", "artifact-raw-next"]
+    assert source_context["nearby_rows"][0]["source_kind"] == "pdf_first_v4_protocol_neighbor"
+    assert "מאשרים פה אחד" in source_context["nearby_rows"][0]["raw_text"]
+    assert topic_subjects_module.topic_subject_v3_quote_supported(context=context, quote="מאשרים פה אחד את מינוי נציג הציבור")
+
+
+def test_topic_subject_v3_repairs_decision_outcome_from_linked_result_row() -> None:
+    target = _artifact_dataclass(
+        real_text="סעיף21 : מינוי נציג ציבור והארכת כהונה החלטות",
+        topic_label_he="מינוי נציג ציבור והארכת כהונה",
+        artifact_id="artifact-heading",
+        source_ordinal=63,
+        metadata={"artifact_metadata": {"structure_metadata": {"structural_role": "section_heading", "section_id": "section-21"}}},
+    )
+    vote_result = _artifact_dataclass(
+        real_text="חברי המועצה מאשרים פה אחד את מינוי נציג הציבור והארכת הכהונה 152296 08/01/2025",
+        topic_label_he="vote_or_result",
+        artifact_id="artifact-vote-result",
+        source_ordinal=64,
+        metadata={
+            "artifact_metadata": {
+                "structure_metadata": {"structural_role": "vote_or_result", "section_id": "section-21"},
+                "topic_assignment": {"is_topic_bearing": False, "row_type": "vote_or_result"},
+            }
+        },
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[target], context_artifacts=[target, vote_result])[0]
+
+    repaired = topic_subjects_module.topic_subject_v3_repair_linked_decision_outcome_locally(
+        context=context,
+        event_payload={
+            "context_id": context.context_id,
+            "target_artifact_id": target.artifact_id,
+            "is_event": True,
+            "action_type_he": "אחר",
+            "other_action_type_he": "מינוי",
+            "action_type_confidence": 0.8,
+            "matter_he": "מינוי נציג ציבור והארכת כהונה",
+            "action_details_he": "מינוי נציג ציבור והארכת כהונה",
+            "action_quote_he": "מינוי נציג ציבור",
+            "outcome_is_decision": False,
+            "outcome": None,
+            "target_row_role": "action_anchor",
+        },
+    )
+    normalized = normalize_topic_subject_v3_event_payload(payload=repaired, context=context)
+
+    assert normalized["action_type_he"] == "אישור"
+    assert normalized["outcome_is_decision"] is True
+    assert normalized["outcome"]["outcome_type"] == "approved"
+    assert "מאשרים פה אחד" in normalized["outcome"]["outcome_quote_he"]
+    assert normalized["v3_linked_outcome_local_repair"]["source_ordinal"] == 64
+    assert topic_subjects_module.topic_subject_v3_quote_supported(context=context, quote=normalized["outcome"]["outcome_quote_he"])
+
+
+def test_topic_subject_v3_linked_outcome_repair_requires_identity_overlap() -> None:
+    target = _artifact_dataclass(
+        real_text="סעיף5 : תקציב גינון שכונתי",
+        topic_label_he="תקציב גינון שכונתי",
+        artifact_id="artifact-heading",
+        source_ordinal=10,
+        metadata={"artifact_metadata": {"structure_metadata": {"structural_role": "section_heading", "section_id": "section-5"}}},
+    )
+    unrelated_vote = _artifact_dataclass(
+        real_text="חברי המועצה מאשרים פה אחד את נסיעת סגן ראש העיר לכנס מקצועי",
+        topic_label_he="vote_or_result",
+        artifact_id="artifact-unrelated-vote",
+        source_ordinal=11,
+        metadata={
+            "artifact_metadata": {
+                "structure_metadata": {"structural_role": "vote_or_result", "section_id": "section-5"},
+                "topic_assignment": {"is_topic_bearing": False, "row_type": "vote_or_result"},
+            }
+        },
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[target], context_artifacts=[target, unrelated_vote])[0]
+
+    repaired = topic_subjects_module.topic_subject_v3_repair_linked_decision_outcome_locally(
+        context=context,
+        event_payload={
+            "context_id": context.context_id,
+            "target_artifact_id": target.artifact_id,
+            "is_event": True,
+            "action_type_he": "בקשה",
+            "action_type_confidence": 0.8,
+            "matter_he": "תקציב גינון שכונתי",
+            "action_details_he": "תקציב גינון שכונתי",
+            "action_quote_he": "תקציב גינון שכונתי",
+            "outcome_is_decision": False,
+            "outcome": None,
+            "target_row_role": "action_anchor",
+        },
+    )
+
+    assert repaired["outcome_is_decision"] is False
+    assert "v3_linked_outcome_local_repair" not in repaired
+
+
 def test_topic_subject_v3_context_normalization_recovers_role_and_status_aliases() -> None:
     artifact = _artifact_dataclass(real_text="רקע כללי על הדיון.", topic_label_he="דיון", artifact_id="artifact-alias", source_ordinal=1)
     context = build_topic_subject_v3_event_contexts(artifacts=[artifact], max_context_rows=1)[0]
