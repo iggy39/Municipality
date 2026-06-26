@@ -3910,6 +3910,33 @@ def test_topic_subject_v3_request_outcome_repair_restores_target_action_quote() 
     assert "אנחנו מציעים" in repaired["action_quote_he"]
 
 
+def test_topic_subject_v3_explicit_directive_overrides_weak_proposal_in_mixed_row() -> None:
+    text = (
+        "יחד עם זאת, מוצע לשנות ההוראות בנוהל המכרזים. "
+        "מהדו\"ח בנוגע לטיפול בדרי רחוב ניכרת עשייה משמעותית. "
+        "ניתנה הנחייה לבחון הקמת יחידה ייעודית לטיפול בשוהי רחוב."
+    )
+    artifact = _artifact_dataclass(real_text=text, topic_label_he="ביקורת עירונית")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    normalized = normalize_topic_subject_v3_event_payload(
+        payload={
+            "is_event": True,
+            "action_type_he": "בקשה",
+            "action_type_confidence": 0.82,
+            "matter_he": "נוהל מכרזים",
+            "action_quote_he": "מוצע לשנות ההוראות בנוהל המכרזים",
+            "outcome_is_decision": False,
+            "target_row_role": "action_anchor",
+        },
+        context=context,
+    )
+
+    assert normalized["action_type_he"] == "הנחיה"
+    assert "ניתנה הנחייה" in normalized["action_quote_he"]
+    assert normalized["matter_he"] == "בחינת הקמת יחידה ייעודית לטיפול בשוהי רחוב"
+
+
 def test_topic_subject_v3_strong_same_row_referral_still_creates_referred_outcome() -> None:
     artifact = _artifact_dataclass(
         real_text="הצעה לסדר בנושא קריאת רחוב על שמו של זאב רווח. ההצעה עוברת לדיון בוועדת שמות.",
@@ -4883,7 +4910,8 @@ def test_topic_subject_v3_profile_enum_checker_accepts_recoverable_values() -> N
                 "outcome": {"status": "not_applicable"},
             },
             "prediction_comparison": "same|model_invalidated|judge_uncertain",
-            "event_identity_status": "non_event",
+            "event_identity_status": "new_event_best_guess",
+            "outcome_he": "אושרה החלטה לאשר את דו\"ח מבקרת העירייה",
             "evidence_roles": {"subject_hint_relation": "supports_matter|conflicts_with_raw_text|subject_only|not_relevant|null"},
             "outcome_evidence_classification": "approved",
             "outcome": {"outcome_evidence_classification": "request_for_outcome"},
@@ -4898,6 +4926,7 @@ def test_topic_subject_v3_profile_enum_checker_accepts_recoverable_values() -> N
             "entailment_status": "entailed|partially_entailed|not_entailed|uncertain",
             "prediction_comparison": "same|partially_different|different|model_invalid|judge_uncertain",
             "event_identity_status": "new_event|same_as_existing_event|supporting_row_only|duplicate_prediction|unknown",
+            "outcome_he": "approved|rejected|referred|removed|deferred|reported|none|unknown|null",
             "evidence_roles": {"subject_hint_relation": "supports_matter|conflicts_with_raw_text|subject_only|not_relevant|null"},
             "outcome_evidence_classification": "actual_result|proposal_or_intent|ambiguous_agreement|not_outcome|null",
             "outcome": {"outcome_evidence_classification": "actual_result|proposal_or_intent|ambiguous_agreement|not_outcome|null"},

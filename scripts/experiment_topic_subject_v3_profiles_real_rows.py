@@ -890,9 +890,21 @@ def _enum_alias_for_path(*, path: str, value: str) -> str:
             "unknown": "judge_uncertain",
         },
         "event_identity_status": {
+            "new_event_best_guess": "new_event",
+            "best_guess_new_event": "new_event",
             "non_event": "unknown",
             "not_event": "unknown",
             "none": "unknown",
+        },
+        "outcome_he": {
+            "approved": "approved",
+            "rejected": "rejected",
+            "referred": "referred",
+            "removed": "removed",
+            "deferred": "deferred",
+            "reported": "reported",
+            "unknown": "unknown",
+            "none": "none",
         },
         "outcome_evidence_classification": {
             "approved": "actual_result",
@@ -993,6 +1005,15 @@ def _enum_alias_for_path(*, path: str, value: str) -> str:
         return row_role_aliases.get(value, value)
     if path.endswith("span_roles[].span_role"):
         return span_role_aliases.get(value, value)
+    if path == "outcome_he":
+        if any(token in value for token in ("אושרה", "אושר", "אישרה", "אישר", "לאשר", "התקבלה")):
+            return "approved"
+        if any(token in value for token in ("נדחה", "נדחתה", "לא אושר", "לא אושרה")):
+            return "rejected"
+        if any(token in value for token in ("יורד", "יורדת", "ירד", "ירדה", "הוסרה")):
+            return "removed"
+        if any(token in value for token in ("הועברה", "הועבר", "מועברת", "עוברת")):
+            return "referred"
     return aliases_by_path.get(path, {}).get(value, value)
 
 

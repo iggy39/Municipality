@@ -96,6 +96,7 @@ TOPIC_SUBJECT_V3_EVENT_STATUS_VALUES = {
     "not_event",
     "unknown",
 }
+TOPIC_SUBJECT_V3_OUTCOME_VALUES = {"approved", "rejected", "referred", "removed", "deferred", "reported", "none", "unknown"}
 TOPIC_SUBJECT_V3_EVIDENCE_STATUSES = {"entailed", "partially_entailed", "not_entailed", "uncertain"}
 TOPIC_SUBJECT_V3_EVIDENCE_FIELD_STATUSES = {"entailed", "not_entailed", "uncertain"}
 TOPIC_SUBJECT_V3_EVIDENCE_OUTCOME_STATUSES = {"entailed", "not_entailed", "uncertain", "not_applicable"}
@@ -344,6 +345,12 @@ RESPONSE_TO_INQUIRY_ACTION_CUES = (
 )
 
 DIRECTIVE_ACTION_CUES = (
+    "ניתנה הנחייה",
+    "ניתנה הנחיה",
+    "ניתן הנחייה",
+    "ניתן הנחיה",
+    "ניתנה הוראה",
+    "ניתן הוראה",
     "יש לתאם",
     "יש לעדכן",
     "יש לפעול",
@@ -354,6 +361,15 @@ DIRECTIVE_ACTION_CUES = (
     "לפעול בהתאם",
     "לפעול מידית",
     "לקדם את",
+)
+
+EXPLICIT_DIRECTIVE_ACTION_CUES = (
+    "ניתנה הנחייה",
+    "ניתנה הנחיה",
+    "ניתן הנחייה",
+    "ניתן הנחיה",
+    "ניתנה הוראה",
+    "ניתן הוראה",
 )
 
 AGENDA_REMOVAL_CUES = (
@@ -2780,6 +2796,7 @@ def topic_subject_v3_normalization_payload(*, context: TopicSubjectV3EventContex
             "Do not collapse subject, action, phase, and outcome into one quote. Identify separate evidence roles before summarizing the event.",
             "Keep span_roles concise: include only supplied span_id values and one short reason per span.",
             "For long rows, do not majority-vote all sentences. Identify the explicit action-bearing spans first; background and advocacy spans should not outvote a clear procedural action span.",
+            "When a long row contains several action candidates, rank candidates by action strength and specificity: direct enacted/current municipal action or directive (for example ניתנה הנחיה/ניתנה הנחייה) outranks weaker proposal/recommendation wording such as מוצע, unless the target row is clearly only the proposal itself.",
             "When repeated objection/reservation wording appears, mark the span carrying the concrete objection as the primary action span and treat surrounding criticism as supporting context.",
             "A target row can be an open action event when the raw text states or summarizes a concrete desired municipal change/action, even if the wording is conversational and no formal request formula appears.",
             "Do not reject an open action event solely because there is no formal motion, vote, decision, or formulaic request wording; formal outcome evidence is needed only for decision outcomes.",
@@ -2868,6 +2885,7 @@ def topic_subject_v3_extraction_payload(
             "Use upstream_subject_hint to disambiguate matter_he when the target row contains multiple nearby matters, but do not copy it blindly when raw_text does not support it.",
             "Do not use upstream_subject_hint as evidence for action_type_he, event existence, or decision outcome.",
             "When more than one plausible event reading exists, return event_candidates and select the candidate whose action evidence best represents the current municipal action, not just the title/subject carrier.",
+            "For long mixed rows, include a candidate for each concrete action-bearing span. Prefer a directly stated directive/current action such as ניתנה הנחייה over weaker proposal/recommendation wording such as מוצע when both are present and neither is selected by explicit target metadata.",
             "For event_candidates, keep matter evidence, action evidence, phase evidence, and decision evidence separate so deterministic validation can select the grounded current-action candidate.",
             "Do not choose an action label from a quote that only mentions the subject. action_quote_he must express the selected municipal act, not only the topic.",
             "Keep שאילתה and מענה לשאילתה distinct.",
@@ -3556,6 +3574,12 @@ def topic_subject_v3_normalize_context_event_payload(payload: dict[str, Any], *,
     if event_status_changed:
         warnings.append(f"event_status_normalized:{compact_text(normalized.get('event_status'))}->{event_status}")
     normalized["event_status"] = event_status
+    outcome_he_raw = compact_text(normalized.get("outcome_he"))
+    if outcome_he_raw:
+        outcome_he = topic_subject_v3_normalize_outcome_he_value(outcome_he_raw)
+        if outcome_he != outcome_he_raw:
+            warnings.append(f"outcome_he_normalized:{outcome_he_raw}->{outcome_he}")
+        normalized["outcome_he"] = outcome_he
     span_roles = normalized.get("span_roles") if isinstance(normalized.get("span_roles"), list) else []
     normalized_span_roles: list[dict[str, str]] = []
     for item in span_roles:
@@ -3608,6 +3632,43 @@ def topic_subject_v3_normalize_context_event_payload(payload: dict[str, Any], *,
     normalized["row_roles"] = normalized_row_roles
     normalized["schema_warnings"] = unique_strings(warnings)
     return normalized
+
+
+def topic_subject_v3_normalize_outcome_he_value(value: str) -> str:
+    outcome = compact_text(value)
+    if not outcome:
+        return "none"
+    if outcome in TOPIC_SUBJECT_V3_OUTCOME_VALUES:
+        return outcome
+    outcome_norm = normalize_for_search(outcome)
+    if text_has_any(outcome_norm, AGENDA_REMOVAL_CUES):
+        return "removed"
+    if text_has_any(outcome_norm, COMMITTEE_REFERRAL_RESULT_CUES):
+        return "referred"
+    if text_has_any(outcome_norm, REJECTION_DECISION_CUES):
+        return "rejected"
+    if text_has_any(outcome_norm, APPROVAL_DECISION_QUOTE_CUES + STRONG_APPROVAL_ACTION_CUES + APPROVAL_VERB_CUES + ("אושרה", "אושר", "אישרה", "אישר")):
+        return "approved"
+    if text_has_any(outcome_norm, ("דווח", "דווחה", "נמסר", "הוצג")):
+        return "reported"
+    return "unknown"
+
+
+def topic_subject_v3_matter_from_explicit_directive_quote(quote: str) -> str:
+    text = compact_text(quote).strip(" .,:;–-")
+    if not text:
+        return ""
+    cue_patterns = sorted(EXPLICIT_DIRECTIVE_ACTION_CUES, key=len, reverse=True)
+    for cue in cue_patterns:
+        pattern = r"\s+".join(re.escape(part) for part in compact_text(cue).split())
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        matter = compact_text(text[match.end() :]).strip(" .,:;–-")
+        matter = re.sub(r"^(?:לבחון|בדיקת|בדיקה של)\s+", "בחינת ", matter)
+        matter = compact_text(matter).strip(" .,:;–-")
+        return matter[:500]
+    return ""
 
 
 def topic_subject_v3_apply_normalized_event_defaults(
@@ -4020,6 +4081,24 @@ def normalize_topic_subject_v3_event_payload(
             or len(raw_action_quote) > len(response_quote) + 80
         ):
             raw_action_quote = response_quote[:700]
+    explicit_directive_quote = exact_source_quote_around_cue(raw_text=context.target_artifact.real_text, cues=EXPLICIT_DIRECTIVE_ACTION_CUES, max_words=28)
+    raw_action_quote_norm = normalize_for_search(raw_action_quote)
+    if (
+        is_event
+        and explicit_directive_quote
+        and action_type in {"בקשה", "המלצה", "אחר"}
+        and (not raw_action_quote_norm or text_has_any(raw_action_quote_norm, ("מוצע", "מוצעת", "מציע", "מציעה", "הצעה", "המלצה")))
+        and quote_supported_by_text(quote=explicit_directive_quote, text=context.target_artifact.real_text)
+    ):
+        action_type = "הנחיה"
+        other_action = "" if other_action == "פעולה לא מסווגת" else other_action
+        action_confidence = max(action_confidence, float(action_confidence_threshold))
+        action_status = "repaired_directive_from_explicit_directive_evidence"
+        raw_action_quote = explicit_directive_quote[:700]
+        directive_matter = topic_subject_v3_matter_from_explicit_directive_quote(explicit_directive_quote)
+        if directive_matter:
+            matter = directive_matter[:500]
+        semantic_repair_reasons.append("repaired_directive_from_explicit_directive_evidence")
     force_non_decision_reason = ""
     objection_quote = ""
     if is_event and has_objection_action_shape(target_norm):
