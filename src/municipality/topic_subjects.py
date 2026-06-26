@@ -3216,10 +3216,7 @@ def build_topic_subject_v3_event_contexts(
 ) -> list[TopicSubjectV3EventContext]:
     contexts: list[TopicSubjectV3EventContext] = []
     context_artifacts = context_artifacts or artifacts
-    window_artifacts_by_docver: dict[int, list[TopicDecisionArtifact]] = {}
     context_artifacts_by_docver: dict[int, list[TopicDecisionArtifact]] = {}
-    for artifact in artifacts:
-        window_artifacts_by_docver.setdefault(artifact.source_document_version_id, []).append(artifact)
     for artifact in context_artifacts:
         context_artifacts_by_docver.setdefault(artifact.source_document_version_id, []).append(artifact)
     width = max(1, int(max_context_rows or 5))
@@ -3227,7 +3224,7 @@ def build_topic_subject_v3_event_contexts(
     after_count = max(0, width - before_count - 1)
     target_artifacts = sorted(artifacts, key=lambda item: (item.source_document_version_id, item.source_ordinal, item.artifact_id))
     for artifact in target_artifacts:
-        doc_artifacts = list(window_artifacts_by_docver.get(artifact.source_document_version_id, []))
+        doc_artifacts = list(context_artifacts_by_docver.get(artifact.source_document_version_id, []))
         if not any(item.artifact_id == artifact.artifact_id for item in doc_artifacts):
             doc_artifacts.append(artifact)
         doc_artifacts.sort(key=lambda item: (item.source_ordinal, item.artifact_id))

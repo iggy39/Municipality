@@ -3403,6 +3403,39 @@ def test_topic_subject_v3_context_uses_full_source_inventory_for_selected_target
     assert topic_subjects_module.topic_subject_v3_quote_supported(context=context, quote="מאשרים פה אחד את מינוי נציג הציבור")
 
 
+def test_topic_subject_v3_context_window_uses_context_artifacts_for_selected_target() -> None:
+    previous_row = _artifact_dataclass(
+        real_text="רקע קודם: חברי המועצה שאלו על נוהל תווי חניה.",
+        topic_label_he="חניה",
+        artifact_id="artifact-prev-row",
+        source_ordinal=40,
+    )
+    target = _artifact_dataclass(
+        real_text="שאילתה: חלוקת תווי חניה בניגוד לנהלים עירוניים",
+        topic_label_he="תווי חניה",
+        artifact_id="artifact-target-row",
+        source_ordinal=41,
+    )
+    next_row = _artifact_dataclass(
+        real_text="תשובה: ראש העיר הסביר שהנושא ייבדק מול מנהלת אגף החניה.",
+        topic_label_he="מענה לשאילתה",
+        artifact_id="artifact-next-row",
+        source_ordinal=42,
+    )
+
+    context = build_topic_subject_v3_event_contexts(
+        artifacts=[target],
+        context_artifacts=[previous_row, target, next_row],
+        max_context_rows=5,
+    )[0]
+    source_context = topic_subjects_module.topic_subject_v3_source_context(context=context, max_text_chars=1000)
+
+    assert [row.artifact_id for row in context.rows] == ["artifact-prev-row", "artifact-target-row", "artifact-next-row"]
+    assert [row["artifact_id"] for row in source_context["nearby_rows"]] == ["artifact-prev-row", "artifact-next-row"]
+    assert "רקע קודם" in source_context["nearby_rows"][0]["raw_text"]
+    assert "תשובה" in source_context["nearby_rows"][1]["raw_text"]
+
+
 def test_topic_subject_v3_context_includes_attached_raw_neighbor_rows() -> None:
     target = _artifact_dataclass(
         real_text="סעיף21 : מינוי נציג ציבור והארכת כהונה החלטות",
