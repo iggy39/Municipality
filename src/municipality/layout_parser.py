@@ -81,8 +81,8 @@ def _parse_with_fitz(document: Any) -> ParsedLayoutDocument:
 
     for page_index in range(len(document)):
         page = document.load_page(page_index)
-        page_payload = page.get_text("dict", sort=True)
-        page_words = page.get_text("words", sort=True)
+        page_payload = page.get_text("dict", sort=False)
+        page_words = page.get_text("words", sort=False)
         page_width = float(getattr(page.rect, "width", 0.0) or 0.0)
         page_lines = _extract_page_lines(page_payload, page_width=page_width, page_number=page_index + 1, page_words=page_words)
         page_text = "\n".join(line["text"] for line in page_lines if str(line.get("text") or "").strip())
@@ -317,7 +317,7 @@ def _extract_page_lines(page_payload: dict[str, Any], *, page_width: float, page
             if not raw_text:
                 continue
             bbox = _bbox_to_list(line.get("bbox") or block.get("bbox"))
-            text = _reconstruct_rtl_numeric_line_text(raw_text=raw_text, bbox=bbox, page_words=page_words or [])
+            text = reconstruct_pdf_line_text(raw_text=raw_text, bbox=bbox, page_words=page_words or [])
             reading_direction = _reading_direction(text)
             font_size = max((float(span.get("size") or 0.0) for span in spans if isinstance(span, dict)), default=0.0)
             font_flags = [int(span.get("flags") or 0) for span in spans if isinstance(span, dict)]
@@ -352,6 +352,16 @@ def _extract_page_lines(page_payload: dict[str, Any], *, page_width: float, page
     return rows
 
 
+def reconstruct_pdf_line_text(
+    *, raw_text: str, bbox: list[float], page_words: list[Any] | None = None
+) -> str:
+    """Reconstruct a single extracted PDF line without applying page-wide ordering."""
+    reconstructed = _reconstruct_rtl_numeric_line_text(raw_text=raw_text, bbox=bbox, page_words=page_words or [])
+    if reconstructed != raw_text or not _has_noisy_hebrew_quote_shape(raw_text):
+        return reconstructed
+    return _cleanup_hebrew_quote_noise(" ".join(str(raw_text or "").split()), raw_text=raw_text)
+
+
 def _reconstruct_rtl_numeric_line_text(*, raw_text: str, bbox: list[float], page_words: list[Any]) -> str:
     if not _needs_rtl_numeric_reconstruction(raw_text) or len(bbox) != 4 or not page_words:
         return raw_text
@@ -373,7 +383,10 @@ def _reconstruct_rtl_numeric_line_text(*, raw_text: str, bbox: list[float], page
         return raw_text
     if not _selected_words_cover_raw_line(raw_text=raw_text, words=selected_words):
         return raw_text
-    reconstructed = _cleanup_reconstructed_rtl_numeric_text(_logical_text_from_positioned_words(selected_words))
+    reconstructed = _cleanup_reconstructed_rtl_numeric_text(
+        _logical_text_from_positioned_words(selected_words),
+        raw_text=raw_text,
+    )
     if not reconstructed or not _reconstruction_preserves_audit_tokens(raw_text=raw_text, reconstructed=reconstructed):
         return raw_text
     return reconstructed
@@ -584,13 +597,11 @@ def _needs_rtl_numeric_reconstruction(value: str) -> bool:
     return any(char.isdigit() for char in text)
 
 
-def _cleanup_reconstructed_rtl_numeric_text(value: str) -> str:
+def _cleanup_reconstructed_rtl_numeric_text(value: str, *, raw_text: str | None = None) -> str:
     text = " ".join(str(value or "").split())
     if not text:
         return ""
-    text = re.sub(r"([\u0590-\u05FF])\s*([\"”״])\s*([\u0590-\u05FF])", r"\1\2\3", text)
-    text = re.sub(r"([\"”״])\s+([\u0590-\u05FF])", r"\1\2", text)
-    text = re.sub(r"([\u0590-\u05FF])\s+([\"”״])", r"\1\2", text)
+    text = _cleanup_hebrew_quote_noise(text, raw_text=raw_text)
     text = re.sub(r"([\u0590-\u05FF])\s+'", r"\1'", text)
     text = re.sub(r"\s+([.,:;?!%)\]])", r"\1", text)
     text = re.sub(r"([([{])\s+", r"\1", text)
@@ -622,6 +633,45 @@ def _cleanup_reconstructed_rtl_numeric_text(value: str) -> str:
     text = re.sub(r"^(\d{1,3})\s+(\d{4})\)\.\s+(.+?)\s*\(([^()]*)$", r"\1. \3 (\4) \2", text)
     text = re.sub(r"\s{2,}", " ", text)
     return text.strip()
+
+
+def _cleanup_hebrew_quote_noise(text: str, *, raw_text: str | None = None) -> str:
+    text = _repair_source_quoted_hebrew_word_splits(text=text, raw_text=raw_text)
+    text = re.sub(r"\b([\u0590-\u05FF]{1,4})\s*([\"”״])\s*([\u0590-\u05FF]{1,2})\b", r"\1\2\3", text)
+    text = re.sub(r"\b([\u0590-\u05FF]{3,4})([\"”״])([\u0590-\u05FF]{2,})\b", r"\1\3", text)
+    text = re.sub(r"(^|\s)([\"”״])\s+([\u0590-\u05FF])", r"\1\2\3", text)
+    text = re.sub(r"([\u0590-\u05FF])\s+([\"”״])(?=\s*(?:[-–.,:;?!)]|$))", r"\1\2", text)
+    text = re.sub(r"([\"”״])'([\"”״])", r"\2", text)
+    text = re.sub(r"\b([\u0590-\u05FF]{5,})([\"”״])([\u0590-\u05FF]{2,})", r"\1 \2\3", text)
+    text = re.sub(r"([\"”״])'(?=\s*(?:[-–.,:;?!)]|$))", r"\1", text)
+    text = re.sub(r"([\u0590-\u05FF])\s+([\"”״])(?=\s*(?:[-–.,:;?!)]|$))", r"\1\2", text)
+    return text
+
+
+def _has_noisy_hebrew_quote_shape(value: str) -> bool:
+    text = str(value or "")
+    if not any("\u0590" <= char <= "\u05FF" for char in text):
+        return False
+    return bool(
+        re.search(r"[\"”״]'[\"”״]", text)
+        or re.search(r"\b[\u0590-\u05FF]{3,}[\"”״][\u0590-\u05FF]{2,}\b", text)
+        or re.search(r"\b[\u0590-\u05FF]{2,}\s+[\"”״]'\s*[\u0590-\u05FF]\b", text)
+    )
+
+
+def _repair_source_quoted_hebrew_word_splits(*, text: str, raw_text: str | None) -> str:
+    if not raw_text:
+        return text
+    repaired = text
+    raw = str(raw_text or "")
+    for match in re.finditer(r"\b([\u0590-\u05FF]{3,})([\"”״])([\u0590-\u05FF]{2,})\b", raw):
+        left, _, right = match.groups()
+        repaired = re.sub(rf"\b{re.escape(left)}\s+{re.escape(right)}\b", f"{left}{right}", repaired)
+        repaired = re.sub(rf"\b{re.escape(left)}[\"”״]{re.escape(right)}\b", f"{left}{right}", repaired)
+    for match in re.finditer(r"\b([\u0590-\u05FF]{2,})\s+[\"”״]'\s*([\u0590-\u05FF])\b", raw):
+        left, right = match.groups()
+        repaired = re.sub(rf"\b{re.escape(left)}\s+{re.escape(right)}\b", f"{left}{right}", repaired)
+    return repaired
 
 
 def _bbox_to_list(value: Any) -> list[float]:

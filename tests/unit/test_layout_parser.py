@@ -485,7 +485,70 @@ def test_extract_page_lines_repairs_numbered_title_with_unmatched_parenthesis() 
     assert rows[0]["text"] == "2. חוק עזר לאשדוד (סלילת רחובות) 2022"
 
 
+def test_extract_page_lines_repairs_noisy_quotes_without_digits() -> None:
+    page_payload = {
+        "blocks": [
+            {
+                "type": 0,
+                "lines": [
+                    {
+                        "bbox": [100.0, 100.0, 520.0, 115.0],
+                        "spans": [
+                            {
+                                "text": "גב' מרק בנושא\"'\"זרימת מי ביוב בחוף יא",
+                                "size": 12,
+                                "flags": 0,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+
+    rows = _extract_page_lines(page_payload, page_width=595.0, page_number=1, page_words=[])
+
+    assert rows[0]["text"] == "גב' מרק בנושא \"זרימת מי ביוב בחוף יא"
+
+
 def test_cleanup_repairs_label_ids_dates_and_year_footnote_markers() -> None:
     assert _cleanup_reconstructed_rtl_numeric_text(":, סימוכין /9319602") == "סימוכין: /9319602"
     assert _cleanup_reconstructed_rtl_numeric_text("מהתאריכים 12/7/2022:,") == "מהתאריכים: 12/7/2022"
     assert _cleanup_reconstructed_rtl_numeric_text("התשפ\"ג – 4 2022.– בטל") == "התשפ\"ג – 2022 4.– בטל"
+
+
+def test_cleanup_repairs_source_audited_noisy_hebrew_quote_splits() -> None:
+    assert (
+        _cleanup_reconstructed_rtl_numeric_text(
+            "4. שאי לתה של ד\"ר לחמני בנושא\"הקלטת עובדים\" –",
+            raw_text="4.שאי\"לתה של ד\"ר לחמני בנושא \"הקלטת עובדים–",
+        )
+        == "4. שאילתה של ד\"ר לחמני בנושא \"הקלטת עובדים\" –"
+    )
+    assert (
+        _cleanup_reconstructed_rtl_numeric_text(
+            "7. שאילתה של גב' מר ק בנושא\"זרימת מי ביוב בחוף יא\"' –",
+            raw_text="7.שאילתה של גב' מר \"'ק בנושא \"זרימת מי ביוב בחוף יא–",
+        )
+        == "7. שאילתה של גב' מרק בנושא \"זרימת מי ביוב בחוף יא\" –"
+    )
+    assert (
+        _cleanup_reconstructed_rtl_numeric_text(
+            "7. שאילתה של גב' מרק בנושא \"זרימת מי ביוב בחוף יא \"' –",
+            raw_text="7.שאילתה של גב' מר \"'ק בנושא \"זרימת מי ביוב בחוף יא–",
+        )
+        == "7. שאילתה של גב' מרק בנושא \"זרימת מי ביוב בחוף יא\" –"
+    )
+    assert (
+        _cleanup_reconstructed_rtl_numeric_text("גב' מרק בנושא\"'\"זרימת מי ביוב בחוף יא")
+        == "גב' מרק בנושא \"זרימת מי ביוב בחוף יא"
+    )
+
+
+def test_cleanup_preserves_hebrew_abbreviations_while_spacing_quotes() -> None:
+    assert (
+        _cleanup_reconstructed_rtl_numeric_text(
+            "ד \" ר עו \" ד תב \" ר רה \" ע מנכ \" ל התשפ \" ה בנושא \" הקלטת עובדים \" –"
+        )
+        == "ד\"ר עו\"ד תב\"ר רה\"ע מנכ\"ל התשפ\"ה בנושא \"הקלטת עובדים\" –"
+    )
