@@ -3480,6 +3480,78 @@ def test_topic_subject_v3_repairs_decision_outcome_from_linked_result_row() -> N
     assert topic_subjects_module.topic_subject_v3_quote_supported(context=context, quote=normalized["outcome"]["outcome_quote_he"])
 
 
+def test_process_topic_subject_v3_applies_linked_outcome_repair_before_evidence() -> None:
+    target = _artifact_dataclass(
+        real_text="סעיף21 : מינוי נציג ציבור והארכת כהונה החלטות",
+        topic_label_he="מינוי נציג ציבור והארכת כהונה",
+        artifact_id="artifact-heading",
+        source_ordinal=63,
+        metadata={"artifact_metadata": {"structure_metadata": {"structural_role": "section_heading", "section_id": "section-21"}}},
+    )
+    vote_result = _artifact_dataclass(
+        real_text="חברי המועצה מאשרים פה אחד את מינוי נציג הציבור והארכת הכהונה 152296 08/01/2025",
+        topic_label_he="vote_or_result",
+        artifact_id="artifact-vote-result",
+        source_ordinal=64,
+        metadata={
+            "artifact_metadata": {
+                "structure_metadata": {"structural_role": "vote_or_result", "section_id": "section-21"},
+                "topic_assignment": {"is_topic_bearing": False, "row_type": "vote_or_result"},
+            }
+        },
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[target], context_artifacts=[target, vote_result])[0]
+    evidence_payloads: list[dict[str, object]] = []
+
+    class LinkedOutcomeClient(MockTopicSubjectV3Client):
+        def extract_event(self, *, context, normalized_event, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "is_event": True,
+                "action_type_he": "בקשה",
+                "action_type_confidence": 0.9,
+                "matter_he": "מינוי נציג ציבור והארכת כהונה",
+                "action_details_he": "מינוי נציג ציבור והארכת כהונה",
+                "action_quote_he": "מינוי נציג ציבור",
+                "outcome_is_decision": False,
+                "outcome": None,
+                "target_row_role": "action_anchor",
+                "confidence": 0.9,
+            }
+
+        def assess_event_evidence(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            evidence_payloads.append(dict(event_payload))
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "entailment_status": "entailed",
+                "repair_required": False,
+                "repaired_event": None,
+                "field_assessments": {
+                    "action_type_he": {"status": "entailed", "source_quote_he": event_payload["action_quote_he"], "rationale_he": "linked result row"},
+                    "matter_he": {"status": "entailed", "source_quote_he": "מינוי נציג הציבור", "rationale_he": "same matter"},
+                    "outcome": {"status": "entailed", "source_quote_he": event_payload["outcome"]["outcome_quote_he"], "rationale_he": "formal result"},
+                },
+                "failure_reasons": [],
+                "rationale_he": "linked outcome is grounded",
+            }
+
+    event, row = process_topic_subject_v3_context(
+        context=context,
+        client=LinkedOutcomeClient(),
+        config=TopicSubjectResearchConfig(),
+    )
+
+    assert event is not None
+    assert evidence_payloads
+    assert evidence_payloads[0]["outcome_is_decision"] is True
+    assert event.event_payload["action_type_he"] == "אישור"
+    assert event.event_payload["outcome"]["outcome_type"] == "approved"
+    assert event.event_payload["v3_linked_outcome_local_repair"]["source_ordinal"] == 64
+    assert row.quality_status == "accepted"
+
+
 def test_topic_subject_v3_linked_outcome_repair_requires_identity_overlap() -> None:
     target = _artifact_dataclass(
         real_text="סעיף5 : תקציב גינון שכונתי",
