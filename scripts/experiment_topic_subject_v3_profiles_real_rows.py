@@ -894,6 +894,60 @@ def _enum_alias_for_path(*, path: str, value: str) -> str:
             "not_event": "unknown",
             "none": "unknown",
         },
+        "outcome_evidence_classification": {
+            "approved": "actual_result",
+            "rejected": "actual_result",
+            "referred": "actual_result",
+            "removed": "actual_result",
+            "deferred": "actual_result",
+            "reported": "actual_result",
+            "decision_result": "actual_result",
+            "formal_decision": "actual_result",
+            "actual_outcome": "actual_result",
+            "request_for_outcome": "proposal_or_intent",
+            "proposal": "proposal_or_intent",
+            "intent": "proposal_or_intent",
+            "modal": "proposal_or_intent",
+            "ambiguous": "ambiguous_agreement",
+            "unknown": "not_outcome",
+            "none": "not_outcome",
+        },
+        "outcome.outcome_evidence_classification": {
+            "approved": "actual_result",
+            "rejected": "actual_result",
+            "referred": "actual_result",
+            "removed": "actual_result",
+            "deferred": "actual_result",
+            "reported": "actual_result",
+            "decision_result": "actual_result",
+            "formal_decision": "actual_result",
+            "actual_outcome": "actual_result",
+            "request_for_outcome": "proposal_or_intent",
+            "proposal": "proposal_or_intent",
+            "intent": "proposal_or_intent",
+            "modal": "proposal_or_intent",
+            "ambiguous": "ambiguous_agreement",
+            "unknown": "not_outcome",
+            "none": "not_outcome",
+        },
+        "field_assessments.outcome.outcome_evidence_classification": {
+            "approved": "actual_result",
+            "rejected": "actual_result",
+            "referred": "actual_result",
+            "removed": "actual_result",
+            "deferred": "actual_result",
+            "reported": "actual_result",
+            "decision_result": "actual_result",
+            "formal_decision": "actual_result",
+            "actual_outcome": "actual_result",
+            "request_for_outcome": "proposal_or_intent",
+            "proposal": "proposal_or_intent",
+            "intent": "proposal_or_intent",
+            "modal": "proposal_or_intent",
+            "ambiguous": "ambiguous_agreement",
+            "unknown": "not_outcome",
+            "none": "not_outcome",
+        },
         "row_quality.quality_status": {
             "good": "accepted",
             "ok": "accepted",
@@ -926,8 +980,19 @@ def _enum_alias_for_path(*, path: str, value: str) -> str:
         "header": "structural_metadata",
         "title": "event_title",
     }
+    span_role_aliases = {
+        "subject": "supporting_context",
+        "matter": "supporting_context",
+        "matter_candidate": "supporting_context",
+        "subject_matter": "supporting_context",
+        "date": "structural",
+        "actual_result": "outcome_candidate",
+        "decision_result": "outcome_candidate",
+    }
     if path == "target_row_role" or path.endswith("row_roles[].row_role"):
         return row_role_aliases.get(value, value)
+    if path.endswith("span_roles[].span_role"):
+        return span_role_aliases.get(value, value)
     return aliases_by_path.get(path, {}).get(value, value)
 
 

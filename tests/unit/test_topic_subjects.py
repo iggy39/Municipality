@@ -1946,6 +1946,9 @@ def test_topic_subject_v3_extraction_payload_uses_controlled_ontology_and_thresh
     assert any("initiating item/title" in requirement for requirement in payload["requirements"])
     assert any("הסתייגות" in requirement for requirement in payload["requirements"])
     assert any("formal/procedural rejection" in requirement for requirement in payload["requirements"])
+    assert any("proposal_or_intent" in requirement for requirement in payload["requirements"])
+    assert any("הצעה לסדר" in example["source_quote_he"] for example in payload["semantic_examples"])
+    assert any("אפשר להעביר" in example["source_quote_he"] for example in payload["semantic_examples"])
     serialized = json.dumps(payload, ensure_ascii=False)
     assert "known_topic" not in serialized
     assert "subject_matter_he" not in serialized
@@ -2680,6 +2683,44 @@ def test_topic_subject_v3_high_confidence_judge_action_disagreement_needs_review
         judge_payload={
             "judge_status": "accepted",
             "judge_prediction": {"is_event": True, "action_type_he": "בקשה", "matter_he": "תקציב הגיל הרך", "confidence": 0.95},
+        },
+        failure_reasons=[],
+    )
+
+    assert status == "needs_review"
+
+
+def test_topic_subject_v3_judge_action_disagreement_allows_evidenced_wrapper_action() -> None:
+    status = topic_subjects_module.topic_subject_v3_validation_status(
+        event_payload={
+            "is_event": True,
+            "action_type_he": "הסתייגות",
+            "matter_he": "קרצוף כבישים",
+            "action_quote_he": "ההסתייגות בנושא קרצוף כבישים, דרישה להוספת פירוט ביחס לכבישים בדרום העיר.",
+            "outcome_is_decision": False,
+        },
+        judge_payload={
+            "judge_status": "accepted",
+            "judge_prediction": {"is_event": True, "action_type_he": "בקשה", "matter_he": "קרצוף כבישים", "confidence": 0.97},
+        },
+        failure_reasons=[],
+    )
+
+    assert status == "accepted"
+
+
+def test_topic_subject_v3_judge_action_disagreement_requires_wrapper_evidence() -> None:
+    status = topic_subjects_module.topic_subject_v3_validation_status(
+        event_payload={
+            "is_event": True,
+            "action_type_he": "הסתייגות",
+            "matter_he": "קרצוף כבישים",
+            "action_quote_he": "מבקשים להוסיף פירוט ביחס לכבישים בדרום העיר.",
+            "outcome_is_decision": False,
+        },
+        judge_payload={
+            "judge_status": "accepted",
+            "judge_prediction": {"is_event": True, "action_type_he": "בקשה", "matter_he": "קרצוף כבישים", "confidence": 0.97},
         },
         failure_reasons=[],
     )
@@ -3757,7 +3798,68 @@ def test_topic_subject_v3_repairs_same_row_removed_outcome() -> None:
     assert normalized["v3_same_row_outcome_local_repair"]["repair_applied"] is True
 
 
-def test_topic_subject_v3_same_row_referral_wins_over_weak_unanimous_wording() -> None:
+def test_topic_subject_v3_removed_agenda_proposal_preserves_action_and_matter() -> None:
+    matter = "תו חניה לתושבים הגרים בסמוך למרכזים מסחריים"
+    artifact = _artifact_dataclass(
+        real_text=f"ההצעה לסדר- {matter} יורדת מסדר היום",
+        topic_label_he="חניה",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    repaired = topic_subjects_module.topic_subject_v3_repair_same_row_decision_outcome_locally(
+        context=context,
+        event_payload={
+            "is_event": True,
+            "action_type_he": "הצעה לסדר יום",
+            "action_type_confidence": 0.92,
+            "matter_he": matter,
+            "action_quote_he": "ההצעה לסדר",
+            "outcome_is_decision": False,
+            "target_row_role": "action_anchor",
+        },
+    )
+    normalized = normalize_topic_subject_v3_event_payload(payload=repaired, context=context)
+
+    assert normalized["action_type_he"] == "הצעה לסדר יום"
+    assert normalized["matter_he"] == matter
+    assert normalized["outcome_is_decision"] is True
+    assert normalized["outcome"]["outcome_type"] == "removed"
+
+
+def test_topic_subject_v3_removed_agenda_proposal_repairs_model_rejection_action() -> None:
+    matter = "תו חניה לתושבים הגרים בסמוך למרכזים מסחריים"
+    artifact = _artifact_dataclass(
+        real_text=f"ההצעה לסדר- {matter} בקשתה של חברת מועצה. יורדת מסדר היום.",
+        topic_label_he="חניה",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    normalized = normalize_topic_subject_v3_event_payload(
+        payload={
+            "is_event": True,
+            "action_type_he": "דחייה",
+            "action_type_confidence": 0.86,
+            "matter_he": matter,
+            "action_quote_he": "יורדת מסדר היום.",
+            "outcome_is_decision": True,
+            "outcome": {
+                "outcome_type": "removed",
+                "outcome_label_he": "הסרה מסדר היום",
+                "outcome_quote_he": "יורדת מסדר היום.",
+                "confidence": 0.94,
+                "limitations": [],
+            },
+            "target_row_role": "action_anchor",
+        },
+        context=context,
+    )
+
+    assert normalized["action_type_he"] == "הצעה לסדר יום"
+    assert "הצעה לסדר" in normalized["action_quote_he"]
+    assert normalized["outcome"]["outcome_type"] == "removed"
+
+
+def test_topic_subject_v3_weak_referral_proposal_does_not_create_outcome() -> None:
     text = "אנחנו מציעים להעביר, בהסכמה מלאה, את הדיון הזה לוועדת החינוך. אפשר להעביר את ההחלטה הזו פה אחד."
     artifact = _artifact_dataclass(real_text=text, topic_label_he="נוער מבקשי מקלט")
     context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
@@ -3775,7 +3877,61 @@ def test_topic_subject_v3_same_row_referral_wins_over_weak_unanimous_wording() -
     )
     normalized = normalize_topic_subject_v3_event_payload(payload=repaired, context=context)
 
+    assert normalized["action_type_he"] == "בקשה"
+    assert normalized["outcome_is_decision"] is False
+    assert normalized["outcome"] is None
+
+
+def test_topic_subject_v3_request_outcome_repair_restores_target_action_quote() -> None:
+    text = "אנחנו מציעים ,להעביר, בהסכמה מלאה, את הדיון הזה לוועדת החינוך. אפשר להעביר את ההחלטה הזו פה אחד."
+    artifact = _artifact_dataclass(real_text=text, topic_label_he="נוער מבקשי מקלט")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    repaired = topic_subjects_module.repair_topic_subject_v3_request_outcome_payload(
+        context=context,
+        event_payload={
+            "is_event": True,
+            "action_type_he": "אישור",
+            "action_type_confidence": 0.9,
+            "matter_he": "העברת הדיון לוועדות",
+            "action_quote_he": "החלטה: הוחלט פה אחד להעביר את ההצעה לוועדות",
+            "outcome_is_decision": True,
+            "outcome": {
+                "outcome_type": "approved",
+                "outcome_quote_he": "אפשר להעביר את ההחלטה הזו פה אחד",
+                "confidence": 0.9,
+                "limitations": [],
+            },
+        },
+    )
+
+    assert repaired["outcome_is_decision"] is False
+    assert repaired["action_type_he"] == "בקשה"
+    assert "אנחנו מציעים" in repaired["action_quote_he"]
+
+
+def test_topic_subject_v3_strong_same_row_referral_still_creates_referred_outcome() -> None:
+    artifact = _artifact_dataclass(
+        real_text="הצעה לסדר בנושא קריאת רחוב על שמו של זאב רווח. ההצעה עוברת לדיון בוועדת שמות.",
+        topic_label_he="שמות והנצחה",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    repaired = topic_subjects_module.topic_subject_v3_repair_same_row_decision_outcome_locally(
+        context=context,
+        event_payload={
+            "is_event": True,
+            "action_type_he": "בקשה",
+            "action_type_confidence": 0.83,
+            "matter_he": "קריאת רחוב על שמו של זאב רווח",
+            "outcome_is_decision": False,
+            "target_row_role": "action_anchor",
+        },
+    )
+    normalized = normalize_topic_subject_v3_event_payload(payload=repaired, context=context)
+
     assert normalized["action_type_he"] == "הפניה לוועדה"
+    assert normalized["outcome_is_decision"] is True
     assert normalized["outcome"]["outcome_type"] == "referred"
 
 
@@ -4729,6 +4885,10 @@ def test_topic_subject_v3_profile_enum_checker_accepts_recoverable_values() -> N
             "prediction_comparison": "same|model_invalidated|judge_uncertain",
             "event_identity_status": "non_event",
             "evidence_roles": {"subject_hint_relation": "supports_matter|conflicts_with_raw_text|subject_only|not_relevant|null"},
+            "outcome_evidence_classification": "approved",
+            "outcome": {"outcome_evidence_classification": "request_for_outcome"},
+            "field_assessments": {"outcome": {"outcome_evidence_classification": "actual_outcome"}},
+            "span_roles": [{"span_role": "subject|matter_candidate"}, {"span_role": "structural|date"}],
             "row_quality": {"quality_status": "high"},
         },
         {
@@ -4739,6 +4899,10 @@ def test_topic_subject_v3_profile_enum_checker_accepts_recoverable_values() -> N
             "prediction_comparison": "same|partially_different|different|model_invalid|judge_uncertain",
             "event_identity_status": "new_event|same_as_existing_event|supporting_row_only|duplicate_prediction|unknown",
             "evidence_roles": {"subject_hint_relation": "supports_matter|conflicts_with_raw_text|subject_only|not_relevant|null"},
+            "outcome_evidence_classification": "actual_result|proposal_or_intent|ambiguous_agreement|not_outcome|null",
+            "outcome": {"outcome_evidence_classification": "actual_result|proposal_or_intent|ambiguous_agreement|not_outcome|null"},
+            "field_assessments": {"outcome": {"outcome_evidence_classification": "actual_result|proposal_or_intent|ambiguous_agreement|not_outcome|null"}},
+            "span_roles": [{"span_role": "structural|background|action_candidate|outcome_candidate|supporting_context|not_relevant"}],
             "row_quality": {"quality_status": "accepted|needs_review|failed|non_event"},
         },
     )

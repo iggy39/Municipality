@@ -155,6 +155,77 @@ def test_v3_fallback_maps_single_entailed_hint_through_topic_tree() -> None:
     assert assignment["v3_fallback_selection"]["status"] == "selected"
 
 
+def test_v3_confirmed_location_action_becomes_active_without_root_overwrite() -> None:
+    hint = {
+        "source": "topic_subject_v3",
+        "source_structure_unit_id": "s0001_01_aaaaaaaaaaaa",
+        "matter_he": "כיכר רמון בעיר ודרך מנחם בגין",
+        "action_type_he": "מענה לשאילתה",
+        "source_quote_he": "תשובת ראש העיר לשאילתה בנושא כיכר רמון בעיר ודרך מנחם בגין",
+        "quality_status": "accepted",
+        "row_role": "action_anchor",
+        "event_role": "primary",
+        "entailment_status": "entailed",
+    }
+    item = _structured_fallback_item(
+        'שאילתה של ד"ר לחמני בנושא "כיכר רמון בעיר ודרך מנחם בגין"',
+        topic_subject="כיכר רמון בעיר ודרך מנחם בגין",
+        hints=[hint],
+    )
+    row = {
+        "structure_unit_id": item["structure_unit_id"],
+        "root_topic_id": "root_geo",
+        "topic_subject_he": "כיכר רמון בעיר ודרך מנחם בגין",
+        "topic_node_status": "candidate",
+        "is_topic_bearing": True,
+        "topic_assignment_route": "deterministic_v4_topic_arbitration:explicit_action_span",
+    }
+    proposal = {
+        "source": "explicit_action_span",
+        "subject_he": "כיכר רמון בעיר ודרך מנחם בגין",
+        "root_topic_id": "root_geo",
+        "child_label_he": "כיכרות וצמתים",
+        "geo_resolution": {"source": "local_geo_pattern", "confidence": "medium", "child_label_he": "כיכרות וצמתים"},
+        "score": 88,
+        "confidence": 0.82,
+        "quote": item["unit_raw_text"],
+    }
+
+    assignment = step4._assignment_from_topic_proposal(row=row, item=item, proposal=proposal)
+
+    assert assignment["root_topic_id"] == "root_geo"
+    assert assignment["topic_node_status"] == "active"
+    assert assignment["topic_reject_reason"] is None
+
+
+def test_non_geo_child_evidence_with_place_term_is_active() -> None:
+    item = _structured_fallback_item('שאילתה בנושא "זרימת מי ביוב בחוף יא"', topic_subject="זרימת מי ביוב בחוף יא")
+    row = {
+        "structure_unit_id": item["structure_unit_id"],
+        "root_topic_id": "root_infrastructure_environment",
+        "topic_subject_he": "זרימת מי ביוב בחוף",
+        "topic_node_status": "candidate",
+        "is_topic_bearing": True,
+        "topic_assignment_route": "deterministic_v4_topic_arbitration:explicit_action_span",
+    }
+    proposal = {
+        "source": "explicit_action_span",
+        "subject_he": "זרימת מי ביוב בחוף",
+        "root_topic_id": "root_infrastructure_environment",
+        "child_label_he": "ניהול מים וביוב",
+        "score": 88,
+        "confidence": 0.82,
+        "quote": item["unit_raw_text"],
+    }
+
+    assignment = step4._assignment_from_topic_proposal(row=row, item=item, proposal=proposal)
+
+    assert assignment["root_topic_id"] == "root_infrastructure_environment"
+    assert assignment["child_label_he"] == "ניהול מים וביוב"
+    assert assignment["topic_node_status"] == "active"
+    assert assignment["topic_reject_reason"] is None
+
+
 def test_order_proposal_discussion_subject_is_trimmed() -> None:
     contract = step4._topic_contract_from_headline(
         "הצעה לסדר שעסקה בנושא המיגון. וביקשנו לקיים דיון נוסף בוועדת החירום",

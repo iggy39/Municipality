@@ -166,6 +166,7 @@ CURATED_V4_CHILD_TOPICS: tuple[dict[str, Any], ...] = (
 ROOT_BY_ID = {row["root_topic_id"]: row for row in V4_ROOT_TOPICS}
 ROOT_BY_NORM = {normalize_for_search(row["root_label_he"]): row for row in V4_ROOT_TOPICS}
 PROCEDURAL_ROOT_ONLY_IDS = {"root_agenda_queries"}
+SECONDARY_ROOT_EXCLUDED_IDS = {"root_agenda_queries", "root_mayor_updates", "root_order_proposals", "root_geo", "root_people_roles"}
 
 
 @dataclass(slots=True)
@@ -566,9 +567,10 @@ def resolve_child_topic_assignment(
         }
     unsupported_reason = unsupported_child_domain_reason(child_label, evidence_text=evidence_text)
     if unsupported_reason:
+        target_root_id = semantic_root_id if semantic_root_id != root_id and _semantic_root_override_is_strong(child_label, evidence_text) else root_id
         return {
-            "root_topic_id": root_id,
-            "root_label_he": root_label,
+            "root_topic_id": target_root_id,
+            "root_label_he": root_label_for_id(target_root_id) or root_label,
             "child_label_he": None,
             "child_topic_id": None,
             "status": "active",
@@ -614,7 +616,11 @@ def semantic_root_for_child_label(label: str | None, *, evidence_text: str = "",
         return "root_allocations"
     if label_norm in {normalize_for_search("הנחות ופטורים"), normalize_for_search("אגרות והיטלים"), normalize_for_search("תקצוב שירותים עירוניים"), normalize_for_search("מימון פרויקטים עירוניים")}:
         return "root_budget_finance"
-    if any(term in normalized for term in ["תחבורה ציבורית", "פרויקט תחבורה", "כיכר רמון", "משרד התחבורה"]):
+    if _has_public_safety_context(normalized):
+        return "root_security_enforcement"
+    if any(term in normalized for term in ["תחבורה ציבורית", "פרויקט תחבורה", "משרד התחבורה"]):
+        return "root_transport_safety"
+    if _has_transport_location_context(normalized):
         return "root_transport_safety"
     if any(term in normalized for term in ["אישור נסיעה", "נסיעה", "נסיעת", "הוצאות נסיעה", "חו ל", "חו\"ל", "ארה ב", "ארה\"ב"]) or ("סמינר" in normalized and any(term in normalized for term in ["חו ל", "חו\"ל", "ארה ב", "ארה\"ב", "נסיעה", "הוצאות נסיעה"])):
         return "root_travel_approvals"
@@ -637,6 +643,71 @@ def semantic_root_for_child_label(label: str | None, *, evidence_text: str = "",
     if any(term in normalized for term in ["האצלת סמכויות", "מורשי חתימה", "מינוי", "מינויים", "גזבר העירייה"]):
         return "root_administration"
     return infer_root_topic_id(" ".join([str(label or ""), str(evidence_text or "")]), fallback=fallback)
+
+
+def secondary_topic_roots(*, root_topic_id: str, child_label_he: str | None = None, evidence_text: str = "", max_roots: int = 3) -> list[dict[str, Any]]:
+    primary_root = str(root_topic_id or "")
+    normalized = normalize_for_search(" ".join([str(child_label_he or ""), str(evidence_text or "")]))
+    if primary_root not in ROOT_BY_ID or not normalized:
+        return []
+    candidates: list[dict[str, Any]] = []
+    semantic_root = semantic_root_for_child_label(child_label_he, evidence_text=evidence_text, fallback=primary_root)
+    _append_secondary_root(candidates, semantic_root, reason="semantic_root_context", normalized=normalized, primary_root=primary_root)
+    return candidates[: max(0, int(max_roots))]
+
+
+def _append_secondary_root(candidates: list[dict[str, Any]], root_id: str | None, *, reason: str, normalized: str, primary_root: str) -> None:
+    root = str(root_id or "")
+    if root == primary_root or root not in ROOT_BY_ID or root in SECONDARY_ROOT_EXCLUDED_IDS:
+        return
+    if any(row.get("root_topic_id") == root for row in candidates):
+        return
+    if not _secondary_root_signal_is_strong(root, normalized):
+        return
+    candidates.append({"root_topic_id": root, "root_label_he": root_label_for_id(root), "reason": reason, "confidence": 0.68})
+
+
+def _keyword_secondary_root_ids(normalized: str, *, primary_root: str) -> list[str]:
+    scored: list[tuple[int, str]] = []
+    generic_terms = {"גן", "גנים", "דרך", "רחוב", "רחובות", "שימוש", "מבנה", "ועדה", "ביטחון", "בטיחות"}
+    for row in V4_ROOT_TOPICS:
+        root_id = str(row.get("root_topic_id") or "")
+        if root_id == primary_root or root_id in SECONDARY_ROOT_EXCLUDED_IDS:
+            continue
+        matched = 0
+        for keyword in row.get("keywords") or []:
+            term = normalize_for_search(keyword)
+            if not term or term in generic_terms or len(term) < 4:
+                continue
+            if term in normalized:
+                matched += 2 if " " in term else 1
+        if matched:
+            scored.append((matched, root_id))
+    return [root_id for _, root_id in sorted(scored, key=lambda item: (-item[0], item[1]))]
+
+
+def _secondary_root_signal_is_strong(root_id: str, normalized: str) -> bool:
+    if root_id == "root_security_enforcement":
+        return _has_public_safety_context(normalized)
+    if root_id == "root_transport_safety":
+        return any(term in normalized for term in ["תחבורה", "תנועה", "בטיחות בדרכים", "תמרור", "רמזור", "חניה", "חנייה", "מעבר חציה", "כביש", "אוטובוס"])
+    row = ROOT_BY_ID.get(root_id) or {}
+    generic_terms = {"גן", "גנים", "דרך", "רחוב", "רחובות", "שימוש", "מבנה", "ועדה"}
+    for keyword in row.get("keywords") or []:
+        term = normalize_for_search(keyword)
+        if term and term not in generic_terms and len(term) >= 4 and term in normalized:
+            return True
+    return False
+
+
+def _has_public_safety_context(normalized: str) -> bool:
+    return any(term in normalized for term in ["אלימות", "פשע", "פשיעה", "מיגור אלימות", "מיגור תופעת האלימות", "משטרה", "סדר ציבורי"])
+
+
+def _has_transport_location_context(normalized: str) -> bool:
+    has_location_shape = any(term in normalized for term in ["כיכר", "כיכרות", "צומת", "צמתים", "רחוב", "רחובות", "דרך", "שדרה"])
+    has_transport_signal = any(term in normalized for term in ["תנועה", "תחבורה", "בטיחות בדרכים", "תמרור", "רמזור", "חניה", "חנייה", "מעבר חציה", "כביש", "פס האטה"])
+    return has_location_shape and has_transport_signal
 
 
 def root_id_for_label(label: str | None) -> str | None:
@@ -999,6 +1070,11 @@ def procedural_child_label_reason(label: str | None, *, evidence_text: str = "")
 
 def unsupported_child_domain_reason(label: str | None, *, evidence_text: str = "") -> str | None:
     normalized = normalize_for_search(" ".join([str(label or ""), str(evidence_text or "")]))
+    label_norm = normalize_for_search(label or "")
+    evidence_norm = normalize_for_search(evidence_text or "")
+    geo_child_labels = {normalize_for_search(value) for value in ["כתובות ורחובות", "כיכרות וצמתים", "שכונות ואזורים", "גושים וחלקות"]}
+    if label_norm in geo_child_labels and _has_public_safety_context(evidence_norm):
+        return "geo_child_in_public_safety_context"
     if any(term in normalized for term in ["מקור לכיסוי", "כיסוי גרעון", "כיסוי גירעון", "גרעון", "גירעון"]) and not any(term in normalized for term in ["תחבורה", "תחבורה ציבורית", "משרד התחבורה"]):
         return "unsupported_semantic_domain"
     if "אלתא" in normalized:
@@ -1490,6 +1566,10 @@ def _semantic_root_override_is_strong(label: str, evidence_text: str) -> bool:
             "ועדת ביקורת",
             "מלגות",
             "הקצאות",
+            "אלימות",
+            "פשע",
+            "פשיעה",
+            "משטרה",
         ]
     )
 

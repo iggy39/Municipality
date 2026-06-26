@@ -398,6 +398,10 @@ def _reconstruction_preserves_audit_tokens(*, raw_text: str, reconstructed: str)
     reconstructed_digits = re.findall(r"\d", reconstructed)
     if sorted(raw_digits) != sorted(reconstructed_digits):
         return False
+    raw_numeric_tokens = Counter(re.findall(r"\d+", raw_text))
+    reconstructed_numeric_tokens = Counter(re.findall(r"\d+", reconstructed))
+    if raw_numeric_tokens != reconstructed_numeric_tokens:
+        return False
     raw_brackets = sum(raw_text.count(char) for char in "()[]{}")
     reconstructed_brackets = sum(reconstructed.count(char) for char in "()[]{}")
     return raw_brackets == reconstructed_brackets
@@ -606,11 +610,13 @@ def _cleanup_reconstructed_rtl_numeric_text(value: str, *, raw_text: str | None 
     text = re.sub(r"\s+([.,:;?!%)\]])", r"\1", text)
     text = re.sub(r"([([{])\s+", r"\1", text)
     text = re.sub(r"\b([\u0590-\u05FF]{1,3})\s+(\d+(?:\.\d+)?)%-", r"\1-\2%", text)
-    text = re.sub(r"\b([\u0590-\u05FF])\s+(\d[\d./]*)-", r"\1-\2", text)
+    text = re.sub(r"\b([\u0590-\u05FF])\s+(\d[\d./]*(?:-\d[\d./]*)+)\b", r"\1-\2", text)
+    text = re.sub(r"\b([\u0590-\u05FF])\s+(\d[\d./]*)-(?!\d)", r"\1-\2", text)
     text = re.sub(r"\)(\d{1,2}[./]\d{1,2}[./]\d{2,4})\(", r"(\1)", text)
     text = re.sub(r"(\d{1,2}[./]\d{1,2}[./]\d{2,4})\(\)", r"(\1)", text)
     text = re.sub(r"([\u0590-\u05FF])\((\d)", r"\1 (\2", text)
     text = re.sub(r"([\u0590-\u05FF])\.(\d+)(?=\s|$)", r"\1 \2.", text)
+    text = re.sub(r"(\d+)\s+([\u0590-\u05FF])\.(\d+)-(?=\s|$)", r"\1 \2-\3.", text)
     text = re.sub(r"([\u0590-\u05FF])\s+-(\d[\d./]*/\d[\d./]*)\s+([\u0590-\u05FF])", r"\1 \2 - \3", text)
     text = re.sub(r"(\d+):,\s+([\u0590-\u05FF][\u0590-\u05FF\"'׳״]*)", r"\1, \2:", text)
     text = re.sub(r"(\d[\d./]*)\s+([\u0590-\u05FF])\s+([\u0590-\u05FF]{2,})\b", r"\1 \2\3", text)

@@ -103,6 +103,11 @@ def _build_chunk(*, unit: dict[str, Any], assignment: dict[str, Any], entity_fac
     root_label = str(assignment.get("root_label_he") or "")
     child_id = str(assignment.get("child_topic_id") or "") or None
     child_label = str(assignment.get("child_label_he") or "") or None
+    secondary_topic_roots = _secondary_topic_roots(assignment)
+    secondary_topic_ids = _dedupe_strings([str(row.get("root_topic_id") or "") for row in secondary_topic_roots])
+    secondary_topics = _dedupe_strings([str(row.get("root_label_he") or "") for row in secondary_topic_roots])
+    category_ids = _dedupe_strings([root_topic_id, *secondary_topic_ids])
+    topic_ids = _dedupe_strings([root_topic_id, child_id, *secondary_topic_ids])
     status = str(assignment.get("topic_node_status") or "active")
     local_id = "rc_" + _short_hash("|".join([unit_id, str(page or ""), raw_text[:160]]))
     artifact_kind = "pdf_first_v4_retrieval_chunk"
@@ -110,6 +115,9 @@ def _build_chunk(*, unit: dict[str, Any], assignment: dict[str, Any], entity_fac
     evidence = evidence_payload(artifact_id=local_id, document_version_id=document_version_id, source_kind="pdf_first_v4", page=page, quote_he=quote, role="topic_assignment", source_region_ids=unit.get("source_region_ids") or assignment.get("source_region_ids") or [], source_block_ids=unit.get("source_block_ids") or assignment.get("source_block_ids") or [], start_offset=None, end_offset=None, confidence=confidence)
     evidence_ref = evidence_reference(source_type="pdf", source_title=source_title, source_url=source_url, retrieval_artifact_id=local_id, artifact_kind=artifact_kind, retrieval_set_id=retrieval_set_id, header_path=[value for value in [root_label, child_label, str(unit.get("structural_role") or "")] if value], page_span={"start_page": page, "end_page": page}, offsets={"start_offset": None, "end_offset": None}, confidence=confidence, extraction_warnings=[])
     topic_node = topic_node_contract(root_topic_id=root_topic_id, root_label_he=root_label, child_topic_id_value=child_id, child_label_he=child_label, status=status, confidence=confidence, evidence_refs=[evidence_ref], decision_count=1 if _looks_decision_like(raw_text) else 0)
+    topic_node["category_ids"] = category_ids
+    topic_node["secondary_category_ids"] = secondary_topic_ids
+    topic_node["secondary_topics"] = secondary_topics
     entity_mentions = _dedupe_entities(entity_facts)
     entity_ids = [str(item.get("entity_fact_id") or "") for item in entity_mentions if str(item.get("entity_fact_id") or "")]
     decision_fields = decision_contract_fields(text=raw_text, topic_root_id=root_topic_id, topic_child_id=child_id, evidence_refs=[evidence_ref], evidence_span_ids=[evidence["evidence_span_id"]], confidence=confidence, entity_ids=entity_ids)
@@ -150,16 +158,19 @@ def _build_chunk(*, unit: dict[str, Any], assignment: dict[str, Any], entity_fac
         "topic_evidence_span_ids": [evidence["evidence_span_id"]],
         "topic_supporting_quote_he": quote,
         "topic_aliases_he": assignment.get("topic_aliases_he") or [],
+        "secondary_topics": secondary_topics,
+        "secondary_topic_ids": secondary_topic_ids,
+        "secondary_topic_roots": secondary_topic_roots,
         "topic_node": topic_node,
-        "topic_ids": [value for value in [root_topic_id, child_id] if value],
-        "primary_category_id": root_topic_id,
-        "category_ids": [root_topic_id],
         "evidence_contract": evidence,
         "evidence_refs": [evidence_ref],
         "entity_facts": entity_mentions,
         "map_entities": [],
         "spatial_representation": "none",
         **decision_fields,
+        "topic_ids": topic_ids,
+        "primary_category_id": root_topic_id,
+        "category_ids": category_ids,
         "raw_text": raw_text,
         "corrected_text_he": corrected_text,
         "summary_he": summary,
@@ -327,6 +338,9 @@ def _topic_assignment_metadata(*, assignment: dict[str, Any], root_topic_id: str
         "root_label_he": root_label or None,
         "child_topic_id": child_id,
         "child_label_he": child_label,
+        "secondary_topics": assignment.get("secondary_topics") or [],
+        "secondary_topic_ids": assignment.get("secondary_topic_ids") or [],
+        "secondary_topic_roots": assignment.get("secondary_topic_roots") or [],
         "topic_node_status": status,
         "topic_reject_reason": assignment.get("topic_reject_reason"),
         "topic_assignment_route": assignment.get("topic_assignment_route"),
@@ -335,6 +349,34 @@ def _topic_assignment_metadata(*, assignment: dict[str, Any], root_topic_id: str
         "is_topic_bearing": assignment.get("is_topic_bearing"),
         "row_type": assignment.get("row_type"),
     }
+
+
+def _secondary_topic_roots(assignment: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = assignment.get("secondary_topic_roots") or []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        root_id = str(row.get("root_topic_id") or "").strip()
+        label = str(row.get("root_label_he") or "").strip()
+        if not root_id or not label or root_id in seen:
+            continue
+        seen.add(root_id)
+        out.append({"root_topic_id": root_id, "root_label_he": label, "reason": row.get("reason"), "confidence": row.get("confidence")})
+    return out
+
+
+def _dedupe_strings(values: list[Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
 
 
 def _span_hints_for_v3(*, unit: dict[str, Any], assignment: dict[str, Any], raw_text: str, corrected_text: str, quote: str, decision_fields: dict[str, Any], topic_assignment: dict[str, Any]) -> list[dict[str, Any]]:

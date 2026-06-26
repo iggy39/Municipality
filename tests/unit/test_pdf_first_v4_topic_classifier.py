@@ -3,7 +3,7 @@ from __future__ import annotations
 from municipality.pdf_first_v4_topic_classifier import build_topic_profile_index, find_topic_candidates
 from municipality.pdf_first_v4_topic_policy import clean_protocol_subject_text, topic_policy_matches
 from municipality.chunking import normalize_for_search
-from municipality.pdf_first_v4_topic_tree import CURATED_V4_CHILD_TOPICS, ROOT_BY_ID, clean_topic_label, global_topic_tree_payload, infer_root_topic_id, semantic_root_for_child_label
+from municipality.pdf_first_v4_topic_tree import CURATED_V4_CHILD_TOPICS, ROOT_BY_ID, clean_topic_label, global_topic_tree_payload, infer_root_topic_id, resolve_child_topic_assignment, secondary_topic_roots, semantic_root_for_child_label
 from municipality.topic_label_quality import canonicalize_topic_label
 
 
@@ -480,6 +480,40 @@ def test_semantic_root_routes_scholarship_child_to_supports() -> None:
 
 def test_budget_child_root_is_stable_with_security_context() -> None:
     assert semantic_root_for_child_label("הנחות ופטורים", evidence_text="נזק מלחמה") == "root_budget_finance"
+
+
+def test_location_only_square_subject_stays_geo_when_no_transport_action() -> None:
+    assert semantic_root_for_child_label("כיכרות וצמתים", evidence_text="כיכר רמון בעיר ודרך מנחם בגין", fallback="root_geo") == "root_geo"
+
+
+def test_public_safety_streets_context_does_not_route_to_geo_or_transport() -> None:
+    text = "שאילתה בנושא המשך התגברות תופעת האלימות והפשע ברחובות העיר"
+
+    assert semantic_root_for_child_label("מאבק באלימות קהילתית", evidence_text=text, fallback="root_geo") == "root_security_enforcement"
+    resolved = resolve_child_topic_assignment(root_topic_id="root_geo", root_label_he="מיקומים וגיאוגרפיה", child_label_he="כתובות ורחובות", evidence_text=text, selected_existing=True)
+
+    assert resolved["root_topic_id"] == "root_security_enforcement"
+    assert resolved["child_label_he"] is None
+    assert resolved["reason"] == "geo_child_in_public_safety_context"
+
+
+def test_mixed_welfare_education_subject_emits_secondary_education_root() -> None:
+    roots = secondary_topic_roots(root_topic_id="root_welfare_social", child_label_he="הסעות למסגרות חינוך ורווחה", evidence_text="הסעות לחינוך המיוחד ולמסגרות הרווחה")
+
+    assert roots == [
+        {
+            "root_topic_id": "root_education",
+            "root_label_he": "חינוך",
+            "reason": "semantic_root_context",
+            "confidence": 0.68,
+        }
+    ]
+
+
+def test_location_only_subject_does_not_emit_transport_secondary_root() -> None:
+    roots = secondary_topic_roots(root_topic_id="root_geo", child_label_he="כיכרות וצמתים", evidence_text="כיכר רמון בעיר ודרך מנחם בגין")
+
+    assert roots == []
 
 
 def test_curated_child_topic_seeds_are_unique_and_valid() -> None:

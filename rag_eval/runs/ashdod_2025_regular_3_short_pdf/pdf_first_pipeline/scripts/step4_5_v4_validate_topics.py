@@ -136,6 +136,8 @@ def _audit_tree_assignments(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             warnings.append(_warning(row, severity="critical", reason=noisy_reason))
         semantic_root = semantic_root_for_child_label(child_label, evidence_text=evidence_text, fallback=root_id)
         if semantic_root != root_id and semantic_root not in PROCEDURAL_ROOT_ONLY_IDS:
+            if semantic_root in _secondary_root_ids(row):
+                continue
             warnings.append(_warning(row, severity="warning", reason="semantic_root_mismatch", expected_root_topic_id=semantic_root, expected_root_label_he=root_label_for_id(semantic_root)))
         key = (child_label.casefold(), root_id)
         active_children.setdefault(key, []).append(row)
@@ -148,6 +150,14 @@ def _audit_tree_assignments(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         sample = next(rows_for_key[0] for key, rows_for_key in active_children.items() if key[0] == label_norm)
         warnings.append(_warning(sample, severity="warning", reason="duplicate_child_across_roots", duplicate_root_topic_ids=sorted(root_ids)))
     return warnings
+
+
+def _secondary_root_ids(row: dict[str, Any]) -> set[str]:
+    out = {str(value or "") for value in row.get("secondary_topic_ids") or [] if str(value or "").strip()}
+    for item in row.get("secondary_topic_roots") or []:
+        if isinstance(item, dict) and str(item.get("root_topic_id") or "").strip():
+            out.add(str(item.get("root_topic_id")))
+    return out
 
 
 def _warning(row: dict[str, Any], *, severity: str, reason: str, **extra: Any) -> dict[str, Any]:

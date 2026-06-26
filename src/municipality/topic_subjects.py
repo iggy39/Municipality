@@ -175,6 +175,42 @@ ACTION_ONTOLOGY_V3 = (
 ACTION_ONTOLOGY_LABELS_V3 = tuple(row["label_he"] for row in ACTION_ONTOLOGY_V3)
 FORMAL_DECISION_ACTION_LABELS_V3 = {"אישור", "דחייה"}
 
+TOPIC_SUBJECT_V3_SEMANTIC_EXAMPLES = (
+    {
+        "case_he": "הצעה לסדר עם הסרה מסדר היום",
+        "source_quote_he": "ההצעה לסדר- תו חניה לתושבים הגרים בסמוך למרכזים מסחריים יורדת מסדר היום",
+        "expected": {
+            "action_type_he": "הצעה לסדר יום",
+            "matter_he": "תו חניה לתושבים הגרים בסמוך למרכזים מסחריים",
+            "outcome_type": "removed",
+            "outcome_evidence_classification": "actual_result",
+        },
+        "why_he": "הצעה לסדר היא הפעולה הפרוצדורלית, תו החניה הוא העניין הממשי, ויורדת מסדר היום הוא תוצאת ההסרה.",
+    },
+    {
+        "case_he": "הצעה אפשרית להעברה לוועדה ללא תוצאה סופית",
+        "source_quote_he": "אנחנו מציעים להעביר את הדיון הזה לוועדת החינוך. אפשר להעביר את ההחלטה הזו פה אחד.",
+        "expected": {
+            "action_type_he": "בקשה",
+            "matter_he": "העברת הדיון לוועדת החינוך",
+            "outcome_type": "none",
+            "outcome_evidence_classification": "proposal_or_intent",
+        },
+        "why_he": "מציעים ואפשר להעביר מתארים הצעה או אפשרות, לא החלטה שהועברה בפועל.",
+    },
+    {
+        "case_he": "העברה חזקה לוועדה כתוצאה",
+        "source_quote_he": "ההצעה עוברת לדיון בוועדת שמות",
+        "expected": {
+            "action_type_he": "הפניה לוועדה",
+            "matter_he": "העניין שמועבר לוועדה כפי שהוא כתוב בשורה",
+            "outcome_type": "referred",
+            "outcome_evidence_classification": "actual_result",
+        },
+        "why_he": "עוברת לדיון בוועדה הוא ניסוח תוצאה בפועל, לא רק הצעה.",
+    },
+)
+
 CONDITION_SCOPE_CUES = (
     "בהזמנות הנגזרות",
     "חוזה חתום",
@@ -354,6 +390,43 @@ COMMITTEE_REFERRAL_CUES = (
     "להעביר את הנושא לועדה",
 )
 
+COMMITTEE_REFERRAL_RESULT_CUES = (
+    "עוברת לדיון בוועדה",
+    "עוברת לדיון בועדה",
+    "עוברת לדיון בוועדת",
+    "עוברת לדיון בועדת",
+    "מועברת לדיון בוועדה",
+    "מועברת לדיון בועדה",
+    "מועברת לוועדה",
+    "מועברת לועדה",
+    "הועברה לדיון בוועדה",
+    "הועברה לדיון בועדה",
+    "הועברה לוועדה",
+    "הועברה לועדה",
+    "הוחלט להעביר לוועדה",
+    "הוחלט להעביר לועדה",
+    "הוחלט להעביר את הדיון לוועדה",
+    "הוחלט להעביר את הדיון לועדה",
+    "הוחלט להעביר את הנושא לוועדה",
+    "הוחלט להעביר את הנושא לועדה",
+    "המועצה החליטה להעביר לוועדה",
+    "המועצה החליטה להעביר לועדה",
+    "החלטה להעביר לוועדה",
+    "החלטה להעביר לועדה",
+)
+
+COMMITTEE_REFERRAL_PROPOSAL_CUES = (
+    "אנחנו מציעים",
+    "מציעים להעביר",
+    "מציע להעביר",
+    "מציעה להעביר",
+    "מבקשים להעביר",
+    "מבקש להעביר",
+    "מבקשת להעביר",
+    "אפשר להעביר",
+    "ניתן להעביר",
+)
+
 COMMITTEE_DECISION_APPROVAL_CUES = (
     "מאשרת את החלטת",
     "מאשר את החלטת",
@@ -426,9 +499,16 @@ TOPIC_SUBJECT_V3_SPAN_ROLE_ALIASES = {
     "structural_metadata": "structural",
     "metadata": "structural",
     "structure": "structural",
+    "date": "structural",
     "action": "action_candidate",
     "action_bearing": "action_candidate",
+    "matter": "supporting_context",
+    "matter_candidate": "supporting_context",
+    "subject": "supporting_context",
+    "subject_matter": "supporting_context",
     "outcome": "outcome_candidate",
+    "actual_result": "outcome_candidate",
+    "decision_result": "outcome_candidate",
     "decision": "outcome_candidate",
     "supporting": "supporting_context",
     "irrelevant": "not_relevant",
@@ -2695,6 +2775,7 @@ def topic_subject_v3_normalization_payload(*, context: TopicSubjectV3EventContex
         "requirements": [
             "Return strict JSON only.",
             "Normalize the target row and nearby context into one candidate municipal event before action extraction.",
+            "target_artifact_id must equal source_context.target_artifact_id. Never replace the target with a nearby row; if a nearby row contains a later decision, keep it as nearby context and classify the target row's role separately.",
             "Use target_row.text_spans to separate structural, background, action-bearing, outcome-bearing, and supporting parts of long mixed rows.",
             "Do not collapse subject, action, phase, and outcome into one quote. Identify separate evidence roles before summarizing the event.",
             "Keep span_roles concise: include only supplied span_id values and one short reason per span.",
@@ -2708,6 +2789,11 @@ def topic_subject_v3_normalization_payload(*, context: TopicSubjectV3EventContex
             "Decide whether the target row itself participates in a municipal event, or is only metadata, duplicate reference, evidence fragment, vote/result metadata, supporting phase, or insufficient context.",
             "When nearby rows describe the same event lifecycle, identify the best action anchor row and classify the other rows as supporting rather than independent events.",
             "Separate agenda/procedure carrier from the concrete matter.",
+            "If the text says הצעה לסדר or הצעה לסדר יום followed by a concrete topic, keep the carrier/procedure separate from matter_candidate_he; the concrete topic is the matter.",
+            "If one span says הצעה לסדר/הצעה לסדר יום and another span says יורדת מסדר היום, the proposal span is the action_candidate and the removal span is the outcome_candidate; do not make the removal span the only primary_action_span.",
+            "For agenda proposal rows with a later result, primary_action_span_ids must point to the proposal/request carrier span, while primary_outcome_span_ids must point to the result span.",
+            "Classify outcome evidence semantically: actual_result means a completed procedural result; proposal_or_intent means asks/proposes/suggests/can transfer; ambiguous_agreement means agreement wording without a clear completed result; not_outcome means no result evidence.",
+            "Do not mark outcome_he=referred from modal or proposal wording such as מציעים להעביר or אפשר להעביר unless the same supplied text directly says the matter actually passed/was transferred to a committee.",
             "Keep שאילתה and מענה לשאילתה distinct when the evidence supports that distinction.",
             "Use nearby rows only to recover bounded subject words, decision/result context, and row roles.",
             "Do not invent municipality-specific rules, labels, or facts.",
@@ -2723,6 +2809,7 @@ def topic_subject_v3_normalization_payload(*, context: TopicSubjectV3EventContex
             "municipal_action_description_he": "string|null",
             "matter_candidate_he": "string|null",
             "outcome_he": "approved|rejected|referred|removed|deferred|reported|none|unknown|null",
+            "outcome_evidence_classification": "actual_result|proposal_or_intent|ambiguous_agreement|not_outcome|null",
             "supporting_quote_he": "exact quote from one supplied raw_text row|null",
             "primary_action_span_ids": ["span_id strings for the target-row spans carrying the municipal action"],
             "primary_outcome_span_ids": ["span_id strings for target or nearby spans carrying a decision/result outcome"],
@@ -2792,6 +2879,11 @@ def topic_subject_v3_extraction_payload(
             "Use התקשרות for agreement/contract/right-of-use/service-engagement rows when the source describes the engagement but does not directly say the municipal body approved it.",
             "Use outcome to describe result/status separately from action_type. For example action_type=בקשה with outcome_type=none, or action_type=אישור with outcome_type=approved.",
             "Set outcome_is_decision=true only when supplied raw text contains an actual outcome such as approval, rejection, referral, removal, or another binding/procedural decision.",
+            "Classify outcome evidence semantically before setting outcome_is_decision: actual_result can support an outcome; proposal_or_intent, ambiguous_agreement, and not_outcome must keep outcome_type=none unless another exact quote states the actual result.",
+            "Do not treat מציעים להעביר, מבקשים להעביר, אפשר להעביר, or similar modal/proposal wording as outcome_type=referred by itself; use בקשה with outcome_type=none unless the text directly says the matter was transferred or decided for transfer.",
+            "For agenda proposals, do not let הצעה לסדר or הצעה לסדר יום replace the concrete matter_he; copy the topic after the carrier as matter_he when supported.",
+            "When a row contains both הצעה לסדר יום and יורדת מסדר היום, keep action_type_he=הצעה לסדר יום when that is the action evidence, and put the removal only in outcome.outcome_type=removed.",
+            "If normalized_event incorrectly marks only the removal/result span as primary_action_span_ids while procedural_carrier_he contains הצעה לסדר/הצעה לסדר יום, override that span-role mistake: choose action_type_he=הצעה לסדר יום and use the removal quote only as outcome evidence.",
             "If outcome_is_decision=true, outcome.outcome_quote_he must be an exact short quote from a supplied raw_text row.",
             "action_quote_he should be an exact quote from a supplied raw_text row supporting the chosen action type when available.",
         ],
@@ -2818,6 +2910,7 @@ def topic_subject_v3_extraction_payload(
                 "outcome_label_he": "string|null",
                 "outcome_summary_he": "string|null",
                 "outcome_quote_he": "exact quote from supplied raw_text|null",
+                "outcome_evidence_classification": "actual_result|proposal_or_intent|ambiguous_agreement|not_outcome|null",
                 "confidence": 0.0,
                 "limitations": ["string"],
             },
@@ -2861,6 +2954,7 @@ def topic_subject_v3_extraction_payload(
         "allowed_actions": ACTION_ONTOLOGY_V3,
         "action_confidence_threshold": float(config.action_confidence_threshold),
         "normalized_event": compact_payload_for_prompt(normalized_event),
+        "semantic_examples": TOPIC_SUBJECT_V3_SEMANTIC_EXAMPLES,
         "source_context": topic_subject_v3_source_context(context=context, max_text_chars=config.max_text_chars),
     }
 
@@ -2883,6 +2977,7 @@ def topic_subject_v3_non_event_reconsideration_payload(
             "If the grounded quote expresses a concrete requested, proposed, desired, answered, reported, objected-to, or procedurally handled municipal action, return is_event=true with one exact allowed action label.",
             "If the quote is only subject mention, background, opinion, criticism, or comparison without a concrete municipal action/change/procedural step, keep is_event=false.",
             "Keep outcome_is_decision=false unless the raw text directly states a formal decision outcome.",
+            "Treat proposal/modal wording such as מציעים להעביר or אפשר להעביר as an event action only, not as outcome_type=referred.",
             "Do not invent a label. If no controlled label is high-confidence, use action_type_he=אחר with other_action_type_he.",
             "Always include action_type_confidence when is_event=true.",
         ],
@@ -2904,6 +2999,7 @@ def topic_subject_v3_non_event_reconsideration_payload(
                 "outcome_label_he": "string|null",
                 "outcome_summary_he": "string|null",
                 "outcome_quote_he": "exact quote from supplied raw_text|null",
+                "outcome_evidence_classification": "actual_result|proposal_or_intent|ambiguous_agreement|not_outcome|null",
                 "confidence": 0.0,
                 "limitations": ["string"],
             },
@@ -2923,6 +3019,7 @@ def topic_subject_v3_non_event_reconsideration_payload(
         "action_confidence_threshold": float(config.action_confidence_threshold),
         "normalized_event": compact_payload_for_prompt(normalized_event),
         "extraction_payload": compact_payload_for_prompt(extraction_payload),
+        "semantic_examples": TOPIC_SUBJECT_V3_SEMANTIC_EXAMPLES,
         "source_context": topic_subject_v3_source_context(context=context, max_text_chars=config.max_text_chars),
     }
 
@@ -2945,6 +3042,10 @@ def topic_subject_v3_judge_payload(
             "For judge_prediction.matter_he, preserve the action-scoped matter from the source rather than only the broad object/topic.",
             "When the source contains an explicit action/request/proposal statement plus later advocacy, criticism, or stance text, judge the extraction against the explicit action/request/proposal statement.",
             "A concrete requested/proposed/desired municipal action can be an open request event even without formal motion, vote, decision, or formulaic request wording; keep outcome_type=none unless a formal result is stated.",
+            "For judge_prediction, classify outcome evidence first: actual_result can support an outcome; proposal_or_intent, ambiguous_agreement, and not_outcome cannot support approval, rejection, referral, removal, or deferral.",
+            "Do not judge מציעים להעביר, מבקשים להעביר, אפשר להעביר, or similar wording as outcome_type=referred unless another exact quote states the matter actually passed/was transferred to a committee.",
+            "If the source has הצעה לסדר or הצעה לסדר יום plus a concrete topic, treat the carrier as action/procedure and preserve the concrete topic as matter_he.",
+            "If הצעה לסדר יום is removed from the agenda, judge removal as outcome_type=removed; do not require replacing action_type_he with הסרה מסדר היום when הצעה לסדר יום is the grounded action.",
             "If the current row states that an answer/response to an inquiry was read, given, presented, or attached, judge the action as מענה לשאילתה, not שאילתה, even when the row title identifies the original inquiry topic.",
             "When the source explicitly presents הסתייגות, judge it as הסתייגות unless there is direct current-event evidence of a formal decision outcome.",
             "Use דחייה only when the source states a formal/procedural rejection by a municipal body, not merely opposition or a request not to approve.",
@@ -2963,6 +3064,7 @@ def topic_subject_v3_judge_payload(
                 "outcome_type": "approved|rejected|referred|removed|deferred|reported|none|unknown|null",
                 "outcome_label_he": "string|null",
                 "outcome_quote_he": "exact quote from supplied raw_text|null",
+                "outcome_evidence_classification": "actual_result|proposal_or_intent|ambiguous_agreement|not_outcome|null",
                 "confidence": 0.0,
                 "rationale_he": "string",
             },
@@ -2984,6 +3086,7 @@ def topic_subject_v3_judge_payload(
         "normalized_event": compact_payload_for_prompt(normalized_event),
         "extraction_payload": compact_payload_for_prompt(extraction_payload),
         "allowed_actions": ACTION_ONTOLOGY_V3,
+        "semantic_examples": TOPIC_SUBJECT_V3_SEMANTIC_EXAMPLES,
         "source_context": topic_subject_v3_source_context(context=context, max_text_chars=3500),
     }
 
@@ -3032,6 +3135,9 @@ def topic_subject_v3_evidence_entailment_payload(
             "Keep every source_quote_he short: copy the smallest exact supporting span, preferably under 220 characters, never a full paragraph or full row.",
             "Keep each rationale_he to one concise sentence.",
             "Do not infer an approval, rejection, referral, removal, deferral, or other outcome unless a supplied row directly states that outcome.",
+            "Classify outcome evidence semantically: actual_result can entail an outcome; proposal_or_intent, ambiguous_agreement, and not_outcome cannot entail an outcome.",
+            "Do not treat מציעים להעביר, מבקשים להעביר, אפשר להעביר, or similar modal/proposal wording as entailing outcome_type=referred unless another exact quote states actual transfer/decision to transfer.",
+            "If a source says הצעה לסדר יום about a concrete matter and also says it is removed, action_type_he can remain הצעה לסדר יום while outcome_type=removed.",
             "For matter_he, check whether it preserves the action-scoped matter from the source. If it drops a stated change, condition, assignment, status, or object needed to understand what is being acted on, mark matter_he not_entailed or repair it.",
             "Use upstream_subject_hint as a strong non-authoritative disambiguation hint for matter_he, especially when several nearby matters appear in one row.",
             "Do not use upstream_subject_hint as source evidence for event existence, action type, or decision outcome; every accepted claim still needs raw_text support.",
@@ -3064,6 +3170,7 @@ def topic_subject_v3_evidence_entailment_payload(
                 "outcome": {
                     "status": "entailed|not_entailed|uncertain|not_applicable",
                     "source_quote_he": "short exact quote from supplied raw_text, preferably under 220 chars|null",
+                    "outcome_evidence_classification": "actual_result|proposal_or_intent|ambiguous_agreement|not_outcome|null",
                     "rationale_he": "string",
                 },
             },
@@ -3075,6 +3182,7 @@ def topic_subject_v3_evidence_entailment_payload(
         "allowed_actions": ACTION_ONTOLOGY_V3,
         "normalized_event": compact_payload_for_prompt(normalized_event),
         "event_payload": compact_payload_for_prompt(event_payload),
+        "semantic_examples": TOPIC_SUBJECT_V3_SEMANTIC_EXAMPLES,
         "source_context": topic_subject_v3_source_context(context=context, max_text_chars=3500),
     }
 
@@ -3098,6 +3206,8 @@ def topic_subject_v3_formal_decision_evidence_repair_payload(
             "Repair the event only when the current extraction treats advocacy, opposition, or desired result text as a formal municipal decision.",
             "A formal decision requires source wording such as החלטה, הוחלט, המועצה החליטה, ברוב קולות, פה אחד, נדחה, לא אושר, or equivalent procedural result wording.",
             "Text saying a speaker asks, demands, objects, proposes, or says לא לאשר / לדרוש שינוי is not by itself a formal decision outcome.",
+            "Text saying מציעים להעביר, מבקשים להעביר, אפשר להעביר, or similar modal/proposal wording is not by itself outcome_type=referred.",
+            "If an agenda proposal is removed, preserve the proposal action when supported and put the removal in outcome_type=removed instead of forcing action_type_he=הסרה מסדר היום.",
             "If formal decision evidence is missing, choose the best-supported non-decision action from allowed_actions and set outcome_is_decision=false with outcome_type=none.",
             "If the source explicitly presents הסתייגות, prefer action_type_he=הסתייגות over generic בקשה when no current formal decision outcome is directly stated.",
             "When the source contains an explicit action/request/proposal statement plus later advocacy, criticism, or stance text, anchor action_type_he and matter_he on the explicit action/request/proposal statement.",
@@ -3125,6 +3235,7 @@ def topic_subject_v3_formal_decision_evidence_repair_payload(
                 "outcome_label_he": "string|null",
                 "outcome_summary_he": "string|null",
                 "outcome_quote_he": "exact quote from supplied raw_text|null",
+                "outcome_evidence_classification": "actual_result|proposal_or_intent|ambiguous_agreement|not_outcome|null",
                 "confidence": 0.0,
                 "limitations": ["string"],
             },
@@ -3136,6 +3247,7 @@ def topic_subject_v3_formal_decision_evidence_repair_payload(
         "non_authoritative_topic_hint": topic_hint or None,
         "normalized_event": compact_payload_for_prompt(normalized_event),
         "current_event_payload": compact_payload_for_prompt(event_payload),
+        "semantic_examples": TOPIC_SUBJECT_V3_SEMANTIC_EXAMPLES,
         "source_context": topic_subject_v3_source_context(context=context, max_text_chars=3500),
     }
 
@@ -3430,6 +3542,12 @@ def topic_subject_v3_fallback_normalized_event(*, context: TopicSubjectV3EventCo
 def topic_subject_v3_normalize_context_event_payload(payload: dict[str, Any], *, context: TopicSubjectV3EventContext | None = None) -> dict[str, Any]:
     normalized = dict(payload)
     warnings = [compact_text(item) for item in normalized.get("schema_warnings") or [] if compact_text(item)]
+    if context is not None:
+        raw_target_artifact_id = compact_text(normalized.get("target_artifact_id"))
+        if raw_target_artifact_id and raw_target_artifact_id != context.target_artifact.artifact_id:
+            warnings.append(f"target_artifact_id_normalized:{raw_target_artifact_id}->{context.target_artifact.artifact_id}")
+        normalized["context_id"] = compact_text(normalized.get("context_id")) or context.context_id
+        normalized["target_artifact_id"] = context.target_artifact.artifact_id
     target_row_role, target_row_role_changed = topic_subject_v3_normalize_row_role_value(normalized.get("target_row_role"), fallback="insufficient_context")
     if target_row_role_changed:
         warnings.append(f"target_row_role_normalized:{compact_text(normalized.get('target_row_role'))}->{target_row_role}")
@@ -3949,7 +4067,23 @@ def normalize_topic_subject_v3_event_payload(
         is_event
         and outcome_is_decision
         and outcome["outcome_type"] == "removed"
+        and text_has_any(target_norm, AGENDA_PROPOSAL_CUES)
         and text_has_any(formal_decision_norm, AGENDA_REMOVAL_CUES)
+    ):
+        proposal_quote = exact_source_quote_around_cue(raw_text=context.target_artifact.real_text, cues=AGENDA_PROPOSAL_CUES, max_words=24)
+        action_type = "הצעה לסדר יום"
+        other_action = ""
+        action_confidence = max(action_confidence, float(action_confidence_threshold))
+        action_status = "repaired_agenda_proposal_action_from_removed_outcome_evidence"
+        semantic_repair_reasons.append("repaired_agenda_proposal_action_from_removed_outcome_evidence")
+        if proposal_quote and quote_supported_by_text(quote=proposal_quote, text=context.target_artifact.real_text):
+            raw_action_quote = proposal_quote[:700]
+    elif (
+        is_event
+        and outcome_is_decision
+        and outcome["outcome_type"] == "removed"
+        and text_has_any(formal_decision_norm, AGENDA_REMOVAL_CUES)
+        and action_type in {"", "אחר", "בקשה", "דיון", "אישור", "דחייה"}
     ):
         action_type = "הסרה מסדר היום"
         other_action = ""
@@ -3960,7 +4094,7 @@ def normalize_topic_subject_v3_event_payload(
         is_event
         and outcome_is_decision
         and outcome["outcome_type"] == "referred"
-        and text_has_any(formal_decision_norm, COMMITTEE_REFERRAL_CUES)
+        and text_has_any(formal_decision_norm, COMMITTEE_REFERRAL_RESULT_CUES)
     ):
         action_type = "הפניה לוועדה"
         other_action = ""
@@ -4094,7 +4228,7 @@ def repair_topic_subject_v3_request_outcome_payload(*, context: TopicSubjectV3Ev
     repaired = dict(event_payload)
     metadata = dict(repaired.get("v3_outcome_quote_repair") or {})
     metadata["outcome_quote_classification"] = classification
-    if classification == "request_for_outcome" and topic_subject_v3_target_text_request_like_without_decision(context.target_artifact.real_text):
+    if classification in {"request_for_outcome", "proposal_or_intent", "ambiguous_agreement"} and topic_subject_v3_target_text_request_like_without_decision(context.target_artifact.real_text):
         repaired_outcome = dict(outcome)
         repaired_outcome["outcome_type"] = "none"
         repaired_outcome["outcome_label_he"] = ""
@@ -4109,6 +4243,15 @@ def repair_topic_subject_v3_request_outcome_payload(*, context: TopicSubjectV3Ev
             repaired["action_type_he"] = "בקשה"
             repaired["action_type_norm"] = normalize_for_search("בקשה")[:500]
             repaired["action_type_status"] = "repaired_request_phase_from_approval_quote"
+        target_action_quote = exact_source_quote_around_cue(
+            raw_text=context.target_artifact.real_text,
+            cues=COMMITTEE_REFERRAL_PROPOSAL_CUES + REQUEST_ACTION_CUES + AGENDA_PROPOSAL_CUES,
+            max_words=32,
+        )
+        if target_action_quote and quote_supported_by_text(quote=target_action_quote, text=context.target_artifact.real_text):
+            repaired["action_quote_he"] = target_action_quote[:700]
+            repaired["action_focus_quote_he"] = target_action_quote[:700]
+            metadata["action_quote_repair_reason"] = "restored_target_row_action_quote_after_outcome_downgrade"
         repaired["event_phase"] = topic_subject_v3_event_phase(context=context, is_event=True, action_type=compact_text(repaired.get("action_type_he")), outcome_is_decision=False)
     repaired["v3_outcome_quote_repair"] = metadata
     return repaired
@@ -4118,7 +4261,9 @@ def topic_subject_v3_outcome_quote_classification(quote: str) -> str:
     quote_norm = normalize_for_search(quote)
     if not quote_norm:
         return "unknown"
-    if text_has_any(quote_norm, APPROVAL_DECISION_QUOTE_CUES + AGENDA_REMOVAL_CUES + COMMITTEE_REFERRAL_CUES):
+    if topic_subject_v3_has_referral_proposal_without_result(quote_norm):
+        return "proposal_or_intent"
+    if text_has_any(quote_norm, APPROVAL_DECISION_QUOTE_CUES + AGENDA_REMOVAL_CUES + COMMITTEE_REFERRAL_RESULT_CUES):
         return "actual_outcome"
     if text_has_any(quote_norm, REQUEST_ACTION_CUES):
         return "request_for_outcome"
@@ -4254,7 +4399,7 @@ def topic_subject_v3_repair_same_row_decision_outcome_locally(*, context: TopicS
     repaired = dict(event_payload)
     outcome_type = evidence["outcome_type"]
     action_type = compact_text(repaired.get("action_type_he"))
-    if outcome_type == "removed":
+    if outcome_type == "removed" and action_type in {"", "אחר", "בקשה", "דיון", "אישור", "דחייה"}:
         repaired["action_type_he"] = "הסרה מסדר היום"
         repaired["other_action_type_he"] = ""
         repaired["action_type_confidence"] = max(clamp_float(repaired.get("action_type_confidence"), default=0.0), 0.9)
@@ -4429,11 +4574,20 @@ def topic_subject_v3_decision_outcome_from_text(text: str) -> dict[str, Any] | N
         return {"outcome_type": "rejected", "outcome_label_he": "דחייה", "cues": REJECTION_DECISION_CUES}
     if text_has_any(text_norm, AGENDA_REMOVAL_CUES):
         return {"outcome_type": "removed", "outcome_label_he": "הסרה מסדר היום", "cues": AGENDA_REMOVAL_CUES}
-    if text_has_any(text_norm, COMMITTEE_REFERRAL_CUES):
-        return {"outcome_type": "referred", "outcome_label_he": "הפניה לוועדה", "cues": COMMITTEE_REFERRAL_CUES}
+    if text_has_any(text_norm, COMMITTEE_REFERRAL_RESULT_CUES):
+        return {"outcome_type": "referred", "outcome_label_he": "הפניה לוועדה", "cues": COMMITTEE_REFERRAL_RESULT_CUES}
+    if topic_subject_v3_has_referral_proposal_without_result(text_norm):
+        return None
     if text_has_any(text_norm, APPROVAL_DECISION_QUOTE_CUES + STRONG_APPROVAL_ACTION_CUES):
         return {"outcome_type": "approved", "outcome_label_he": "אישור", "cues": APPROVAL_DECISION_QUOTE_CUES + STRONG_APPROVAL_ACTION_CUES}
     return None
+
+
+def topic_subject_v3_has_referral_proposal_without_result(text_norm: str) -> bool:
+    return text_has_any(text_norm, COMMITTEE_REFERRAL_PROPOSAL_CUES) and not text_has_any(
+        text_norm,
+        COMMITTEE_REFERRAL_RESULT_CUES + APPROVAL_DECISION_QUOTE_CUES + AGENDA_REMOVAL_CUES + REJECTION_DECISION_CUES,
+    )
 
 
 def topic_subject_v3_repair_event_quotes_locally(*, context: TopicSubjectV3EventContext, event_payload: dict[str, Any], quote_failures: list[str]) -> dict[str, Any]:
@@ -4927,7 +5081,7 @@ def topic_subject_v3_formal_decision_outcome_without_formal_evidence(*, event_pa
         + APPROVAL_DECISION_QUOTE_CUES
         + REJECTION_DECISION_CUES
         + AGENDA_REMOVAL_CUES
-        + COMMITTEE_REFERRAL_CUES
+        + COMMITTEE_REFERRAL_RESULT_CUES
     )
     return not text_has_any(evidence_norm, formal_cues)
 
@@ -4955,10 +5109,45 @@ def topic_subject_v3_judge_action_disagreement_needs_review(*, event_payload: di
     judge_action_type = compact_text(prediction.get("action_type_he"))
     if not action_type or not judge_action_type or action_type == judge_action_type:
         return False
+    if topic_subject_v3_judge_action_disagreement_is_compatible_wrapper(
+        event_payload=event_payload,
+        action_type=action_type,
+        judge_action_type=judge_action_type,
+    ):
+        return False
     confidence = clamp_float(prediction.get("confidence"), default=0.0)
     if confidence <= 0.0:
         confidence = clamp_float(judge_payload.get("confidence"), default=0.0)
     return confidence >= 0.85
+
+
+def topic_subject_v3_judge_action_disagreement_is_compatible_wrapper(*, event_payload: dict[str, Any], action_type: str, judge_action_type: str) -> bool:
+    """Allow source-evidenced wrapper actions to contain a judge-selected remedy action."""
+    evidence_text = topic_subject_v3_action_disagreement_evidence_text(event_payload)
+    if not evidence_text:
+        return False
+    wrapper_rules: tuple[tuple[str, set[str], tuple[str, ...]], ...] = (
+        ("הסתייגות", {"בקשה"}, OBJECTION_ACTION_CUES),
+        ("הצעה לסדר יום", {"בקשה", "דיון"}, AGENDA_PROPOSAL_CUES),
+        ("מענה לשאילתה", {"שאילתה"}, RESPONSE_TO_INQUIRY_ACTION_CUES),
+    )
+    for wrapper_action, embedded_actions, wrapper_cues in wrapper_rules:
+        if action_type == wrapper_action and judge_action_type in embedded_actions and text_has_any(evidence_text, wrapper_cues):
+            return True
+    return False
+
+
+def topic_subject_v3_action_disagreement_evidence_text(event_payload: dict[str, Any]) -> str:
+    evidence_roles = event_payload.get("evidence_roles") if isinstance(event_payload.get("evidence_roles"), dict) else {}
+    parts = [
+        event_payload.get("action_quote_he"),
+        event_payload.get("action_focus_quote_he"),
+        evidence_roles.get("subject_evidence_quote_he"),
+        evidence_roles.get("action_evidence_quote_he"),
+        evidence_roles.get("phase_evidence_quote_he"),
+        evidence_roles.get("decision_evidence_quote_he"),
+    ]
+    return compact_text(" ".join(compact_text(part) for part in parts if compact_text(part)))
 
 
 def topic_subject_v3_event_group_key(*, context: TopicSubjectV3EventContext, event_payload: dict[str, Any]) -> str:
@@ -5280,7 +5469,7 @@ def topic_subject_v3_anchor_selection_reason(event: TopicSubjectV3EventResult) -
 
 def topic_subject_v3_target_text_has_explicit_decision_evidence(text: str) -> bool:
     text_norm = normalize_for_search(corrected_hebrew_text(text))
-    return text_has_any(text_norm, APPROVAL_DECISION_QUOTE_CUES + AGENDA_REMOVAL_CUES + COMMITTEE_REFERRAL_CUES)
+    return text_has_any(text_norm, APPROVAL_DECISION_QUOTE_CUES + AGENDA_REMOVAL_CUES + COMMITTEE_REFERRAL_RESULT_CUES)
 
 
 def topic_subject_v3_apply_canonical_matter(*, primary: TopicSubjectV3EventResult, group_events: list[TopicSubjectV3EventResult]) -> dict[str, Any]:
@@ -5410,6 +5599,8 @@ def topic_subject_v3_target_row_request_like_without_decision(event: TopicSubjec
 
 def topic_subject_v3_target_text_request_like_without_decision(text: str) -> bool:
     text_norm = normalize_for_search(corrected_hebrew_text(text))
+    if topic_subject_v3_has_referral_proposal_without_result(text_norm):
+        return True
     return text_has_any(text_norm, REQUEST_ACTION_CUES) and not text_has_any(text_norm, DECISION_ACTION_CUES + APPROVAL_VERB_CUES + STRONG_APPROVAL_ACTION_CUES)
 
 
@@ -6805,7 +6996,7 @@ def apply_subject_validation(*, artifact: TopicDecisionArtifact, subject_payload
         return
     if not quote_supported_by_text(quote=source_quote, text=artifact.real_text):
         failures.append("decision_source_quote_not_grounded_in_raw_evidence_text")
-    procedural_decision_cues = AGENDA_REMOVAL_CUES + COMMITTEE_REFERRAL_CUES
+    procedural_decision_cues = AGENDA_REMOVAL_CUES + COMMITTEE_REFERRAL_RESULT_CUES
     if text_has_any(quote_norm, REQUEST_ACTION_CUES) and not text_has_any(quote_norm, DECISION_ACTION_CUES + procedural_decision_cues):
         failures.append("request_or_proposal_without_decision_outcome")
     if text_has_any(quote_norm, RECOMMENDATION_ACTION_CUES) and not text_has_any(quote_norm, APPROVAL_VERB_CUES + STRONG_APPROVAL_ACTION_CUES):
@@ -7116,7 +7307,7 @@ def repair_decision_quote_from_raw_text(*, artifact: TopicDecisionArtifact, subj
         return
     source_quote = compact_text(decision.get("source_quote_he"))
     source_quote_norm = normalize_for_search(source_quote)
-    quote_has_decision_action = text_has_any(source_quote_norm, DECISION_ACTION_CUES + AGENDA_REMOVAL_CUES + COMMITTEE_REFERRAL_CUES)
+    quote_has_decision_action = text_has_any(source_quote_norm, DECISION_ACTION_CUES + AGENDA_REMOVAL_CUES + COMMITTEE_REFERRAL_RESULT_CUES)
     if source_quote and quote_has_decision_action and quote_supported_by_text(quote=source_quote, text=artifact.real_text):
         return
     repaired = grounded_decision_source_quote(root=root, raw_text=artifact.real_text)
@@ -7139,7 +7330,7 @@ def grounded_decision_source_quote(*, root: str, raw_text: str) -> str:
     elif root == "הסרה מסדר היום":
         cues = AGENDA_REMOVAL_CUES + APPROVAL_DECISION_QUOTE_CUES
     elif root == "הפניה לוועדה":
-        cues = COMMITTEE_REFERRAL_CUES + APPROVAL_DECISION_QUOTE_CUES
+        cues = COMMITTEE_REFERRAL_RESULT_CUES + APPROVAL_DECISION_QUOTE_CUES
     return exact_source_quote_around_cue(raw_text=raw_text, cues=cues)
 
 

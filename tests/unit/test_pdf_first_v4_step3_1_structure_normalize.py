@@ -117,3 +117,13 @@ def test_normalize_structure_adds_visual_headline_units_from_generic_report(tmp_
     assert visual_units[0]["header_text"] == "שיפור בטיחות הולכי רגל ליד בתי ספר"
     assert visual_units[0]["source_region_ids"] == ["p4_r7"]
     assert visual_units[0]["structural_role"] == "outline_item"
+
+
+def test_structural_starts_does_not_split_conjoined_numeric_reference() -> None:
+    text = (
+        "בתחילת דברי ההסבר לתקציב מוזכרת המלחמה, אירועי המלחמה - "
+        "זה חוזר כמה פעמים, סעיף 2 ו-3. , אין שום סעיף בתקציב הזה"
+    )
+
+    assert step31._structural_starts(text) == [0]
+    assert step31._structural_starts("סעיף 741/370 - להלן סעיף 23.") == [0]

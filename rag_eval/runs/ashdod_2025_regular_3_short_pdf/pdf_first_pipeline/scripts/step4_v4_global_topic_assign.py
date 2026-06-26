@@ -35,6 +35,7 @@ from municipality.pdf_first_v4_topic_tree import (  # noqa: E402
     root_label_for_id,
     resolve_child_topic_assignment,
     validate_child_label,
+    secondary_topic_roots,
 )
 from municipality.pdf_first_v4_topic_policy import (  # noqa: E402
     adjudicate_root_topic,
@@ -934,6 +935,15 @@ def _assignment_with_child_only_decision(
 
 def _load_cached_assignment(*, checkpoint_dir: Path, item: dict[str, Any], model: str) -> dict[str, Any] | None:
     path = _assignment_checkpoint_path(checkpoint_dir=checkpoint_dir, item=item, model=model)
+    assignment = _read_cached_assignment(path=path, item=item, model=model)
+    if assignment is not None:
+        return assignment
+    if item.get("topic_subject_v3_hints"):
+        return _load_same_unit_cached_assignment(checkpoint_dir=checkpoint_dir, expected_path=path, item=item, model=model)
+    return None
+
+
+def _read_cached_assignment(*, path: Path, item: dict[str, Any], model: str) -> dict[str, Any] | None:
     if not path.exists() or path.stat().st_size <= 0:
         return None
     try:
@@ -942,12 +952,25 @@ def _load_cached_assignment(*, checkpoint_dir: Path, item: dict[str, Any], model
         return None
     if payload.get("cache_version") != CACHE_VERSION:
         return None
+    if str(payload.get("model") or "") != str(model or ""):
+        return None
     assignment = payload.get("assignment")
     if not isinstance(assignment, dict):
         return None
     if str(assignment.get("structure_unit_id") or "") != str(item.get("structure_unit_id") or ""):
         return None
     return assignment
+
+
+def _load_same_unit_cached_assignment(*, checkpoint_dir: Path, expected_path: Path, item: dict[str, Any], model: str) -> dict[str, Any] | None:
+    safe_unit_id = _safe_checkpoint_unit_id(item.get("structure_unit_id"))
+    candidates = [path for path in checkpoint_dir.glob(f"{safe_unit_id}_*.json") if path != expected_path]
+    candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in candidates:
+        assignment = _read_cached_assignment(path=path, item=item, model=model)
+        if assignment is not None:
+            return assignment
+    return None
 
 
 def _write_cached_assignment(*, checkpoint_dir: Path, item: dict[str, Any], model: str, assignment: dict[str, Any]) -> None:
@@ -979,8 +1002,12 @@ def _assignment_checkpoint_path(*, checkpoint_dir: Path, item: dict[str, Any], m
         "topic_subject_v3_hints": item.get("topic_subject_v3_hints") or [],
     }
     digest = hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:20]
-    safe_unit_id = re.sub(r"[^0-9A-Za-z._-]+", "_", str(item.get("structure_unit_id") or "unit"))[:70]
+    safe_unit_id = _safe_checkpoint_unit_id(item.get("structure_unit_id"))
     return checkpoint_dir / f"{safe_unit_id}_{digest}.json"
+
+
+def _safe_checkpoint_unit_id(value: Any) -> str:
+    return re.sub(r"[^0-9A-Za-z._-]+", "_", str(value or "unit"))[:70]
 
 
 def _model_call_id(*, step: str, ids: list[str], body: dict[str, Any], call_context: dict[str, Any]) -> str:
@@ -3681,8 +3708,8 @@ def _assignment_from_topic_proposal(*, row: dict[str, Any], item: dict[str, Any]
             subject = repaired_subject
             source = "classifier_candidate_span:clean_carrier_subject"
     child_label = clean_topic_label(proposal.get("child_label_he")) if proposal.get("child_label_he") else _existing_child_label_for_subject(root_topic_id=root_topic_id, subject=subject)
-    status = _arbitrated_topic_status(row=row, item=item, subject=subject, child_label=child_label)
-    if proposal.get("geo_resolution") and str((proposal.get("geo_resolution") or {}).get("source") or "") != "govmap_search":
+    status = _arbitrated_topic_status(row=row, item=item, subject=subject, child_label=child_label, root_topic_id=root_topic_id)
+    if proposal.get("geo_resolution") and str((proposal.get("geo_resolution") or {}).get("source") or "") != "govmap_search" and not _has_confirming_v3_action_hint(item=item):
         status = "candidate"
     reject_reason = "non_blocking_topic_review:topic_arbitration:proposal_ambiguous" if status == "candidate" else None
     assignment = _assignment_payload(
@@ -4050,7 +4077,12 @@ def _best_candidate_for_subject(*, item: dict[str, Any], subject: str, root_topi
     return best[1] if best else None
 
 
-def _arbitrated_topic_status(*, row: dict[str, Any], item: dict[str, Any], subject: str, child_label: str | None) -> str:
+def _arbitrated_topic_status(*, row: dict[str, Any], item: dict[str, Any], subject: str, child_label: str | None, root_topic_id: str | None = None) -> str:
+    selected_root_topic_id = str(root_topic_id or row.get("root_topic_id") or "")
+    if _has_confirming_v3_action_hint(item=item):
+        return "active"
+    if selected_root_topic_id in ROOT_BY_ID and selected_root_topic_id not in {"root_geo", "root_people_roles", "root_agenda_queries", "root_order_proposals"} and child_label:
+        return "active"
     if _resolve_geo_fallback(subject=subject, municipality=None, enable_govmap_geo=False):
         return "candidate"
     if _looks_like_multifacet_subject(subject):
@@ -4058,6 +4090,24 @@ def _arbitrated_topic_status(*, row: dict[str, Any], item: dict[str, Any], subje
     if child_label or infer_root_topic_id(subject, allow_procedural_default=False) in ROOT_BY_ID:
         return "active"
     return str(row.get("topic_node_status") or "candidate") if str(row.get("topic_node_status") or "") == "active" else "candidate"
+
+
+def _has_confirming_v3_action_hint(*, item: dict[str, Any]) -> bool:
+    raw = _join_unique([item.get("unit_raw_text"), item.get("raw_text"), item.get("topic_identification_context"), item.get("topic_headline_he")])
+    unit_id = str(item.get("structure_unit_id") or "")
+    for hint in item.get("topic_subject_v3_hints") or []:
+        if not isinstance(hint, dict):
+            continue
+        matter = _clean_structured_fallback_subject(hint.get("matter_he"))
+        action = _clean_structured_fallback_subject(hint.get("action_type_he"))
+        if not matter or not action:
+            continue
+        if str(hint.get("source_structure_unit_id") or "") == unit_id:
+            return True
+        quote = _compact(hint.get("source_quote_he"))
+        if quote and (_tokens_supported(quote, raw) or _tokens_supported(raw, quote)):
+            return True
+    return False
 
 
 def _looks_like_multifacet_subject(subject: str) -> bool:
@@ -4191,6 +4241,11 @@ def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label:
             raw_child_label = raw_child_label or topic_subject
             route = f"{route}:subject_matched_existing_child"
     child_id = child_topic_id(root_topic_id, child_label) if child_label else None
+    secondary_roots = secondary_topic_roots(
+        root_topic_id=root_topic_id,
+        child_label_he=child_label or topic_subject,
+        evidence_text=_join_unique([topic_subject, child_label, raw_child_label, quote, item.get("topic_identification_context"), item.get("topic_headline_he"), item.get("raw_text")]),
+    ) if is_topic_bearing else []
     return {
         "structure_unit_id": item["structure_unit_id"],
         "semantic_unit_id": item["semantic_unit_id"],
@@ -4225,6 +4280,9 @@ def _assignment_payload(*, item: dict[str, Any], root_topic_id: str, root_label:
         "topic_assignment_backend": TOPIC_ASSIGNMENT_BACKEND,
         "root_topic_id": root_topic_id,
         "root_label_he": root_label,
+        "secondary_topic_roots": secondary_roots,
+        "secondary_topic_ids": [str(row.get("root_topic_id") or "") for row in secondary_roots if str(row.get("root_topic_id") or "")],
+        "secondary_topics": [str(row.get("root_label_he") or "") for row in secondary_roots if str(row.get("root_label_he") or "")],
         "dicta_root_topic_id": root_adjudication.get("dicta_root_topic_id"),
         "dicta_root_label_he": root_adjudication.get("dicta_root_label_he"),
         "fallback_root_topic_id": root_adjudication.get("fallback_root_topic_id"),

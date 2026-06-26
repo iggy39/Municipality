@@ -206,16 +206,33 @@ def _split_semantic_unit(unit: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _structural_starts(text: str) -> list[int]:
     patterns = [
-        r"(?<!\d)(סעיף\s*\d+\s*[:.-]?)",
-        r"(?<!\d)(\d+(?:\.\d+)?\s*[.)]?\s*(?:שאילתה|הצעה\s+לסדר|נושא\s+לדיון|פרוטוקול|הסכם|אישור|מינוי))",
-        r"(?<!\d)(\d+\s*[.)]\s*[\"'׳״]?[^\d]{8,})",
+        r"(?<![\d-])(סעיף\s*\d+\s*[:.-]?)",
+        r"(?<![\d-])(\d+(?:\.\d+)?\s*[.)]?\s*(?:שאילתה|הצעה\s+לסדר|נושא\s+לדיון|פרוטוקול|הסכם|אישור|מינוי))",
+        r"(?<![\d-])(\d+\s*[.)]\s*[\"'׳״]?[^\d]{8,})",
         r"\b(Item|Section|Agenda|Decision|Resolution)\s+\d+\b",
     ]
     starts = {0}
     for pattern in patterns:
         for match in re.finditer(pattern, text, flags=re.IGNORECASE):
-            starts.add(match.start())
+            if _allowed_structural_start_match(text=text, start=match.start(), matched_text=match.group(0)):
+                starts.add(match.start())
     return sorted(starts)
+
+
+def _allowed_structural_start_match(*, text: str, start: int, matched_text: str) -> bool:
+    compact_match = str(matched_text or "").strip()
+    if not compact_match.startswith("סעיף"):
+        return True
+    remainder = text[start:]
+    if re.match(r"סעיף\s*\d+\s*[:.-]?\s+ו[-–]?\d", remainder):
+        return False
+    if start <= 0:
+        return True
+    prefix = text[:start].rstrip()
+    if not prefix:
+        return True
+    # Inline references such as "להלן סעיף 23" should remain inside the current unit.
+    return prefix[-1] in ".;:!?)]}\"'׳״-–"
 
 
 def _visual_bounded_headline_units(semantic_payload: dict[str, Any], *, start_index: int) -> list[dict[str, Any]]:
