@@ -253,6 +253,8 @@ class ProtocolV3GisLink:
     event_status: str
     action_type_he: str
     matter_he: str
+    matter_display_he: str
+    matter_identifiers: tuple[dict[str, Any], ...]
     outcome_he: str
     source_provenance: dict[str, Any]
     primary_time: dict[str, Any] | None
@@ -275,6 +277,8 @@ class ProtocolV3GisLink:
             "event_status": self.event_status,
             "action_type_he": self.action_type_he,
             "matter_he": self.matter_he,
+            "matter_display_he": self.matter_display_he,
+            "matter_identifiers": list(self.matter_identifiers),
             "outcome_he": self.outcome_he,
             "source_provenance": self.source_provenance,
             "primary_time": self.primary_time,
@@ -383,6 +387,8 @@ def link_topic_subject_v3_events_to_gis(
                 event_status=_v3_event_status(event),
                 action_type_he=_v3_action_type(event),
                 matter_he=_v3_matter(event),
+                matter_display_he=_v3_matter_display(event),
+                matter_identifiers=tuple(_v3_matter_identifiers(event)),
                 outcome_he=_v3_outcome(event),
                 source_provenance=_v3_source_provenance(event=event, wrapper=wrapper),
                 primary_time=_v3_primary_time(event=event, wrapper=wrapper),
@@ -837,7 +843,7 @@ def protocol_v3_gis_link_report_markdown(links: Sequence[ProtocolV3GisLink]) -> 
                 for value in (
                     link.event_id,
                     link.artifact_id,
-                    _shorten(link.matter_he, 140),
+                    _shorten(link.matter_display_he or link.matter_he, 140),
                     link.event_status,
                     _shorten(groups, 180),
                     _shorten(archetypes, 180),
@@ -869,8 +875,11 @@ def _v3_event_to_protocol_row(*, event: Mapping[str, Any], wrapper: Mapping[str,
         _dedupe_text(
             str(part or "")
             for part in (
+                event_payload.get("matter_display_he"),
                 event_payload.get("matter_he"),
+                *_v3_matter_identifier_texts(event),
                 normalized.get("matter_candidate_he"),
+                normalized.get("matter_display_candidate_he"),
                 event_payload.get("action_details_he"),
                 normalized.get("municipal_action_description_he"),
                 event_payload.get("action_quote_he"),
@@ -887,6 +896,8 @@ def _v3_event_to_protocol_row(*, event: Mapping[str, Any], wrapper: Mapping[str,
         "subject_object_he": _v3_subject_object(event_payload=event_payload, normalized=normalized),
         "subject_details_he": _v3_matter(event),
         "subject_matter_he": _v3_matter(event),
+        "matter_display_he": _v3_matter_display(event),
+        "matter_identifiers": _v3_matter_identifiers(event),
         "action_details_he": str(event_payload.get("action_details_he") or normalized.get("municipal_action_description_he") or ""),
         "decision_source_quote_he": "\n".join(_v3_evidence_quotes(event)),
         "title_he": str(source_provenance.get("source_title") or ""),
@@ -909,7 +920,9 @@ def _v3_municipality_slug(*, wrapper: Mapping[str, Any], source_provenance: Mapp
 
 def _v3_subject_object(*, event_payload: Mapping[str, Any], normalized: Mapping[str, Any]) -> str:
     return str(
-        event_payload.get("subject_summary_he")
+        event_payload.get("matter_display_he")
+        or normalized.get("matter_display_candidate_he")
+        or event_payload.get("subject_summary_he")
         or event_payload.get("action_focus_quote_he")
         or normalized.get("action_focus_quote_he")
         or normalized.get("matter_candidate_he")
@@ -934,6 +947,31 @@ def _v3_matter(event: Mapping[str, Any]) -> str:
     event_payload = event.get("event_payload") if isinstance(event.get("event_payload"), Mapping) else {}
     normalized = event.get("normalized_event") if isinstance(event.get("normalized_event"), Mapping) else {}
     return str(event_payload.get("matter_he") or normalized.get("matter_candidate_he") or normalized.get("normalized_event_summary_he") or "")
+
+
+def _v3_matter_display(event: Mapping[str, Any]) -> str:
+    event_payload = event.get("event_payload") if isinstance(event.get("event_payload"), Mapping) else {}
+    normalized = event.get("normalized_event") if isinstance(event.get("normalized_event"), Mapping) else {}
+    return str(event_payload.get("matter_display_he") or normalized.get("matter_display_candidate_he") or _v3_matter(event))
+
+
+def _v3_matter_identifiers(event: Mapping[str, Any]) -> list[dict[str, Any]]:
+    event_payload = event.get("event_payload") if isinstance(event.get("event_payload"), Mapping) else {}
+    normalized = event.get("normalized_event") if isinstance(event.get("normalized_event"), Mapping) else {}
+    raw_identifiers = event_payload.get("matter_identifiers") if event_payload.get("matter_identifiers") is not None else normalized.get("matter_identifiers")
+    if not isinstance(raw_identifiers, list):
+        return []
+    return [dict(item) for item in raw_identifiers if isinstance(item, Mapping)]
+
+
+def _v3_matter_identifier_texts(event: Mapping[str, Any]) -> list[str]:
+    texts: list[str] = []
+    for item in _v3_matter_identifiers(event):
+        for key in ("raw_text_he", "canonical_he", "value_he"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                texts.append(value)
+    return list(_dedupe_text(texts))
 
 
 def _v3_outcome(event: Mapping[str, Any]) -> str:

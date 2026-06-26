@@ -942,6 +942,8 @@ class TopicSubjectV3Event(Base):
     action_type_status: Mapped[str] = mapped_column(String(64), nullable=False)
     matter_he: Mapped[str] = mapped_column(Text, nullable=False)
     matter_norm: Mapped[str] = mapped_column(Text, nullable=False)
+    matter_display_he: Mapped[str | None] = mapped_column(Text, nullable=True)
+    matter_identifiers_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     action_details_he: Mapped[str | None] = mapped_column(Text, nullable=True)
     action_quote_he: Mapped[str | None] = mapped_column(Text, nullable=True)
     subject_summary_he: Mapped[str | None] = mapped_column(Text, nullable=True)

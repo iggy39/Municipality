@@ -244,6 +244,36 @@ def test_story_builder_dedupes_same_artifact_status_and_matter() -> None:
     assert report["stories"][0]["event_count"] == 1
 
 
+def test_story_builder_uses_display_matter_without_losing_identity_identifiers() -> None:
+    payload = {
+        "links": [
+            {
+                **_link(
+                    artifact_id="protocol-land",
+                    event_id="event-land",
+                    status="open_request",
+                    matter="ויתור על חלק מזכות חכירה במגרש400 הידוע כגוש38263 חלקה20",
+                    text="ויתור על חלק מזכות חכירה במגרש400 הידוע כגוש38263 חלקה20",
+                    layer_key="parcels_cadaster",
+                ),
+                "matter_display_he": "ויתור על חלק מזכות חכירה",
+                "matter_identifiers": [
+                    {"type": "lot", "label_he": "מגרש", "value_he": "400", "canonical_he": "מגרש 400"},
+                    {"type": "block", "label_he": "גוש", "value_he": "38263", "canonical_he": "גוש 38263"},
+                    {"type": "parcel", "label_he": "חלקה", "value_he": "20", "canonical_he": "חלקה 20"},
+                ],
+            }
+        ]
+    }
+
+    event = build_protocol_gis_stories(payload)["stories"][0]["timeline_events"][0]
+
+    assert event["matter_he"] == "ויתור על חלק מזכות חכירה במגרש400 הידוע כגוש38263 חלקה20"
+    assert event["matter_display_he"] == "ויתור על חלק מזכות חכירה"
+    assert event["matter_identifiers"][1]["canonical_he"] == "גוש 38263"
+    assert event["title"] == "בקשה: ויתור על חלק מזכות חכירה"
+
+
 def test_connection_summary_counts_ready_and_blocked_queries() -> None:
     payload = {
         "links": [

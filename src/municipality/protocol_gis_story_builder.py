@@ -129,6 +129,8 @@ class _StoryEvent:
     event_status: str
     action_type_he: str
     matter_he: str
+    matter_display_he: str
+    matter_identifiers: tuple[dict[str, Any], ...]
     outcome_he: str
     source_text: str
     evidence_quotes: tuple[str, ...]
@@ -402,7 +404,7 @@ def _exclusion_reason(link: Mapping[str, Any]) -> str:
     if str(link.get("municipality_slug") or "") == "mock_unknown_municipality":
         return "missing_real_municipality"
     source_text = str(link.get("source_text") or "")
-    matter = str(link.get("matter_he") or "")
+    matter = str(link.get("matter_he") or link.get("matter_display_he") or "")
     if not source_text.strip() and not matter.strip():
         return "empty_source_and_matter"
     return ""
@@ -415,6 +417,7 @@ def _excluded_link_payload(link: Mapping[str, Any]) -> dict[str, Any]:
         "municipality_slug": str(link.get("municipality_slug") or ""),
         "validation_status": str(link.get("validation_status") or ""),
         "matter_he": _shorten(str(link.get("matter_he") or ""), 180),
+        "matter_display_he": _shorten(str(link.get("matter_display_he") or ""), 180),
         "source_artifact_file": str(link.get("source_artifact_file") or ""),
     }
 
@@ -437,8 +440,10 @@ def _event_from_link(link: Mapping[str, Any], *, index: int) -> _StoryEvent:
     )
     source_text = str(link.get("source_text") or "")
     matter = str(link.get("matter_he") or "")
-    tokens = frozenset(_text_tokens("\n".join((matter, source_text))))
-    subject_terms = _subject_terms(matter=matter, source_text=source_text, archetype_topics=archetype_topics)
+    matter_display = str(link.get("matter_display_he") or matter)
+    matter_identifiers = tuple(dict(item) for item in link.get("matter_identifiers", []) or [] if isinstance(item, Mapping))
+    tokens = frozenset(_text_tokens("\n".join((matter_display, matter, source_text))))
+    subject_terms = _subject_terms(matter=matter_display or matter, source_text=source_text, archetype_topics=archetype_topics)
     topic_family, topic_family_label = _topic_family(
         layer_keys=layer_keys,
         layer_names=layer_names,
@@ -463,6 +468,8 @@ def _event_from_link(link: Mapping[str, Any], *, index: int) -> _StoryEvent:
         event_status=_normalize_event_status(str(link.get("event_status") or "unknown")),
         action_type_he=str(link.get("action_type_he") or ""),
         matter_he=matter,
+        matter_display_he=matter_display,
+        matter_identifiers=matter_identifiers,
         outcome_he=str(link.get("outcome_he") or ""),
         source_text=source_text,
         evidence_quotes=tuple(_dedupe_text(str(value or "") for value in link.get("evidence_quotes", []) or [])),
@@ -498,7 +505,8 @@ def _event_quality_score(event: _StoryEvent) -> int:
 
 
 def _event_signature(event: _StoryEvent) -> str:
-    text = normalize_hebrew_text(event.matter_he or event.source_text or event.event_id).lower()
+    identity_text = event.matter_he if event.matter_identifiers else (event.matter_display_he or event.matter_he)
+    text = normalize_hebrew_text(identity_text or event.source_text or event.event_id).lower()
     text = re.sub(r"[^0-9a-zA-Z\u0590-\u05FF]+", " ", text)
     compact = " ".join(text.split())[:180]
     return "|".join((event.event_status, event.action_type_he, compact or event.uid))
@@ -614,6 +622,8 @@ def _timeline_events(cluster: _StoryCluster) -> list[dict[str, Any]]:
                 "event_status": event_status,
                 "action_type_he": event.action_type_he,
                 "matter_he": event.matter_he,
+                "matter_display_he": event.matter_display_he,
+                "matter_identifiers": list(event.matter_identifiers),
                 "outcome_he": event.outcome_he,
                 "source_text": _shorten(event.source_text, 900),
                 "evidence_quotes": list(event.evidence_quotes[:4]),
@@ -791,6 +801,7 @@ def _extract_protocol_date(link: Mapping[str, Any]) -> tuple[date | None, str]:
                 return parsed_mention, str(mention.get("date_source") or mention.get("kind") or "raw_date_mentions")
     source_provenance = link.get("source_provenance") if isinstance(link.get("source_provenance"), Mapping) else {}
     texts = [
+        str(link.get("matter_display_he") or ""),
         str(link.get("matter_he") or ""),
         str(link.get("source_text") or ""),
         str(source_provenance.get("source_title") or ""),
@@ -863,12 +874,12 @@ def _story_title(*, cluster: _StoryCluster, subject_terms: Sequence[str]) -> tup
 
 def _event_title(event: _StoryEvent) -> str:
     action = event.action_type_he or _STATUS_LABEL_HE.get(event.event_status, "אירוע")
-    matter = event.matter_he or event.topic_family_label_he
+    matter = event.matter_display_he or event.matter_he or event.topic_family_label_he
     return _shorten(f"{action}: {matter}", 120)
 
 
 def _event_summary(event: _StoryEvent) -> str:
-    text = event.matter_he or event.source_text or event.topic_family_label_he
+    text = event.matter_display_he or event.matter_he or event.source_text or event.topic_family_label_he
     return _shorten(text, 170)
 
 

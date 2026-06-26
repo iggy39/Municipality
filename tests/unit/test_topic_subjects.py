@@ -1956,6 +1956,68 @@ def test_topic_subject_v3_extraction_payload_uses_controlled_ontology_and_thresh
     assert "outcome" in serialized
 
 
+def test_topic_subject_v3_matter_display_and_identifiers_preserve_identity_matter() -> None:
+    matter = "ויתור על חלק מזכות חכירה במגרש400 הידוע כגוש38263 חלקה20"
+    artifact = _artifact_dataclass(
+        real_text=f"בקשה בנושא {matter}",
+        topic_label_he="זכויות חכירה במקרקעין",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    payload = normalize_topic_subject_v3_event_payload(
+        payload={
+            "context_id": context.context_id,
+            "target_artifact_id": artifact.artifact_id,
+            "is_event": True,
+            "action_type_he": "בקשה",
+            "action_type_confidence": 0.91,
+            "matter_he": matter,
+            "action_quote_he": artifact.real_text,
+            "outcome_is_decision": False,
+            "confidence": 0.9,
+        },
+        context=context,
+    )
+
+    identifiers = {(item["type"], item["value_he"]): item for item in payload["matter_identifiers"]}
+
+    assert payload["matter_he"] == matter
+    assert payload["matter_display_he"] == "ויתור על חלק מזכות חכירה"
+    assert identifiers[("lot", "400")]["raw_text_he"] == "במגרש400"
+    assert identifiers[("block", "38263")]["raw_text_he"] == "כגוש38263"
+    assert identifiers[("parcel", "20")]["canonical_he"] == "חלקה 20"
+
+
+def test_topic_subject_v3_matter_identifiers_include_address_and_entity() -> None:
+    matter = "הקצאת מקרקעין חלקה116 בגוש38133 ברחוב פריץ אלברט4 לעמותת אוהל בנימין עמותה רשומה580674802"
+    artifact = _artifact_dataclass(real_text=f"מבוקשת {matter}", topic_label_he="הקצאת מקרקעין")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    payload = normalize_topic_subject_v3_event_payload(
+        payload={
+            "context_id": context.context_id,
+            "target_artifact_id": artifact.artifact_id,
+            "is_event": True,
+            "action_type_he": "התקשרות",
+            "action_type_confidence": 0.91,
+            "matter_he": matter,
+            "action_quote_he": artifact.real_text,
+            "outcome_is_decision": False,
+            "confidence": 0.9,
+        },
+        context=context,
+    )
+
+    identifiers = {(item["type"], item["label_he"]): item for item in payload["matter_identifiers"]}
+
+    assert payload["matter_he"] == matter
+    assert identifiers[("parcel", "חלקה")]["value_he"] == "116"
+    assert identifiers[("block", "גוש")]["value_he"] == "38133"
+    assert identifiers[("street_address", "רחוב")]["value_he"] == "פריץ אלברט 4"
+    assert identifiers[("entity", "עמותה")]["value_he"] == "אוהל בנימין"
+    assert identifiers[("registered_association_number", "עמותה רשומה")]["value_he"] == "580674802"
+
+
 def test_topic_subject_model_policy_keeps_semantic_stages_on_primary_model_and_routes_helpers_to_schema_no_think_primary_model() -> None:
     small_model = "dicta-il/DictaLM-3.0-1.7B-Thinking:latest"
     default_config = TopicSubjectResearchConfig()
@@ -2726,6 +2788,113 @@ def test_topic_subject_v3_judge_action_disagreement_requires_wrapper_evidence() 
     )
 
     assert status == "needs_review"
+
+
+def test_topic_subject_v3_normalizes_flat_outcome_fields() -> None:
+    artifact = _artifact_dataclass(
+        real_text="החלטה: המועצה החליטה לאשר את תקציב הפעילות השנתי.",
+        topic_label_he="תקציב הפעילות השנתי",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    payload = normalize_topic_subject_v3_event_payload(
+        payload={
+            "context_id": context.context_id,
+            "target_artifact_id": context.target_artifact.artifact_id,
+            "is_event": True,
+            "action_type_he": "אישור",
+            "action_type_confidence": 0.94,
+            "matter_he": "תקציב הפעילות השנתי",
+            "action_quote_he": "החלטה: המועצה החליטה לאשר את תקציב הפעילות השנתי.",
+            "outcome_is_decision": True,
+            "outcome_type": "approved",
+            "outcome_label_he": "אישור",
+            "outcome_quote_he": "החלטה: המועצה החליטה לאשר את תקציב הפעילות השנתי.",
+            "outcome_evidence_classification": "actual_result",
+            "confidence": 0.93,
+        },
+        context=context,
+    )
+
+    assert payload["outcome"]["outcome_type"] == "approved"
+    assert payload["outcome"]["outcome_label_he"] == "אישור"
+    assert payload["outcome"]["outcome_quote_he"].startswith("החלטה")
+    assert payload["outcome"]["outcome_evidence_classification"] == "actual_result"
+    assert "flat_outcome_field_recovered:outcome_quote_he" in payload["schema_warnings"]
+
+
+def test_topic_subject_v3_prefers_formal_result_quote_over_vote_count() -> None:
+    artifact = _artifact_dataclass(
+        real_text=(
+            "חברים, לסיים את ההצבעה בבקשה. נמנעים2 , בעד22. "
+            "תסיימו את ההצבעה מ א ו ש ר. "
+            "החלטה: המועצה החליטה לאשר את דו\"ח הביקורת השנתי."
+        ),
+        topic_label_he="דו\"ח הביקורת השנתי",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    payload = normalize_topic_subject_v3_event_payload(
+        payload={
+            "context_id": context.context_id,
+            "target_artifact_id": context.target_artifact.artifact_id,
+            "is_event": True,
+            "action_type_he": "אישור",
+            "action_type_confidence": 0.92,
+            "matter_he": "דו\"ח הביקורת השנתי",
+            "action_quote_he": "נמנעים2 , בעד22.",
+            "outcome_is_decision": True,
+            "outcome": {
+                "outcome_type": "approved",
+                "outcome_label_he": "אישור",
+                "outcome_quote_he": "נמנעים2 , בעד22.",
+                "confidence": 0.9,
+            },
+            "confidence": 0.9,
+        },
+        context=context,
+    )
+
+    assert "החליטה לאשר" in payload["outcome"]["outcome_quote_he"]
+    assert "formal_decision_outcome_without_formal_evidence" not in validate_topic_subject_v3_event_payload(context=context, event_payload=payload)
+
+
+def test_topic_subject_v3_formal_evidence_accepts_spelled_approval_result() -> None:
+    artifact = _artifact_dataclass(
+        real_text="תסיימו את ההצבעה מ א ו ש ר.",
+        topic_label_he="הצעה תקציבית",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+    event_payload = {
+        "is_event": True,
+        "action_type_he": "אישור",
+        "matter_he": "הצעה תקציבית",
+        "action_quote_he": "תסיימו את ההצבעה מ א ו ש ר.",
+        "outcome_is_decision": True,
+        "outcome": {"outcome_type": "approved", "outcome_quote_he": "תסיימו את ההצבעה מ א ו ש ר."},
+    }
+
+    assert validate_topic_subject_v3_event_payload(context=context, event_payload=event_payload) == []
+
+
+def test_topic_subject_v3_judge_prediction_recovers_flat_payload() -> None:
+    prediction = topic_subjects_module.topic_subject_v3_judge_prediction(
+        {
+            "judge_status": "accepted",
+            "action_type_he": "אישור",
+            "matter_he": "דו\"ח ביקורת",
+            "outcome_type": "approved",
+            "outcome_label_he": "אישור",
+            "outcome_quote_he": "החלטה: המועצה החליטה לאשר את דו\"ח הביקורת.",
+            "confidence": 0.94,
+        }
+    )
+
+    assert prediction["is_event"] is True
+    assert prediction["action_type_he"] == "אישור"
+    assert prediction["matter_he"] == "דו\"ח ביקורת"
+    assert prediction["outcome_type"] == "approved"
+    assert prediction["confidence"] == 0.94
 
 
 def test_process_topic_subject_v3_reconsiders_non_event_with_grounded_action_quote() -> None:
@@ -4495,12 +4664,17 @@ def test_persist_topic_subject_v3_result_saves_metadata_blocks(monkeypatch) -> N
 
     event_metadata = json.loads(captured[0].metadata_json)
     row_metadata = json.loads(captured[1].metadata_json)
+    persisted_identifiers = json.loads(captured[0].matter_identifiers_json)
 
     assert event_metadata["model_event_key_he"]
+    assert captured[0].matter_display_he == "שיפוץ ברחוב הרצל"
+    assert persisted_identifiers[0]["type"] == "street_address"
+    assert persisted_identifiers[0]["value_he"] == "הרצל"
     assert "2026" not in event_metadata["canonical_event_group_key"]
     assert event_metadata["general_text_metadata"]["raw_text_before_cleaning_he"] == raw_text
     assert event_metadata["event_metadata"]["action_type_he"] == "אישור"
     assert event_metadata["subject_metadata"]["matter_he"] == "שיפוץ ברחוב הרצל"
+    assert event_metadata["subject_metadata"]["matter_display_he"] == "שיפוץ ברחוב הרצל"
     assert event_metadata["raw_date_mentions"][0]["raw_text"] == "12.05.2026"
     assert any("ברחוב הרצל" in item["raw_text"] for item in event_metadata["raw_geography_mentions"])
     assert event_metadata["event_source_rows"][0]["artifact_id"] == artifact.artifact_id

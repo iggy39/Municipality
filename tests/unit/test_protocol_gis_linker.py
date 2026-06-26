@@ -241,3 +241,37 @@ def test_v3_duplicate_events_prefer_accepted_profile() -> None:
     assert len(links) == 1
     assert links[0].profile == "accepted_profile"
     assert links[0].validation_status == "accepted"
+
+
+def test_v3_link_payload_preserves_display_matter_and_identifiers() -> None:
+    links = link_topic_subject_v3_events_to_gis(
+        [
+            {
+                "row": "ashdod:15:11",
+                "event": {
+                    "event_id": "topic_subject_v3_event_land_rights",
+                    "artifact_id": "artifact-land-rights",
+                    "validation_status": "accepted",
+                    "full_source_text_he": "ויתור על חלק מזכות חכירה במגרש400 הידוע כגוש38263 חלקה20",
+                    "event_payload": {
+                        "action_type_he": "בקשה",
+                        "matter_he": "ויתור על חלק מזכות חכירה במגרש400 הידוע כגוש38263 חלקה20",
+                        "matter_display_he": "ויתור על חלק מזכות חכירה",
+                        "matter_identifiers": [
+                            {"type": "lot", "label_he": "מגרש", "value_he": "400", "raw_text_he": "במגרש400", "canonical_he": "מגרש 400"},
+                            {"type": "block", "label_he": "גוש", "value_he": "38263", "raw_text_he": "כגוש38263", "canonical_he": "גוש 38263"},
+                            {"type": "parcel", "label_he": "חלקה", "value_he": "20", "raw_text_he": "חלקה20", "canonical_he": "חלקה 20"},
+                        ],
+                    },
+                },
+            }
+        ],
+        archetypes=[],
+    )
+
+    payload = links[0].to_payload()
+
+    assert payload["matter_he"] == "ויתור על חלק מזכות חכירה במגרש400 הידוע כגוש38263 חלקה20"
+    assert payload["matter_display_he"] == "ויתור על חלק מזכות חכירה"
+    assert payload["matter_identifiers"][1]["canonical_he"] == "גוש 38263"
+    assert "גוש38263" in payload["source_text"]
