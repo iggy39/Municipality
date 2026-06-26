@@ -2188,6 +2188,15 @@ def topic_subject_v3_parse_path_date(raw_text: Any) -> str:
     return ""
 
 
+def topic_subject_v3_parse_year_first_date(raw_text: Any) -> str:
+    text = str(raw_text or "")
+    for match in re.finditer(r"(?<!\d)((?:19|20)\d{2})[./-](\d{1,2})[./-](\d{1,2})(?!\d)", text):
+        iso_date = topic_subject_v3_iso_date(year=int(match.group(1)), month=int(match.group(2)), day=int(match.group(3)))
+        if iso_date:
+            return iso_date
+    return ""
+
+
 def topic_subject_v3_parse_hebrew_month_date(raw_text: Any) -> str:
     text = compact_text(raw_text)
     for month_name, month in TOPIC_SUBJECT_V3_GREGORIAN_MONTHS.items():
@@ -2199,7 +2208,76 @@ def topic_subject_v3_parse_hebrew_month_date(raw_text: Any) -> str:
 
 
 def topic_subject_v3_first_iso_date(raw_text: Any) -> str:
-    return topic_subject_v3_parse_numeric_date(raw_text) or topic_subject_v3_parse_hebrew_month_date(raw_text) or topic_subject_v3_parse_path_date(raw_text)
+    return (
+        topic_subject_v3_parse_numeric_date(raw_text)
+        or topic_subject_v3_parse_hebrew_month_date(raw_text)
+        or topic_subject_v3_parse_year_first_date(raw_text)
+        or topic_subject_v3_parse_path_date(raw_text)
+    )
+
+
+TOPIC_SUBJECT_V3_SOURCE_PATH_TIME_SCOPE_PREFIXES = (
+    "source_url",
+    "source_title",
+    "source_provenance.",
+)
+TOPIC_SUBJECT_V3_PIPELINE_DATE_COMPONENT_RE = re.compile(
+    r"(?:^|[_\-.])(?:step\d|outputs?|runs?|fix\d*|sweep|generic[_\-]?fix|pages?\d*|smoke)(?:$|[_\-.])"
+)
+
+
+def topic_subject_v3_first_iso_date_for_protocol_context(*, text: Any, source_scope: str) -> str:
+    iso_date, _source_text = topic_subject_v3_iso_date_candidate_for_protocol_context(
+        text=text,
+        source_scope=source_scope,
+    )
+    return iso_date
+
+
+def topic_subject_v3_iso_date_candidate_for_protocol_context(*, text: Any, source_scope: str) -> tuple[str, str]:
+    if topic_subject_v3_protocol_context_is_source_path(source_scope):
+        return topic_subject_v3_first_iso_date_candidate_from_source_path(text)
+    source_text = compact_text(text)
+    return topic_subject_v3_first_iso_date(source_text), source_text
+
+
+def topic_subject_v3_protocol_context_is_source_path(source_scope: Any) -> bool:
+    scope = str(source_scope or "")
+    return any(scope == prefix or scope.startswith(prefix) for prefix in TOPIC_SUBJECT_V3_SOURCE_PATH_TIME_SCOPE_PREFIXES)
+
+
+def topic_subject_v3_first_iso_date_from_source_path(value: Any) -> str:
+    iso_date, _source_text = topic_subject_v3_first_iso_date_candidate_from_source_path(value)
+    return iso_date
+
+
+def topic_subject_v3_first_iso_date_candidate_from_source_path(value: Any) -> tuple[str, str]:
+    for component in re.split(r"[/\\]+", str(value or "")):
+        component = compact_text(component)
+        if not component or topic_subject_v3_path_component_is_pipeline_generated(component):
+            continue
+        iso_date = topic_subject_v3_first_iso_date_from_path_component(component)
+        if iso_date:
+            return iso_date, component
+    return "", ""
+
+
+def topic_subject_v3_path_component_is_pipeline_generated(component: str) -> bool:
+    text = str(component or "").strip().casefold()
+    if not text:
+        return False
+    if text in {"rag_eval", "pdf_first_pipeline", "outputs", "output"}:
+        return True
+    return bool(TOPIC_SUBJECT_V3_PIPELINE_DATE_COMPONENT_RE.search(text))
+
+
+def topic_subject_v3_first_iso_date_from_path_component(component: str) -> str:
+    return (
+        topic_subject_v3_parse_numeric_date(component)
+        or topic_subject_v3_parse_hebrew_month_date(component)
+        or topic_subject_v3_parse_year_first_date(component)
+        or topic_subject_v3_parse_path_date(component)
+    )
 
 
 def topic_subject_v3_iso_date(*, year: int, month: int, day: int) -> str:
@@ -2237,29 +2315,35 @@ def topic_subject_v3_protocol_time_contexts(artifact: TopicDecisionArtifact) -> 
         if text:
             contexts.append({"source_scope": scope, "text": text})
 
+    for key in ("meeting_date", "protocol_date", "document_date", "date"):
+        add(f"artifact_metadata.{key}", artifact_metadata.get(key))
+        add(f"metadata.{key}", metadata.get(key))
+    for key in ("protocol_subject_he", "raw_text_sample", "unit_raw_text", "raw_text", "topic_identification_context"):
+        add(f"artifact_metadata.{key}", artifact_metadata.get(key))
+        add(f"metadata.{key}", metadata.get(key))
+    step4_item = artifact_metadata.get("step4_item") if isinstance(artifact_metadata.get("step4_item"), dict) else {}
+    for key in ("protocol_subject_he", "raw_text_sample", "unit_raw_text", "raw_text", "topic_identification_context"):
+        add(f"step4_item.{key}", step4_item.get(key))
     add("source_title", artifact.source_title)
     add("source_url", artifact.source_url)
     for key, value in topic_subject_v3_source_paths(artifact).items():
         add(f"source_provenance.{key}", value)
-    for key in ("meeting_date", "protocol_date", "document_date", "date", "topic_identification_context", "raw_text_sample", "unit_raw_text", "raw_text", "protocol_subject_he"):
-        add(f"artifact_metadata.{key}", artifact_metadata.get(key))
-        add(f"metadata.{key}", metadata.get(key))
-    step4_item = artifact_metadata.get("step4_item") if isinstance(artifact_metadata.get("step4_item"), dict) else {}
-    for key in ("topic_identification_context", "raw_text_sample", "unit_raw_text", "raw_text", "protocol_subject_he"):
-        add(f"step4_item.{key}", step4_item.get(key))
     return contexts
 
 
 def topic_subject_v3_protocol_primary_time(artifact: TopicDecisionArtifact) -> dict[str, Any] | None:
     for context in topic_subject_v3_protocol_time_contexts(artifact):
-        iso_date = topic_subject_v3_first_iso_date(context["text"])
+        iso_date, source_text = topic_subject_v3_iso_date_candidate_for_protocol_context(
+            text=context["text"],
+            source_scope=context["source_scope"],
+        )
         if iso_date:
             return {
                 "start": iso_date,
                 "end": None,
                 "precision": "day",
                 "kind": "protocol_date",
-                "raw_text": context["text"][:160],
+                "raw_text": (source_text or context["text"])[:160],
                 "source_scope": context["source_scope"],
                 "date_source": "protocol_date_context",
                 "confidence_label": "medium",

@@ -3792,6 +3792,50 @@ def test_topic_subject_v3_primary_time_uses_protocol_path_fallback() -> None:
     assert primary_time["is_protocol_fallback"] is True
 
 
+def test_topic_subject_v3_primary_time_ignores_processing_run_dates_before_document_date() -> None:
+    artifact = _artifact_dataclass(
+        real_text="ישיבת מועצה– מספר75/2023 ( מתאריך י\"ד באלול תשפ\"ג31.8.",
+        topic_label_he="מנהל עירוני",
+        source_title="step4_v4_global_topic_assignment_dicta_contextual_v50_subject_status_tail_broad_20260621",
+        source_url=(
+            "/Users/igor/Desktop/projects/Municipality/rag_eval/runs/jerusalem_pdf_first_v4_shadow/"
+            "smoke_meeting75_page52_fix3_20260616/"
+            "jerusalem_council_16_meeting_75_2023-08-31_protocol_9c1b98d985/"
+            "pdf_first_pipeline/outputs/step4_v4_global_topic_assignment/topic_assignments.json"
+        ),
+    )
+
+    primary_time = topic_subjects_module.topic_subject_v3_primary_time(
+        event_payload={"action_type_he": "דיון", "matter_he": "תווי חניה"},
+        artifact=artifact,
+    )
+
+    assert primary_time["start"] == "2023-08-31"
+    assert primary_time["source_scope"] == "source_url"
+    assert "2023-08-31" in primary_time["raw_text"]
+    assert "20260616" not in primary_time["raw_text"]
+
+
+def test_topic_subject_v3_primary_time_ignores_lone_processing_run_dates() -> None:
+    artifact = _artifact_dataclass(
+        real_text="שאילתה בנושא תיקון מעלית ללא תאריך מלא בגוף הטקסט.",
+        topic_label_he="תשתיות",
+        source_title="step4_v4_global_topic_assignment_auto_20260621",
+        source_url=(
+            "/Users/igor/Desktop/projects/Municipality/rag_eval/runs/ashdod_pdf_first_v4_shadow/"
+            "all_protocols_generic_fix_sweep_v1_20260613/"
+            "ashdod_2025_regular_3_short_pdf/step4_v4_global_topic_assignment_auto/topic_assignments.json"
+        ),
+    )
+
+    primary_time = topic_subjects_module.topic_subject_v3_primary_time(
+        event_payload={"action_type_he": "שאילתה", "matter_he": "תיקון מעלית"},
+        artifact=artifact,
+    )
+
+    assert primary_time is None
+
+
 def test_topic_subject_v3_primary_time_resolves_relative_mentions_to_protocol_date() -> None:
     artifact = _artifact_dataclass(
         real_text="לאחרונה התקבלו פניות בנושא תחזוקת מדרכות ברחוב הרצל.",
@@ -4543,7 +4587,16 @@ def test_topic_subject_v3_profile_stage_problems_ignore_optional_recovery_failur
     ]
 
 
-def _artifact_dataclass(*, real_text: str, topic_label_he: str, artifact_id: str = "artifact-test", source_ordinal: int = 1, metadata: dict | None = None) -> TopicDecisionArtifact:
+def _artifact_dataclass(
+    *,
+    real_text: str,
+    topic_label_he: str,
+    artifact_id: str = "artifact-test",
+    source_ordinal: int = 1,
+    metadata: dict | None = None,
+    source_title: str = "מקור בדיקה",
+    source_url: str = "https://example.local/doc.pdf",
+) -> TopicDecisionArtifact:
     return TopicDecisionArtifact(
         artifact_id=artifact_id,
         semantic_node_id=1,
@@ -4556,8 +4609,8 @@ def _artifact_dataclass(*, real_text: str, topic_label_he: str, artifact_id: str
         source_document_id=1,
         source_document_version_id=1,
         source_ordinal=source_ordinal,
-        source_title="מקור בדיקה",
-        source_url="https://example.local/doc.pdf",
+        source_title=source_title,
+        source_url=source_url,
         artifact_kind="pdf_first_v4_retrieval_chunk",
         start_page=1,
         end_page=1,
