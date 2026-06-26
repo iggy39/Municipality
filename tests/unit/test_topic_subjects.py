@@ -2103,6 +2103,34 @@ def test_topic_subject_v3_source_context_reuses_upstream_spans_and_structure_met
     assert any("upstream_subject_hint" in instruction for instruction in payload["source_context"]["instructions"])
 
 
+def test_topic_subject_v3_source_context_omits_heavy_diagnostics_from_prompt_rows() -> None:
+    target = _artifact_dataclass(
+        real_text="חברי המועצה דנו בנושא פיתוח פארק עירוני.",
+        topic_label_he="פיתוח פארק",
+        artifact_id="artifact-target",
+        source_ordinal=1,
+        metadata={"artifact_metadata": {"source_paths": {"protocol_run_dir": "/tmp/protocol_31_20251229_2cdaf368_v1"}}},
+    )
+    nearby = _artifact_dataclass(
+        real_text="הדיון נמשך לאחר הצגת נתוני התכנון והתקציב.",
+        topic_label_he="פיתוח פארק",
+        artifact_id="artifact-nearby",
+        source_ordinal=2,
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[target], context_artifacts=[target, nearby])[0]
+
+    payload = topic_subject_v3_normalization_payload(context=context, max_text_chars=3500)
+    target_row = payload["source_context"]["target_row"]
+    nearby_row = payload["source_context"]["nearby_rows"][0]
+
+    assert "source_paths" not in target_row
+    assert "general_text_metadata" not in target_row
+    assert "raw_date_mentions" not in target_row
+    assert "text_spans" in target_row
+    assert "text_spans" not in nearby_row
+    assert nearby_row["raw_text"] == nearby.real_text
+
+
 def test_topic_subject_v3_supported_subject_hint_uses_step4_subject_not_classifier_label() -> None:
     artifact = _artifact_dataclass(
         real_text="ההסתייגות היא בנושא תכנית שכונה כעיר, שכונות התקווה, עזרא והארגזים.",
@@ -2973,6 +3001,34 @@ def test_process_topic_subject_v3_normalization_model_error_uses_fallback() -> N
     assert row.quality_status == "accepted"
 
 
+def test_topic_subject_v3_model_error_row_keeps_compact_raw_response() -> None:
+    artifact = _artifact_dataclass(real_text="חברי המועצה דנו בנושא פיתוח פארק עירוני.", topic_label_he="פיתוח פארק")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    row = topic_subjects_module.topic_subject_v3_model_error_row_quality(
+        context=context,
+        stage="topic_subject_v3_action_subject_extraction",
+        model_payload={
+            "error_code": "MODEL_INVALID_JSON",
+            "error_text": "bad json",
+            "raw_payload": {
+                "model": "dicta-test",
+                "done": True,
+                "done_reason": "stop",
+                "message": {"content": "not json"},
+                "prompt_eval_count": 123,
+                "eval_count": 7,
+            },
+        },
+    )
+
+    debug_payload = row.metadata["model_error_payload"]
+    assert debug_payload["error_code"] == "MODEL_INVALID_JSON"
+    assert "raw_payload" not in debug_payload
+    assert debug_payload["raw_response"]["model"] == "dicta-test"
+    assert debug_payload["raw_response"]["content_excerpt"] == "not json"
+
+
 def test_topic_subject_v3_low_confidence_controlled_action_becomes_other() -> None:
     artifact = _artifact_dataclass(real_text="אבקש לאשר נסיעה מקצועית לכנס ארצי.", topic_label_he="חינוך")
     context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
@@ -3628,6 +3684,101 @@ def test_topic_subject_v3_linked_outcome_repair_requires_identity_overlap() -> N
     assert "v3_linked_outcome_local_repair" not in repaired
 
 
+def test_topic_subject_v3_infers_missing_is_event_from_normalized_event() -> None:
+    artifact = _artifact_dataclass(
+        real_text="הצעה לסדר, לדון בוועדת הביטחון בראשות סגן ראש העיר סקר.",
+        topic_label_he="ועדת הביטחון",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    repaired = topic_subjects_module.topic_subject_v3_apply_normalized_event_defaults(
+        extraction_payload={
+            "action_type_he": "דיון",
+            "action_type_confidence": 0.9,
+            "matter_he": "דיון בוועדת הביטחון בראשות סגן ראש העיר סקר",
+        },
+        normalized_event={"is_event": True, "target_row_role": "action_anchor"},
+        context=context,
+    )
+    normalized = normalize_topic_subject_v3_event_payload(payload=repaired, context=context)
+
+    assert normalized["is_event"] is True
+    assert normalized["action_type_he"] == "הצעה לסדר יום"
+    assert normalized["matter_he"] == "דיון בוועדת הביטחון בראשות סגן ראש העיר סקר"
+
+
+def test_topic_subject_v3_infers_missing_is_event_from_grounded_extraction() -> None:
+    artifact = _artifact_dataclass(
+        real_text="ניתנה הנחייה לבחון הקמת יחידה ייעודית לטיפול בשוהי רחוב.",
+        topic_label_he="שוהי רחוב",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    repaired = topic_subjects_module.topic_subject_v3_apply_normalized_event_defaults(
+        extraction_payload={
+            "action_type_he": "הנחיה",
+            "action_type_confidence": 0.92,
+            "matter_he": "הקמת יחידה ייעודית לטיפול בשוהי רחוב",
+            "action_quote_he": "ניתנה הנחייה לבחון הקמת יחידה ייעודית לטיפול בשוהי רחוב.",
+        },
+        normalized_event={"is_event": False},
+        context=context,
+    )
+    normalized = normalize_topic_subject_v3_event_payload(payload=repaired, context=context)
+
+    assert normalized["is_event"] is True
+    assert normalized["action_type_he"] == "הנחיה"
+    assert normalized["target_row_role"] == "action_anchor"
+
+
+def test_topic_subject_v3_repairs_same_row_removed_outcome() -> None:
+    artifact = _artifact_dataclass(
+        real_text="סעיף8: טיפול בתשתיות ופיצוי. הנושא ירד מסדר היום בשלב זה.",
+        topic_label_he="טיפול בתשתיות ופיצוי",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    repaired = topic_subjects_module.topic_subject_v3_repair_same_row_decision_outcome_locally(
+        context=context,
+        event_payload={
+            "is_event": True,
+            "action_type_he": "אחר",
+            "action_type_confidence": 0.7,
+            "matter_he": "טיפול בתשתיות ופיצוי",
+            "outcome_is_decision": False,
+            "target_row_role": "action_anchor",
+        },
+    )
+    normalized = normalize_topic_subject_v3_event_payload(payload=repaired, context=context)
+
+    assert normalized["action_type_he"] == "הסרה מסדר היום"
+    assert normalized["outcome_is_decision"] is True
+    assert normalized["outcome"]["outcome_type"] == "removed"
+    assert normalized["v3_same_row_outcome_local_repair"]["repair_applied"] is True
+
+
+def test_topic_subject_v3_same_row_referral_wins_over_weak_unanimous_wording() -> None:
+    text = "אנחנו מציעים להעביר, בהסכמה מלאה, את הדיון הזה לוועדת החינוך. אפשר להעביר את ההחלטה הזו פה אחד."
+    artifact = _artifact_dataclass(real_text=text, topic_label_he="נוער מבקשי מקלט")
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    repaired = topic_subjects_module.topic_subject_v3_repair_same_row_decision_outcome_locally(
+        context=context,
+        event_payload={
+            "is_event": True,
+            "action_type_he": "בקשה",
+            "action_type_confidence": 0.9,
+            "matter_he": "דיון בנושא נוער מבקשי מקלט",
+            "outcome_is_decision": False,
+            "target_row_role": "action_anchor",
+        },
+    )
+    normalized = normalize_topic_subject_v3_event_payload(payload=repaired, context=context)
+
+    assert normalized["action_type_he"] == "הפניה לוועדה"
+    assert normalized["outcome"]["outcome_type"] == "referred"
+
+
 def test_topic_subject_v3_context_normalization_recovers_role_and_status_aliases() -> None:
     artifact = _artifact_dataclass(real_text="רקע כללי על הדיון.", topic_label_he="דיון", artifact_id="artifact-alias", source_ordinal=1)
     context = build_topic_subject_v3_event_contexts(artifacts=[artifact], max_context_rows=1)[0]
@@ -4235,7 +4386,7 @@ def test_topic_subject_v3_missing_action_confidence_fallback_is_visible() -> Non
     assert event_payload["schema_warnings"] == ["missing_action_type_confidence_used_event_confidence"]
 
 
-def test_topic_subject_v3_approval_without_decision_outcome_is_reported() -> None:
+def test_topic_subject_v3_approval_without_decision_outcome_is_allowed() -> None:
     artifact = _artifact_dataclass(real_text="פרוטוקול ועדת משנה להקצאות קרקע ללא ציטוט החלטה מפורש.", topic_label_he="הקצאות")
     context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
     event_payload = {
@@ -4260,9 +4411,9 @@ def test_topic_subject_v3_approval_without_decision_outcome_is_reported() -> Non
         failure_reasons=[],
     )
 
-    assert "approval_action_without_decision_outcome" in row.reason_for_failure
-    assert "approval_action_without_decision_outcome" in validate_topic_subject_v3_event_payload(context=context, event_payload=event_payload)
-    assert topic_subjects_module.topic_subject_v3_row_needs_quality_report(row) is True
+    assert row.reason_for_failure == ""
+    assert validate_topic_subject_v3_event_payload(context=context, event_payload=event_payload) == []
+    assert topic_subjects_module.topic_subject_v3_row_needs_quality_report(row) is False
 
 
 def test_topic_subject_v3_rejection_action_without_outcome_is_quality_issue() -> None:

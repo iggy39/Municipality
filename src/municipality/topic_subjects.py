@@ -322,7 +322,11 @@ DIRECTIVE_ACTION_CUES = (
 
 AGENDA_REMOVAL_CUES = (
     "יורדת מסדר היום",
+    "יורד מסדר היום",
+    "הנושא יורד מסדר היום",
+    "הנושא ירד מסדר היום",
     "ירדה מסדר היום",
+    "ירד מסדר היום",
     "הוסרה מסדר היום",
     "להסיר מסדר היום",
 )
@@ -338,6 +342,16 @@ COMMITTEE_REFERRAL_CUES = (
     "מועברת לועדה",
     "להעביר לוועדה",
     "להעביר לועדה",
+    "להעביר את הדיון לוועדה",
+    "להעביר את הדיון לועדה",
+    "להעביר את הדיון הזה לוועדה",
+    "להעביר את הדיון הזה לוועדת",
+    "את הדיון הזה לוועדה",
+    "את הדיון הזה לוועדת",
+    "הדיון הזה לוועדה",
+    "הדיון הזה לוועדת",
+    "להעביר את הנושא לוועדה",
+    "להעביר את הנושא לועדה",
 )
 
 COMMITTEE_DECISION_APPROVAL_CUES = (
@@ -2624,28 +2638,25 @@ def topic_subject_v3_normalized_upstream_spans(*, artifact: TopicDecisionArtifac
 
 
 def topic_subject_v3_context_row(*, artifact: TopicDecisionArtifact, role: str, max_text_chars: int) -> dict[str, Any]:
-    return {
+    row = {
         "artifact_id": artifact.artifact_id,
         "source_document_version_id": artifact.source_document_version_id,
         "source_ordinal": artifact.source_ordinal,
         "role": role,
         "source_kind": artifact.source_kind,
         "artifact_kind": artifact.artifact_kind,
-        "source_title": artifact.source_title,
         "page_span": {"start": artifact.start_page, "end": artifact.end_page},
         "raw_text": artifact.real_text[:max(500, int(max_text_chars))],
         "corrected_text": topic_subject_v3_corrected_text_for_artifact(artifact)[:max(500, int(max_text_chars))],
-        "source_paths": topic_subject_v3_source_paths(artifact),
-        "raw_date_mentions": topic_subject_v3_raw_date_mentions(artifact.real_text),
-        "raw_geography_mentions": topic_subject_v3_geography_mentions(artifact.real_text),
-        "general_text_metadata": topic_subject_v3_general_text_metadata(artifact),
         "structural_role": topic_subject_v3_structural_role(artifact) or None,
         "structure_metadata": topic_subject_v3_structure_metadata(artifact),
-        "upstream_summary_he": topic_subject_v3_upstream_summary(artifact) or None,
         "upstream_subject_hint": topic_subject_v3_upstream_subject_hint(artifact) or None,
         "upstream_topic_metadata": topic_subject_v3_topic_assignment_metadata(artifact),
-        "text_spans": topic_subject_v3_source_text_spans(artifact=artifact),
     }
+    if role == "target":
+        row["upstream_summary_he"] = topic_subject_v3_upstream_summary(artifact) or None
+        row["text_spans"] = topic_subject_v3_source_text_spans(artifact=artifact)
+    return row
 
 
 def topic_subject_v3_source_context(*, context: TopicSubjectV3EventContext, max_text_chars: int) -> dict[str, Any]:
@@ -3133,6 +3144,25 @@ def compact_payload_for_prompt(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if key not in {"raw_payload"}}
 
 
+def compact_model_error_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    compact = compact_payload_for_prompt(payload)
+    raw_payload = payload.get("raw_payload") if isinstance(payload.get("raw_payload"), dict) else {}
+    message = raw_payload.get("message") if isinstance(raw_payload.get("message"), dict) else {}
+    if raw_payload:
+        compact["raw_response"] = {
+            "model": raw_payload.get("model"),
+            "done": raw_payload.get("done"),
+            "done_reason": raw_payload.get("done_reason"),
+            "initial_done_reason": raw_payload.get("initial_done_reason"),
+            "retried_after_done_reason_length": raw_payload.get("retried_after_done_reason_length"),
+            "content_excerpt": str(message.get("content") or "")[:1500],
+            "prompt_eval_count": raw_payload.get("prompt_eval_count"),
+            "eval_count": raw_payload.get("eval_count"),
+            "total_duration": raw_payload.get("total_duration"),
+        }
+    return compact
+
+
 def run_topic_subject_v3_research(
     session: Session,
     *,
@@ -3462,6 +3492,58 @@ def topic_subject_v3_normalize_context_event_payload(payload: dict[str, Any], *,
     return normalized
 
 
+def topic_subject_v3_apply_normalized_event_defaults(
+    *,
+    extraction_payload: dict[str, Any],
+    normalized_event: dict[str, Any],
+    context: TopicSubjectV3EventContext,
+) -> dict[str, Any]:
+    if not isinstance(extraction_payload, dict) or extraction_payload.get("is_event") is not None:
+        return extraction_payload
+    action_type = compact_text(extraction_payload.get("action_type_he") or extraction_payload.get("action_root_label_he"))
+    matter = compact_text(extraction_payload.get("matter_he") or extraction_payload.get("subject_matter_he"))
+    action_quote = topic_subject_v3_evidence_quote_text(
+        extraction_payload.get("action_quote_he")
+        or extraction_payload.get("action_focus_quote_he")
+        or extraction_payload.get("action_evidence_quote_he")
+    )
+    outcome_raw = extraction_payload.get("outcome") if isinstance(extraction_payload.get("outcome"), dict) else {}
+    outcome_quote = topic_subject_v3_evidence_quote_text(outcome_raw.get("outcome_quote_he"))
+    outcome_is_decision = parse_bool(extraction_payload.get("outcome_is_decision") if extraction_payload.get("outcome_is_decision") is not None else extraction_payload.get("is_decision"))
+    normalized_says_event = bool(normalized_event.get("is_event"))
+    grounded_extraction = bool(
+        action_type
+        and matter
+        and action_quote
+        and topic_subject_v3_quote_supported(context=context, quote=action_quote)
+    )
+    grounded_outcome = bool(
+        outcome_is_decision
+        and outcome_quote
+        and topic_subject_v3_quote_supported(context=context, quote=outcome_quote)
+    )
+    if not (normalized_says_event and (action_type or matter or outcome_is_decision)) and not (grounded_extraction or grounded_outcome):
+        return extraction_payload
+
+    repaired = dict(extraction_payload)
+    repaired["is_event"] = True
+    if not compact_text(repaired.get("context_id")):
+        repaired["context_id"] = normalized_event.get("context_id") or context.context_id
+    if not compact_text(repaired.get("target_artifact_id")):
+        repaired["target_artifact_id"] = normalized_event.get("target_artifact_id") or context.target_artifact.artifact_id
+    if not compact_text(repaired.get("target_row_role")) or not normalized_says_event:
+        repaired["target_row_role"] = normalized_event.get("target_row_role") if normalized_says_event else "action_anchor"
+    if normalized_event.get("event_status") and repaired.get("event_status") is None:
+        repaired["event_status"] = normalized_event.get("event_status")
+    if normalized_event.get("primary_action_span_ids") and not repaired.get("primary_action_span_ids"):
+        repaired["primary_action_span_ids"] = normalized_event.get("primary_action_span_ids")
+    if normalized_event.get("action_focus_quote_he") and not repaired.get("action_focus_quote_he"):
+        repaired["action_focus_quote_he"] = normalized_event.get("action_focus_quote_he")
+    existing_repairs = repaired.get("semantic_repairs") if isinstance(repaired.get("semantic_repairs"), list) else []
+    repaired["semantic_repairs"] = unique_strings([*existing_repairs, "inferred_is_event_from_normalized_or_grounded_extraction"])
+    return repaired
+
+
 def process_topic_subject_v3_context(
     *,
     context: TopicSubjectV3EventContext,
@@ -3480,6 +3562,11 @@ def process_topic_subject_v3_context(
     extraction_payload = client.extract_event(context=context, normalized_event=normalized_event, config=config)
     if extraction_payload.get("error_code"):
         return None, topic_subject_v3_model_error_row_quality(context=context, stage="extraction", model_payload=extraction_payload)
+    extraction_payload = topic_subject_v3_apply_normalized_event_defaults(
+        extraction_payload=extraction_payload,
+        normalized_event=normalized_event,
+        context=context,
+    )
 
     event_payload = normalize_topic_subject_v3_event_payload(
         payload=extraction_payload,
@@ -3505,6 +3592,13 @@ def process_topic_subject_v3_context(
                 event_payload=event_payload,
                 repair_payload=reconsidered,
             ),
+            context=context,
+            action_confidence_threshold=config.action_confidence_threshold,
+        )
+    same_row_outcome_repair = topic_subject_v3_repair_same_row_decision_outcome_locally(context=context, event_payload=event_payload)
+    if same_row_outcome_repair is not event_payload:
+        event_payload = normalize_topic_subject_v3_event_payload(
+            payload=same_row_outcome_repair,
             context=context,
             action_confidence_threshold=config.action_confidence_threshold,
         )
@@ -3786,7 +3880,7 @@ def normalize_topic_subject_v3_event_payload(
         action_status = "repaired_inquiry_from_request_shape"
     if (
         is_event
-        and action_type in {"בקשה", "אחר"}
+        and action_type in {"בקשה", "אחר", "דיון"}
         and text_has_any(target_norm, AGENDA_PROPOSAL_CUES)
         and not has_response_to_inquiry_shape(target_norm)
         and not has_objection_action_shape(target_norm)
@@ -3853,7 +3947,29 @@ def normalize_topic_subject_v3_event_payload(
     formal_decision_norm = normalize_for_search(" ".join(part for part in (raw_decision_quote, outcome["outcome_quote_he"], context.target_artifact.real_text) if compact_text(part)))
     if (
         is_event
-        and action_type == "אחר"
+        and outcome_is_decision
+        and outcome["outcome_type"] == "removed"
+        and text_has_any(formal_decision_norm, AGENDA_REMOVAL_CUES)
+    ):
+        action_type = "הסרה מסדר היום"
+        other_action = ""
+        action_confidence = max(action_confidence, float(action_confidence_threshold))
+        action_status = "repaired_removal_from_formal_outcome_evidence"
+        semantic_repair_reasons.append("repaired_removal_from_formal_outcome_evidence")
+    elif (
+        is_event
+        and outcome_is_decision
+        and outcome["outcome_type"] == "referred"
+        and text_has_any(formal_decision_norm, COMMITTEE_REFERRAL_CUES)
+    ):
+        action_type = "הפניה לוועדה"
+        other_action = ""
+        action_confidence = max(action_confidence, float(action_confidence_threshold))
+        action_status = "repaired_referral_from_formal_outcome_evidence"
+        semantic_repair_reasons.append("repaired_referral_from_formal_outcome_evidence")
+    if (
+        is_event
+        and action_type in {"אחר", "בקשה", "דיון", "התקשרות"}
         and outcome_is_decision
         and outcome["outcome_type"] in {"approved", "decision"}
         and text_has_any(formal_decision_norm, FORMAL_DECISION_MARKER_CUES + STRONG_APPROVAL_ACTION_CUES + APPROVAL_DECISION_QUOTE_CUES + APPROVAL_VERB_CUES)
@@ -3933,6 +4049,7 @@ def normalize_topic_subject_v3_event_payload(
         "v3_quote_repair": raw.get("v3_quote_repair") if isinstance(raw.get("v3_quote_repair"), dict) else None,
         "v3_non_event_reconsideration": raw.get("v3_non_event_reconsideration") if isinstance(raw.get("v3_non_event_reconsideration"), dict) else None,
         "v3_non_event_local_repair": raw.get("v3_non_event_local_repair") if isinstance(raw.get("v3_non_event_local_repair"), dict) else None,
+        "v3_same_row_outcome_local_repair": raw.get("v3_same_row_outcome_local_repair") if isinstance(raw.get("v3_same_row_outcome_local_repair"), dict) else None,
         "v3_outcome_quote_repair": raw.get("v3_outcome_quote_repair") if isinstance(raw.get("v3_outcome_quote_repair"), dict) else None,
         "v3_evidence_entailment": raw.get("v3_evidence_entailment") if isinstance(raw.get("v3_evidence_entailment"), dict) else None,
         "v3_formal_decision_repair": raw.get("v3_formal_decision_repair") if isinstance(raw.get("v3_formal_decision_repair"), dict) else None,
@@ -4121,6 +4238,74 @@ def merge_topic_subject_v3_non_event_reconsideration(*, event_payload: dict[str,
     )
     metadata["repair_applied"] = True
     repaired["v3_non_event_reconsideration"] = metadata
+    return repaired
+
+
+def topic_subject_v3_repair_same_row_decision_outcome_locally(*, context: TopicSubjectV3EventContext, event_payload: dict[str, Any]) -> dict[str, Any]:
+    if not bool(event_payload.get("is_event")) or bool(event_payload.get("outcome_is_decision")):
+        return event_payload
+    evidence = topic_subject_v3_decision_outcome_from_text(context.target_artifact.real_text)
+    if evidence is None:
+        return event_payload
+    quote = exact_source_quote_around_cue(raw_text=context.target_artifact.real_text, cues=evidence["cues"], max_words=28) or compact_text(context.target_artifact.real_text)[:300]
+    if not quote or not quote_supported_by_text(quote=quote, text=context.target_artifact.real_text):
+        return event_payload
+
+    repaired = dict(event_payload)
+    outcome_type = evidence["outcome_type"]
+    action_type = compact_text(repaired.get("action_type_he"))
+    if outcome_type == "removed":
+        repaired["action_type_he"] = "הסרה מסדר היום"
+        repaired["other_action_type_he"] = ""
+        repaired["action_type_confidence"] = max(clamp_float(repaired.get("action_type_confidence"), default=0.0), 0.9)
+        repaired["action_type_status"] = "repaired_removal_from_same_row_result"
+        repaired["action_quote_he"] = quote
+        repaired["action_focus_quote_he"] = quote
+    elif outcome_type == "referred":
+        repaired["action_type_he"] = "הפניה לוועדה"
+        repaired["other_action_type_he"] = ""
+        repaired["action_type_confidence"] = max(clamp_float(repaired.get("action_type_confidence"), default=0.0), 0.9)
+        repaired["action_type_status"] = "repaired_referral_from_same_row_result"
+        repaired["action_quote_he"] = quote
+        repaired["action_focus_quote_he"] = quote
+    elif outcome_type == "approved" and action_type in {"", "אחר", "בקשה", "התקשרות", "דיון"}:
+        repaired["action_type_he"] = "אישור"
+        repaired["other_action_type_he"] = ""
+        repaired["action_type_confidence"] = max(clamp_float(repaired.get("action_type_confidence"), default=0.0), 0.9)
+        repaired["action_type_status"] = "repaired_approval_from_same_row_result"
+        repaired["action_quote_he"] = quote
+        repaired["action_focus_quote_he"] = quote
+    elif outcome_type == "rejected" and action_type in {"", "אחר", "בקשה", "דיון", "הצעה לסדר יום"}:
+        repaired["action_type_he"] = "דחייה"
+        repaired["other_action_type_he"] = ""
+        repaired["action_type_confidence"] = max(clamp_float(repaired.get("action_type_confidence"), default=0.0), 0.9)
+        repaired["action_type_status"] = "repaired_rejection_from_same_row_result"
+        repaired["action_quote_he"] = quote
+        repaired["action_focus_quote_he"] = quote
+
+    repaired["outcome_is_decision"] = True
+    repaired["outcome"] = {
+        "outcome_type": outcome_type,
+        "outcome_label_he": evidence["outcome_label_he"],
+        "outcome_summary_he": evidence["outcome_label_he"],
+        "outcome_quote_he": quote,
+        "confidence": evidence.get("confidence", 0.92),
+        "limitations": [],
+    }
+    repaired["event_status"] = {
+        "approved": "approved",
+        "rejected": "rejected",
+        "removed": "removed",
+        "referred": "referred",
+    }.get(outcome_type, "unknown")
+    existing_repairs = repaired.get("semantic_repairs") if isinstance(repaired.get("semantic_repairs"), list) else []
+    repaired["semantic_repairs"] = unique_strings([*existing_repairs, "repaired_decision_outcome_from_same_row_evidence"])
+    repaired["v3_same_row_outcome_local_repair"] = {
+        "repair_applied": True,
+        "repair_reason": "exact_decision_outcome_quote_in_target_row",
+        "outcome_type": outcome_type,
+        "source_quote_he": quote,
+    }
     return repaired
 
 
@@ -4719,7 +4904,10 @@ def topic_subject_v3_decision_action_without_outcome_reason(*, action_type: str,
     if outcome_is_decision or action not in FORMAL_DECISION_ACTION_LABELS_V3:
         return ""
     if action == "אישור":
-        return "approval_action_without_decision_outcome"
+        # Hebrew agenda rows often use "אישור" for a requested approval or
+        # attached approval document. A formal approved outcome is validated
+        # separately when outcome_is_decision=true.
+        return ""
     return "formal_decision_action_without_decision_outcome"
 
 
@@ -4732,7 +4920,15 @@ def topic_subject_v3_formal_decision_outcome_without_formal_evidence(*, event_pa
     evidence_norm = normalize_for_search(compact_text(f"{outcome_quote} {action_quote}"))
     if not evidence_norm:
         return True
-    formal_cues = FORMAL_DECISION_MARKER_CUES + DECISION_ACTION_CUES + STRONG_APPROVAL_ACTION_CUES + APPROVAL_DECISION_QUOTE_CUES
+    formal_cues = (
+        FORMAL_DECISION_MARKER_CUES
+        + DECISION_ACTION_CUES
+        + STRONG_APPROVAL_ACTION_CUES
+        + APPROVAL_DECISION_QUOTE_CUES
+        + REJECTION_DECISION_CUES
+        + AGENDA_REMOVAL_CUES
+        + COMMITTEE_REFERRAL_CUES
+    )
     return not text_has_any(evidence_norm, formal_cues)
 
 
@@ -4959,6 +5155,7 @@ def topic_subject_v3_model_error_row_quality(*, context: TopicSubjectV3EventCont
         metadata={
             "context_id": context.context_id,
             "stage": stage,
+            "model_error_payload": compact_model_error_payload(model_payload),
             "upstream_subject_hint_policy": "strong_context_hint_only_not_source_evidence",
             "upstream_subject_hint": topic_subject_v3_upstream_subject_hint(artifact),
             "source_topic_label_he": artifact.topic_label_he,

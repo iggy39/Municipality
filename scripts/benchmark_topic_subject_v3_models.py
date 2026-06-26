@@ -46,6 +46,7 @@ class BenchmarkItem:
     municipality_slug: str
     sample_label: str
     artifact: Any
+    context_artifacts: list[Any]
     offset: int | None = None
 
 
@@ -192,7 +193,7 @@ def main() -> int:
 
 def _process_items(*, benchmark_items: list[BenchmarkItem], events: list[Any], quality_rows: list[Any], client: OllamaTopicSubjectV3Client, args: argparse.Namespace) -> None:
     for item in benchmark_items:
-        context = build_topic_subject_v3_event_contexts(artifacts=[item.artifact], max_context_rows=5)[0]
+        context = build_topic_subject_v3_event_contexts(artifacts=[item.artifact], context_artifacts=item.context_artifacts, max_context_rows=5)[0]
         config = TopicSubjectResearchConfig(
             municipality_slug=item.municipality_slug,
             model_name=str(args.model),
@@ -263,7 +264,8 @@ def _json_benchmark_items(*, paths: list[Path], municipality_slug: str, json_row
     selected: list[BenchmarkItem] = []
     row_filter = set(json_rows)
     for path_index, path in enumerate(paths):
-        artifacts = _topic_assignment_artifacts(path=path, source_document_version_id=900000 + path_index)
+        all_artifacts = _topic_assignment_artifacts(path=path, source_document_version_id=900000 + path_index)
+        artifacts = list(all_artifacts)
         if row_filter:
             artifacts = [artifact for artifact in artifacts if artifact.source_ordinal in row_filter]
         else:
@@ -275,7 +277,15 @@ def _json_benchmark_items(*, paths: list[Path], municipality_slug: str, json_row
             raise ValueError(f"no JSON benchmark artifacts selected from {path}")
         slug = municipality_slug if municipality_slug != "json" else _infer_municipality_slug_from_path(path)
         for artifact in artifacts:
-            selected.append(BenchmarkItem(municipality_slug=slug, sample_label=f"{slug}:json{path_index}:ord{artifact.source_ordinal}", artifact=artifact, offset=None))
+            selected.append(
+                BenchmarkItem(
+                    municipality_slug=slug,
+                    sample_label=f"{slug}:json{path_index}:ord{artifact.source_ordinal}",
+                    artifact=artifact,
+                    context_artifacts=all_artifacts,
+                    offset=None,
+                )
+            )
     return selected
 
 
@@ -439,7 +449,16 @@ def _benchmark_items(
         if artifact.artifact_id in seen_artifact_ids:
             continue
         seen_artifact_ids.add(artifact.artifact_id)
-        items.append(BenchmarkItem(municipality_slug=municipality_slug, sample_label=f"{municipality_slug}:{offset}", artifact=artifact, offset=offset))
+        doc_artifacts = [candidate for candidate in artifacts if candidate.source_document_version_id == artifact.source_document_version_id]
+        items.append(
+            BenchmarkItem(
+                municipality_slug=municipality_slug,
+                sample_label=f"{municipality_slug}:{offset}",
+                artifact=artifact,
+                context_artifacts=doc_artifacts,
+                offset=offset,
+            )
+        )
 
     for municipality_slug, document_version_id in docver_specs:
         doc_artifacts = [artifact for artifact in slug_artifacts(municipality_slug) if artifact.source_document_version_id == document_version_id]
@@ -454,6 +473,7 @@ def _benchmark_items(
                     municipality_slug=municipality_slug,
                     sample_label=f"{municipality_slug}:docver{document_version_id}:ord{artifact.source_ordinal}",
                     artifact=artifact,
+                    context_artifacts=doc_artifacts,
                     offset=None,
                 )
             )
@@ -475,6 +495,7 @@ def _benchmark_items(
                     municipality_slug=municipality_slug,
                     sample_label=f"{municipality_slug}:docver{document_version_id}:ord{source_ordinal}",
                     artifact=artifact,
+                    context_artifacts=[candidate for candidate in slug_artifacts(municipality_slug) if candidate.source_document_version_id == document_version_id],
                     offset=None,
                 )
             )
