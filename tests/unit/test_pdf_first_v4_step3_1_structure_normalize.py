@@ -127,3 +127,26 @@ def test_structural_starts_does_not_split_conjoined_numeric_reference() -> None:
 
     assert step31._structural_starts(text) == [0]
     assert step31._structural_starts("סעיף 741/370 - להלן סעיף 23.") == [0]
+
+
+def test_first_short_protocol_header_does_not_self_link_as_continuation() -> None:
+    structure_units = step31._normalize_structure(
+        [
+            {
+                "semantic_unit_id": "p1_w1_u1",
+                "source_window_id": "p1_w1",
+                "page": 1,
+                "source_region_ids": ["p1_r1", "p1_r2"],
+                "source_block_ids": ["p1_b1", "p1_b2"],
+                "raw_text": "עיריית באר שבע פרוטוקול אישור מועצה מן המניין מס' 50 מיום ראשון, ח' סיון תשפ\"ו 24.5.26",
+                "explicit_actions": [],
+            }
+        ],
+        semantic_payload={},
+    )
+
+    assert len(structure_units) == 1
+    assert structure_units[0]["structural_role"] == "metadata"
+    assert structure_units[0]["continuation_of_unit_id"] is None
+    assert structure_units[0]["topic_assignment_eligible"] is False
+    assert step31._validate_structure(structure_units)["accept_for_next_step"] is True

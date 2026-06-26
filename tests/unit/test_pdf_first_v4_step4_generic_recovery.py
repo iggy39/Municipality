@@ -2334,6 +2334,84 @@ def test_section47_email_approval_carrier_is_not_topic_bearing() -> None:
     assert step4._non_topic_protocol_reason(headline=text, raw_text=text, structural_role="continuation", packet_role="protocol") == "procedural_packet_carrier"
 
 
+def test_section47_email_carrier_does_not_keep_weak_council_root_candidate() -> None:
+    text = "התקבל אישור מועצה במייל ב- 24.5.26"
+    item = {
+        "structure_unit_id": "u1",
+        "semantic_unit_id": "u1",
+        "source_page": 1,
+        "structural_role": "outline_item",
+        "row_type": "fragment",
+        "is_topic_bearing": False,
+        "unit_raw_text": text,
+        "raw_text": text,
+        "topic_identification_context": text,
+        "topic_headline_he": "",
+        "topic_subject_he": None,
+        "non_topic_reason": "procedural_packet_carrier",
+        "document_context": {"packet_role": "protocol"},
+        "root_topic_candidates": [
+            {
+                "root_topic_id": "root_religious_services",
+                "root_label_he": "דת ושירותי דת",
+                "child_choice_id": "child_religious_council",
+                "child_label_he": "מועצה דתית",
+                "score": 0.48,
+                "matched_terms": [],
+            }
+        ],
+    }
+    row = step4._non_topic_assignment(item, reason="procedural_packet_carrier")
+
+    updated = step4._apply_topic_arbitration(assignments=[row], items=[item], enable_govmap_geo=False)[0]
+
+    assert updated["root_topic_id"] == "root_agenda_queries"
+    assert updated["topic_node_status"] == "active"
+    assert updated["is_topic_bearing"] is False
+    assert updated["topic_arbitration"] == {"decision": "evidence_only", "reason": "procedural_packet_carrier"}
+
+
+def test_short_protocol_cover_headers_do_not_keep_weak_council_root_candidate() -> None:
+    for text in (
+        "עיריית באר שבע פרוטוקול אישור מועצה מן המניין",
+        "פרוטוקול אישור מועצה מן המניין מס' 50",
+    ):
+        item = {
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "source_page": 1,
+            "structural_role": "outline_item",
+            "row_type": "fragment",
+            "is_topic_bearing": False,
+            "unit_raw_text": text,
+            "raw_text": text,
+            "topic_identification_context": text,
+            "topic_headline_he": "",
+            "topic_subject_he": None,
+            "non_topic_reason": "protocol_cover_metadata",
+            "document_context": {"packet_role": "protocol"},
+            "root_topic_candidates": [
+                {
+                    "root_topic_id": "root_religious_services",
+                    "root_label_he": "דת ושירותי דת",
+                    "child_choice_id": "child_religious_council",
+                    "child_label_he": "מועצה דתית",
+                    "score": 0.48,
+                    "matched_terms": [],
+                }
+            ],
+        }
+        row = step4._non_topic_assignment(item, reason="protocol_cover_metadata")
+
+        updated = step4._apply_topic_arbitration(assignments=[row], items=[item], enable_govmap_geo=False)[0]
+
+        assert step4._non_topic_protocol_reason(headline=text, raw_text=text, structural_role="outline_item", packet_role="protocol") == "protocol_cover_metadata"
+        assert step4._topic_contract_from_headline(text, structural_role="outline_item", packet_role="protocol")["is_topic_bearing"] is False
+        assert updated["root_topic_id"] == "root_agenda_queries"
+        assert updated["is_topic_bearing"] is False
+        assert updated["topic_arbitration"] == {"decision": "evidence_only", "reason": "protocol_cover_metadata"}
+
+
 def test_section47_budget_packet_extracts_budget_subject() -> None:
     raw_text = (
         "סעיף47 לתקנון בדבר ישיבות המועצה לאחר אישור היועץ המשפטי .2026 "

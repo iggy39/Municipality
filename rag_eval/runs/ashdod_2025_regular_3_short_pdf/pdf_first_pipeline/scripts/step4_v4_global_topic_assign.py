@@ -49,10 +49,11 @@ from municipality.topic_label_quality import canonicalize_topic_label, is_low_qu
 DEFAULT_MODEL = "dicta-il/DictaLM-3.0-24B-Thinking:bf16"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 EXCLUDED_STRUCTURAL_ROLES = {"noise", "table_header_only"}
-CACHE_VERSION = "step4_v4_global_topic_assign_v58_geo_people_v3_fallback"
+CACHE_VERSION = "step4_v4_global_topic_assign_v60_protocol_carriers"
 DICTA_FULL_MODEL_MODES = {"required", "dicta_authoritative", "dicta_contextual"}
 ACTION_DOMINANT_ROOT_IDS = {"root_agreements", "root_budget_finance", "root_travel_approvals", "root_hr_labor", "root_allocations", "root_supports", "root_administration"}
 CONTEXTUAL_NON_INDEXABLE_STATUSES = {"duplicate_reference", "evidence_fragment", "procedural_only", "insufficient_context"}
+NON_TOPIC_CARRIER_REASONS = {"procedural_packet_carrier", "protocol_cover_metadata"}
 
 
 def _model_thinking_enabled(model: str) -> bool:
@@ -2931,6 +2932,8 @@ def _non_topic_assignment(item: dict[str, Any], *, reason: str | None = None) ->
 def _can_apply_non_topic_evidence_root(*, item: dict[str, Any], row_type: str, reason: str | None) -> bool:
     if not _is_protocol_item(item) or row_type not in {"container", "fragment", "attribution_fragment"}:
         return False
+    if reason in NON_TOPIC_CARRIER_REASONS or str(item.get("non_topic_reason") or "") in NON_TOPIC_CARRIER_REASONS:
+        return False
     return not _looks_like_long_protocol_transcript_fragment(item=item, reason=reason)
 
 
@@ -3322,7 +3325,7 @@ def _apply_topic_arbitration(*, assignments: list[dict[str, Any]], items: list[d
             continue
         evidence_reason = _evidence_only_arbitration_reason(row=current, item=item)
         proposal = _best_topic_arbitration_proposal(row=current, item=item, enable_govmap_geo=enable_govmap_geo)
-        if evidence_reason and not _topic_proposal_overrides_evidence_only(proposal):
+        if evidence_reason and not _topic_proposal_overrides_evidence_only(proposal, reason=evidence_reason):
             context = _select_inherited_topic_context(row=current, item=item, items=items, assignment_by_id=assignment_by_id, emitted_by_id=emitted_by_id, order_by_id=order_by_id)
             if context:
                 updated = _assignment_from_inherited_topic_context(row=current, item=item, context=context, reason=evidence_reason)
@@ -3689,10 +3692,12 @@ def _topic_proposal_should_replace(*, row: dict[str, Any], proposal: dict[str, A
     return False
 
 
-def _topic_proposal_overrides_evidence_only(proposal: dict[str, Any] | None) -> bool:
+def _topic_proposal_overrides_evidence_only(proposal: dict[str, Any] | None, *, reason: str | None = None) -> bool:
     if not proposal:
         return False
     source = str(proposal.get("source") or "")
+    if reason in NON_TOPIC_CARRIER_REASONS:
+        return source in {"v3_event_subject", "explicit_action_span", "topic_policy_span"} and float(proposal.get("score") or 0.0) >= 76
     return source in {"v3_event_subject", "explicit_action_span", "topic_policy_span", "raw_short_heading", "item_topic_subject", "topic_headline", "weak_carrier_span"} and float(proposal.get("score") or 0.0) >= 76
 
 
@@ -4155,10 +4160,15 @@ def _evidence_only_arbitration_reason(*, row: dict[str, Any], item: dict[str, An
         return None
     normalized = _norm(raw)
     role = str(item.get("structural_role") or row.get("structural_role") or "")
+    non_topic_reason = str(item.get("non_topic_reason") or "")
     if role == "continuation" and ("להלן רשימת" in normalized or "רשימת ההישגים" in normalized):
         return "attachment_or_list_heading"
+    if non_topic_reason in NON_TOPIC_CARRIER_REASONS:
+        return non_topic_reason
     if _has_explicit_local_topic_marker(raw) or _local_hendon_subject(item) or _local_committee_protocol_subject(item):
         return None
+    if _looks_like_procedural_packet_carrier_only(raw):
+        return "procedural_packet_carrier"
     if _looks_like_numeric_or_partial_evidence_fragment(row={**row, "topic_identification_context": raw}, subject=str(row.get("topic_subject_he") or ""), text=raw):
         return "numeric_or_partial_evidence"
     if re.search(r"\bולפיו\b.*(?:%|אחוז|עלות|סכום)", normalized) and not _has_bounded_substantive_topic_signal(raw):
@@ -4980,9 +4990,17 @@ def _topic_contract_from_headline(headline: str, *, structural_role: str, packet
     subject = _strip_attribution_tail(subject)
     if _looks_like_procedural_packet_carrier_only(subject):
         subject = ""
+    if _looks_like_protocol_cover_metadata(subject) or _looks_like_protocol_cover_metadata(headline):
+        subject = ""
+    if _looks_like_protocol_meeting_carrier_only(subject):
+        subject = ""
     if not subject and structural_role in {"continuation", "vote_or_result", "task_row"}:
         subject = _strip_attribution_tail(_clean_heading(headline))
     if _looks_like_procedural_packet_carrier_only(subject):
+        subject = ""
+    if _looks_like_protocol_cover_metadata(subject) or _looks_like_protocol_cover_metadata(headline):
+        subject = ""
+    if _looks_like_protocol_meeting_carrier_only(subject):
         subject = ""
     is_bearing = _is_substantive_topic_subject(subject)
     return {
@@ -5025,6 +5043,8 @@ def _non_topic_protocol_reason(*, headline: str, raw_text: str, structural_role:
         return "container_heading"
     if _looks_like_ceremonial_notice_heading(text):
         return "ceremonial_notice_heading"
+    if _looks_like_protocol_meeting_carrier_only(text):
+        return "protocol_cover_metadata"
     if _looks_like_protocol_cover_metadata(text):
         return "protocol_cover_metadata"
     if raw and raw != text and _looks_like_protocol_listing(raw):
@@ -5233,12 +5253,29 @@ def _looks_like_protocol_cover_metadata(text: str) -> bool:
     normalized = _norm(compact)
     if not normalized or "פרוטוקול" not in normalized:
         return False
+    if any(term in normalized for term in ("חתימה", "חתימות", "סיום הפרוטוקול", "סיום הישיבה")):
+        return False
     if _has_bounded_substantive_topic_signal(compact):
         return False
     has_municipality = "עיריית" in normalized or "עיריה" in normalized or "עירייה" in normalized
     has_serial = re.search(r"\b(?:מס|מספר)(?:\s*[/\d])?", normalized) is not None
     has_date = "מתאריך" in normalized or "מיום" in normalized or re.search(r"\b\d{1,2}\.\d{1,2}\.\d{2,4}\b", compact)
-    return has_municipality and has_serial and (bool(has_date) or len(_hebrew_tokens(normalized)) <= 14)
+    has_meeting_cue = any(term in normalized for term in ("מועצה", "ישיבה", "ישיבות", "מן המניין", "שלא מן המניין"))
+    if has_municipality and (has_serial or has_meeting_cue) and (bool(has_date) or len(_hebrew_tokens(normalized)) <= 14):
+        return True
+    return has_serial and has_meeting_cue and len(_hebrew_tokens(normalized)) <= 14
+
+
+def _looks_like_protocol_meeting_carrier_only(text: str) -> bool:
+    compact = _clean_heading(text)
+    normalized = _norm(compact).strip(" :.-–")
+    if not normalized:
+        return False
+    if not any(term in normalized for term in ("מועצה", "ישיבה", "ישיבות", "מן המניין", "שלא מן המניין")):
+        return False
+    generic_tokens = {"פרוטוקול", "אישור", "אישורי", "מועצה", "המועצה", "ישיבה", "ישיבת", "ישיבות", "מן", "המניין", "שלא", "מס", "מספר"}
+    tokens = [token for token in _hebrew_tokens(normalized) if token]
+    return bool(tokens) and len(tokens) <= 8 and set(tokens).issubset(generic_tokens)
 
 
 def _looks_like_ceremonial_notice_heading(text: str) -> bool:

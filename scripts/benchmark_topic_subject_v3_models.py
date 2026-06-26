@@ -67,6 +67,7 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=float, default=600.0)
     parser.add_argument("--max-text-chars", type=int, default=3500)
     parser.add_argument("--disable-schema-no-think-helpers", action="store_true", help="Disable the default V3 helper-stage schema/no-think profile for A/B debugging.")
+    parser.add_argument("--disable-judge", action="store_true", help="Run extraction/evidence/repair without the optional judge stage.")
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     args = parser.parse_args()
 
@@ -93,6 +94,7 @@ def main() -> int:
                     "model": str(args.model),
                     "small_model": str(args.small_model),
                     "schema_no_think_helpers": not bool(args.disable_schema_no_think_helpers),
+                    "judge_enabled": not bool(args.disable_judge),
                     "topic_assignments_json": [str(path) for path in json_paths],
                     "json_rows": args.json_row or [],
                     "selected_artifacts": len(benchmark_items),
@@ -137,6 +139,7 @@ def main() -> int:
                         "model": str(args.model),
                         "small_model": str(args.small_model),
                         "schema_no_think_helpers": not bool(args.disable_schema_no_think_helpers),
+                        "judge_enabled": not bool(args.disable_judge),
                         "samples": sample_specs,
                         "docvers": args.docver or [],
                         "docver_rows": args.docver_row or [],
@@ -207,6 +210,7 @@ def _process_items(*, benchmark_items: list[BenchmarkItem], events: list[Any], q
             output_dir=None,
             pipeline_version="v3",
             use_schema_no_think_helpers=not bool(args.disable_schema_no_think_helpers),
+            run_v3_judge=not bool(args.disable_judge),
         )
         started = time.perf_counter()
         event, quality = process_topic_subject_v3_context(context=context, client=client, config=config)

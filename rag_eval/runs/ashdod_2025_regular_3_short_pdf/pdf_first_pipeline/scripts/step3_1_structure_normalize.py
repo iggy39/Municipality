@@ -150,10 +150,11 @@ def _normalize_structure(units: list[dict[str, Any]], *, semantic_payload: dict[
                 pass
             elif current_section_id is None:
                 current_section_id = _section_id(section_number=section_number, text=fragment["text"], fallback_id=structure_unit_id)
-                current_anchor_id = structure_unit_id if role != "vote_or_result" else None
+                if role not in {"continuation", "vote_or_result", "task_row"}:
+                    current_anchor_id = structure_unit_id
 
             continuation_of = None
-            if role in {"continuation", "vote_or_result", "task_row"} and current_anchor_id:
+            if role in {"continuation", "vote_or_result", "task_row"} and current_anchor_id and current_anchor_id != structure_unit_id:
                 continuation_of = current_anchor_id
             if role in {"body", "section_heading", "outline_item"}:
                 current_anchor_id = structure_unit_id
@@ -445,6 +446,13 @@ def _looks_like_short_title_row(text: str) -> bool:
 def _looks_like_page_chrome(text: str) -> bool:
     compact = _clean_text(text)
     normalized = _norm(compact)
+    if (
+        len(compact) <= 180
+        and re.search(r"\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b", compact)
+        and "פרוטוקול" in normalized
+        and any(term in normalized for term in ("מועצה", "ישיבה", "ישיבות", "מן המניין", "שלא מן המניין"))
+    ):
+        return True
     if re.search(r"\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b", compact) and any(term in normalized for term in ("פרוטוקול ישיבות", "ישיבה מן המניין", "מתאריך")):
         return True
     if "פרוטוקול ישיבות" in normalized and any(term in normalized for term in ("מנכ", "עיריית", "עירייה", "ישיבה")):
@@ -475,6 +483,8 @@ def _structural_role(text: str, *, original_unit: dict[str, Any], fragment_count
 
 def _is_metadata(text: str, *, original_unit: dict[str, Any]) -> bool:
     normalized = _norm(text)
+    if _looks_like_page_chrome(text):
+        return True
     if _has_structural_subject(text):
         return False
     if any(_norm(term) in normalized for term in METADATA_TERMS):

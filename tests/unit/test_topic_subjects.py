@@ -2560,7 +2560,7 @@ def test_process_topic_subject_v3_repairs_unsupported_formal_rejection_to_non_de
     assert row.quality_status == "accepted"
 
 
-def test_process_topic_subject_v3_fallback_repairs_when_formal_rejection_repair_repeats_error() -> None:
+def test_process_topic_subject_v3_fails_when_semantic_formal_rejection_repair_repeats_error() -> None:
     artifact = _artifact_dataclass(
         real_text="בקשה לביטול תוספת לתקציב הפארק. לוקחים מעניים ונותנים לעשירים. לא לאשר. לדרוש שינוי.",
         topic_label_he="ביטול תוספת לתקציב הפארק",
@@ -2594,6 +2594,21 @@ def test_process_topic_subject_v3_fallback_repairs_when_formal_rejection_repair_
         def repair_formal_decision_evidence(self, *, context, normalized_event, event_payload, validation_failures, config):  # type: ignore[no-untyped-def]
             return event_payload
 
+        def assess_event_evidence(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "entailment_status": "entailed",
+                "field_assessments": {
+                    "action_type_he": {"status": "entailed", "source_quote_he": "לא לאשר."},
+                    "matter_he": {"status": "entailed", "source_quote_he": "תקציב הפארק"},
+                    "outcome": {"status": "entailed", "source_quote_he": "לא לאשר.", "outcome_evidence_classification": "not_outcome"},
+                },
+                "repair_required": False,
+                "repaired_event": None,
+                "failure_reasons": [],
+            }
+
     event, row = process_topic_subject_v3_context(
         context=context,
         client=RepeatedBadRepairClient(),
@@ -2601,13 +2616,12 @@ def test_process_topic_subject_v3_fallback_repairs_when_formal_rejection_repair_
     )
 
     assert event is not None
-    assert event.event_payload["action_type_he"] == "בקשה"
-    assert event.event_payload["matter_he"] == "ביטול תוספת לתקציב הפארק"
-    assert event.event_payload["outcome_is_decision"] is False
-    assert event.event_payload["event_phase"] == "open_request"
-    assert event.event_payload["v3_formal_decision_repair"]["deterministic_fallback_applied"] is True
-    assert event.validation_status == "accepted"
-    assert row.quality_status == "accepted"
+    assert event.event_payload["action_type_he"] == "דחייה"
+    assert event.event_payload["outcome_is_decision"] is True
+    assert event.event_payload["v3_formal_decision_repair"]["semantic_repair_insufficient"] is True
+    assert "formal_decision_outcome_without_formal_evidence" in event.failure_reasons
+    assert event.validation_status == "failed"
+    assert row.quality_status == "failed"
 
 
 def test_process_topic_subject_v3_removes_unentailed_outcome() -> None:
@@ -2823,7 +2837,7 @@ def test_topic_subject_v3_normalizes_flat_outcome_fields() -> None:
     assert "flat_outcome_field_recovered:outcome_quote_he" in payload["schema_warnings"]
 
 
-def test_topic_subject_v3_prefers_formal_result_quote_over_vote_count() -> None:
+def test_topic_subject_v3_requires_semantic_actual_result_lifecycle_for_decision() -> None:
     artifact = _artifact_dataclass(
         real_text=(
             "חברים, לסיים את ההצבעה בבקשה. נמנעים2 , בעד22. "
@@ -2848,6 +2862,7 @@ def test_topic_subject_v3_prefers_formal_result_quote_over_vote_count() -> None:
                 "outcome_type": "approved",
                 "outcome_label_he": "אישור",
                 "outcome_quote_he": "נמנעים2 , בעד22.",
+                "outcome_evidence_classification": "actual_result",
                 "confidence": 0.9,
             },
             "confidence": 0.9,
@@ -2855,11 +2870,37 @@ def test_topic_subject_v3_prefers_formal_result_quote_over_vote_count() -> None:
         context=context,
     )
 
-    assert "החליטה לאשר" in payload["outcome"]["outcome_quote_he"]
-    assert "formal_decision_outcome_without_formal_evidence" not in validate_topic_subject_v3_event_payload(context=context, event_payload=payload)
+    assert "formal_decision_outcome_without_formal_evidence" in validate_topic_subject_v3_event_payload(context=context, event_payload=payload)
+
+    semantic_payload = normalize_topic_subject_v3_event_payload(
+        payload={
+            **payload,
+            "outcome": {
+                **payload["outcome"],
+                "outcome_quote_he": "החלטה: המועצה החליטה לאשר את דו\"ח הביקורת השנתי.",
+            },
+            "lifecycle_evidence": [
+                {
+                    "phase": "vote_tally",
+                    "quote_he": "נמנעים2 , בעד22.",
+                    "outcome_evidence_classification": "not_outcome",
+                    "reason_he": "מספרי הצבעה בלבד אינם תוצאת החלטה סמנטית.",
+                },
+                {
+                    "phase": "formal_result",
+                    "quote_he": "החלטה: המועצה החליטה לאשר את דו\"ח הביקורת השנתי.",
+                    "outcome_evidence_classification": "actual_result",
+                    "reason_he": "הציטוט קובע את תוצאת ההחלטה.",
+                },
+            ],
+        },
+        context=context,
+    )
+
+    assert validate_topic_subject_v3_event_payload(context=context, event_payload=semantic_payload) == []
 
 
-def test_topic_subject_v3_formal_evidence_accepts_spelled_approval_result() -> None:
+def test_topic_subject_v3_accepts_model_semantic_formal_result_lifecycle() -> None:
     artifact = _artifact_dataclass(
         real_text="תסיימו את ההצבעה מ א ו ש ר.",
         topic_label_he="הצעה תקציבית",
@@ -2871,7 +2912,19 @@ def test_topic_subject_v3_formal_evidence_accepts_spelled_approval_result() -> N
         "matter_he": "הצעה תקציבית",
         "action_quote_he": "תסיימו את ההצבעה מ א ו ש ר.",
         "outcome_is_decision": True,
-        "outcome": {"outcome_type": "approved", "outcome_quote_he": "תסיימו את ההצבעה מ א ו ש ר."},
+        "outcome": {
+            "outcome_type": "approved",
+            "outcome_quote_he": "תסיימו את ההצבעה מ א ו ש ר.",
+            "outcome_evidence_classification": "actual_result",
+        },
+        "lifecycle_evidence": [
+            {
+                "phase": "formal_result",
+                "quote_he": "תסיימו את ההצבעה מ א ו ש ר.",
+                "outcome_evidence_classification": "actual_result",
+                "reason_he": "המודל סיווג את הציטוט כתוצאת החלטה בפועל.",
+            }
+        ],
     }
 
     assert validate_topic_subject_v3_event_payload(context=context, event_payload=event_payload) == []
@@ -2895,6 +2948,426 @@ def test_topic_subject_v3_judge_prediction_recovers_flat_payload() -> None:
     assert prediction["matter_he"] == "דו\"ח ביקורת"
     assert prediction["outcome_type"] == "approved"
     assert prediction["confidence"] == 0.94
+
+
+def test_process_topic_subject_v3_semantic_lifecycle_repair_without_judge() -> None:
+    artifact = _artifact_dataclass(
+        real_text=(
+            "אני מבקש לאשר את דו\"ח הביקורת כולל הערות ראש העיר. "
+            "נמנעים2 , בעד22. "
+            "החלטה: המועצה החליטה לאשר את דו\"ח מבקרת העירייה."
+        ),
+        topic_label_he="דו\"ח ביקורת",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    class SemanticLifecycleClient(MockTopicSubjectV3Client):
+        def extract_event(self, *, context, normalized_event, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "is_event": True,
+                "action_type_he": "אישור",
+                "action_type_confidence": 0.92,
+                "matter_he": "דו\"ח ביקורת",
+                "action_quote_he": "אני מבקש לאשר את דו\"ח הביקורת כולל הערות ראש העיר.",
+                "outcome_is_decision": True,
+                "outcome": {
+                    "outcome_type": "approved",
+                    "outcome_label_he": "אישור",
+                    "outcome_quote_he": "נמנעים2 , בעד22.",
+                    "outcome_evidence_classification": "not_outcome",
+                    "confidence": 0.85,
+                },
+                "target_row_role": "action_anchor",
+                "confidence": 0.88,
+            }
+
+        def assess_event_evidence(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            repaired = {
+                **event_payload,
+                "outcome": {
+                    **event_payload["outcome"],
+                    "outcome_quote_he": "החלטה: המועצה החליטה לאשר את דו\"ח מבקרת העירייה.",
+                    "outcome_evidence_classification": "actual_result",
+                },
+                "lifecycle_evidence": [
+                    {
+                        "phase": "request_or_intent",
+                        "quote_he": "אני מבקש לאשר את דו\"ח הביקורת כולל הערות ראש העיר.",
+                        "outcome_evidence_classification": "proposal_or_intent",
+                    },
+                    {
+                        "phase": "vote_tally",
+                        "quote_he": "נמנעים2 , בעד22.",
+                        "outcome_evidence_classification": "not_outcome",
+                    },
+                    {
+                        "phase": "formal_result",
+                        "quote_he": "החלטה: המועצה החליטה לאשר את דו\"ח מבקרת העירייה.",
+                        "outcome_evidence_classification": "actual_result",
+                    },
+                ],
+            }
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "entailment_status": "entailed",
+                "field_assessments": {
+                    "action_type_he": {"status": "entailed", "source_quote_he": repaired["action_quote_he"]},
+                    "matter_he": {"status": "entailed", "source_quote_he": "דו\"ח הביקורת"},
+                    "outcome": {
+                        "status": "entailed",
+                        "source_quote_he": repaired["outcome"]["outcome_quote_he"],
+                        "outcome_evidence_classification": "actual_result",
+                    },
+                },
+                "repair_required": True,
+                "repaired_event": repaired,
+                "failure_reasons": [],
+            }
+
+        def judge_event(self, *, context, normalized_event, extraction_payload, config):  # type: ignore[no-untyped-def]
+            raise AssertionError("judge stage should not run")
+
+    event, row = process_topic_subject_v3_context(
+        context=context,
+        client=SemanticLifecycleClient(),
+        config=TopicSubjectResearchConfig(run_v3_judge=False),
+    )
+
+    assert event is not None
+    assert event.event_payload["action_type_he"] == "אישור"
+    assert event.event_payload["outcome_is_decision"] is True
+    assert event.event_payload["outcome"]["outcome_evidence_classification"] == "actual_result"
+    assert any(item["phase"] == "formal_result" for item in event.event_payload["lifecycle_evidence"])
+    assert event.validation_status == "accepted"
+    assert row.quality_status == "accepted"
+
+
+def test_topic_subject_v3_rejects_non_decision_with_actual_result_evidence() -> None:
+    artifact = _artifact_dataclass(
+        real_text="סעיף 1: הצבעה על תקציב הפעילות. נמנעים2 , בעד22.",
+        topic_label_he="תקציב הפעילות",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+    payload = normalize_topic_subject_v3_event_payload(
+        payload={
+            "context_id": context.context_id,
+            "target_artifact_id": context.target_artifact.artifact_id,
+            "is_event": True,
+            "action_type_he": "אישור",
+            "action_type_confidence": 0.9,
+            "matter_he": "תקציב הפעילות",
+            "action_quote_he": "הצבעה על תקציב הפעילות",
+            "outcome_is_decision": False,
+            "outcome": {
+                "outcome_type": "none",
+                "outcome_label_he": "אושר",
+                "outcome_quote_he": "נמנעים2 , בעד22.",
+                "outcome_evidence_classification": "actual_result",
+            },
+            "event_status": "approved",
+            "target_row_role": "action_anchor",
+            "confidence": 0.9,
+        },
+        context=context,
+    )
+
+    failures = validate_topic_subject_v3_event_payload(context=context, event_payload=payload)
+
+    assert "actual_result_outcome_without_decision_flag" in failures
+
+
+def test_process_topic_subject_v3_promotes_grounded_actual_result_evidence_without_judge() -> None:
+    artifact = _artifact_dataclass(
+        real_text="סעיף 1: הצבעה על תקציב הפעילות. נמנעים2 , בעד22.",
+        topic_label_he="תקציב הפעילות",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    class ActualResultEvidenceClient(MockTopicSubjectV3Client):
+        def extract_event(self, *, context, normalized_event, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "is_event": True,
+                "action_type_he": "אישור",
+                "action_type_confidence": 0.92,
+                "matter_he": "תקציב הפעילות",
+                "action_quote_he": "הצבעה על תקציב הפעילות",
+                "outcome_is_decision": False,
+                "outcome": {
+                    "outcome_type": "none",
+                    "outcome_label_he": "אושר",
+                    "outcome_quote_he": "נמנעים2 , בעד22.",
+                    "outcome_evidence_classification": "actual_result",
+                    "confidence": 0.0,
+                },
+                "event_status": "approved",
+                "target_row_role": "action_anchor",
+                "confidence": 0.9,
+                "rationale_he": "המודל מזהה תוצאת הצבעה אך סימן בטעות שאין החלטה.",
+            }
+
+        def assess_event_evidence(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "entailment_status": "entailed",
+                "field_assessments": {
+                    "action_type_he": {"status": "entailed", "source_quote_he": event_payload["action_quote_he"]},
+                    "matter_he": {"status": "entailed", "source_quote_he": "תקציב הפעילות"},
+                    "outcome": {
+                        "status": "entailed",
+                        "source_quote_he": "נמנעים2 , בעד22.",
+                        "outcome_evidence_classification": "actual_result",
+                        "rationale_he": "המודל סיווג את הציטוט כתוצאת החלטה בפועל.",
+                    },
+                },
+                "repair_required": False,
+                "failure_reasons": [],
+            }
+
+        def judge_event(self, *, context, normalized_event, extraction_payload, config):  # type: ignore[no-untyped-def]
+            raise AssertionError("judge stage should not run")
+
+    event, row = process_topic_subject_v3_context(
+        context=context,
+        client=ActualResultEvidenceClient(),
+        config=TopicSubjectResearchConfig(run_v3_judge=False),
+    )
+
+    assert event is not None
+    assert event.event_payload["outcome_is_decision"] is True
+    assert event.event_payload["outcome"]["outcome_type"] == "approved"
+    assert event.event_payload["outcome"]["outcome_evidence_classification"] == "actual_result"
+    assert any(item["phase"] == "formal_result" for item in event.event_payload["lifecycle_evidence"])
+    assert event.event_payload["v3_evidence_entailment"]["outcome_promoted_by_evidence"] is True
+    assert event.validation_status == "accepted"
+    assert row.quality_status == "accepted"
+
+
+def test_process_topic_subject_v3_selects_clearer_formal_result_quote_without_judge() -> None:
+    formal_quote = "החלטה: המועצה החליטה לאשר את תקציב הפעילות."
+    vote_quote = "נמנעים2 , בעד22."
+    artifact = _artifact_dataclass(
+        real_text=f"אני מבקש לאשר את תקציב הפעילות. {vote_quote} {formal_quote}",
+        topic_label_he="תקציב הפעילות",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    class ClearerFormalResultClient(MockTopicSubjectV3Client):
+        def extract_event(self, *, context, normalized_event, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "is_event": True,
+                "action_type_he": "אישור",
+                "action_type_confidence": 0.92,
+                "matter_he": "תקציב הפעילות",
+                "action_quote_he": "אני מבקש לאשר את תקציב הפעילות.",
+                "outcome_is_decision": True,
+                "outcome": {
+                    "outcome_type": "approved",
+                    "outcome_label_he": "אושר",
+                    "outcome_quote_he": vote_quote,
+                    "outcome_evidence_classification": "actual_result",
+                    "confidence": 0.87,
+                },
+                "lifecycle_evidence": [
+                    {
+                        "phase": "formal_result",
+                        "quote_he": vote_quote,
+                        "outcome_evidence_classification": "actual_result",
+                    }
+                ],
+                "event_status": "approved",
+                "target_row_role": "action_anchor",
+                "confidence": 0.9,
+            }
+
+        def assess_event_evidence(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "entailment_status": "entailed",
+                "field_assessments": {
+                    "action_type_he": {"status": "entailed", "source_quote_he": event_payload["action_quote_he"]},
+                    "matter_he": {"status": "entailed", "source_quote_he": "תקציב הפעילות"},
+                    "outcome": {
+                        "status": "entailed",
+                        "source_quote_he": vote_quote,
+                        "outcome_evidence_classification": "actual_result",
+                    },
+                },
+                "repair_required": False,
+                "failure_reasons": [],
+            }
+
+        def select_formal_result_quote(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "selection_status": "replace_current",
+                "current_quote_role": "vote_tally",
+                "best_formal_result_quote_he": formal_quote,
+                "best_quote_artifact_id": context.target_artifact.artifact_id,
+                "outcome_evidence_classification": "actual_result",
+                "lifecycle_evidence": [
+                    {
+                        "phase": "vote_tally",
+                        "quote_he": vote_quote,
+                        "outcome_evidence_classification": "not_outcome",
+                    },
+                    {
+                        "phase": "formal_result",
+                        "quote_he": formal_quote,
+                        "outcome_evidence_classification": "actual_result",
+                    },
+                ],
+                "failure_reasons": [],
+                "rationale_he": "הציטוט השני קובע את תוצאת ההחלטה באופן ישיר יותר מספירת הקולות.",
+            }
+
+        def judge_event(self, *, context, normalized_event, extraction_payload, config):  # type: ignore[no-untyped-def]
+            raise AssertionError("judge stage should not run")
+
+    event, row = process_topic_subject_v3_context(
+        context=context,
+        client=ClearerFormalResultClient(),
+        config=TopicSubjectResearchConfig(run_v3_judge=False),
+    )
+
+    assert event is not None
+    assert event.event_payload["outcome"]["outcome_quote_he"] == formal_quote
+    assert any(
+        item["phase"] == "formal_result" and item["quote_he"] == formal_quote
+        for item in event.event_payload["lifecycle_evidence"]
+    )
+    assert not any(
+        item["phase"] == "formal_result" and item["quote_he"] == vote_quote
+        for item in event.event_payload["lifecycle_evidence"]
+    )
+    assert event.event_payload["v3_formal_result_quote_selection"]["selection_applied"] is True
+    assert event.validation_status == "accepted"
+    assert row.quality_status == "accepted"
+
+
+def test_process_topic_subject_v3_ungrounded_formal_result_selection_needs_review() -> None:
+    formal_quote = "החלטה: המועצה החליטה לאשר את תקציב הפעילות."
+    artifact = _artifact_dataclass(
+        real_text=f"אני מבקש לאשר את תקציב הפעילות. {formal_quote}",
+        topic_label_he="תקציב הפעילות",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    class UngroundedFormalResultClient(MockTopicSubjectV3Client):
+        def extract_event(self, *, context, normalized_event, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "is_event": True,
+                "action_type_he": "אישור",
+                "action_type_confidence": 0.92,
+                "matter_he": "תקציב הפעילות",
+                "action_quote_he": "אני מבקש לאשר את תקציב הפעילות.",
+                "outcome_is_decision": True,
+                "outcome": {
+                    "outcome_type": "approved",
+                    "outcome_label_he": "אושר",
+                    "outcome_quote_he": formal_quote,
+                    "outcome_evidence_classification": "actual_result",
+                    "confidence": 0.87,
+                },
+                "lifecycle_evidence": [
+                    {
+                        "phase": "formal_result",
+                        "quote_he": formal_quote,
+                        "outcome_evidence_classification": "actual_result",
+                    }
+                ],
+                "event_status": "approved",
+                "target_row_role": "action_anchor",
+                "confidence": 0.9,
+            }
+
+        def select_formal_result_quote(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "selection_status": "replace_current",
+                "current_quote_role": "vote_tally",
+                "best_formal_result_quote_he": "החלטה: אושר תקציב אחר שלא מופיע בטקסט.",
+                "outcome_evidence_classification": "actual_result",
+                "failure_reasons": [],
+                "rationale_he": "ציטוט לא מקורקע לצורך בדיקה.",
+            }
+
+        def judge_event(self, *, context, normalized_event, extraction_payload, config):  # type: ignore[no-untyped-def]
+            raise AssertionError("judge stage should not run")
+
+    event, row = process_topic_subject_v3_context(
+        context=context,
+        client=UngroundedFormalResultClient(),
+        config=TopicSubjectResearchConfig(run_v3_judge=False),
+    )
+
+    assert event is not None
+    assert event.event_payload["outcome"]["outcome_quote_he"] == formal_quote
+    assert event.validation_status == "needs_review"
+    assert row.quality_status == "needs_review"
+    assert "formal_result_quote_selection_uncertain" in event.failure_reasons
+
+
+def test_topic_subject_v3_selector_can_copy_grounded_candidate_segment_by_id() -> None:
+    formal_quote = "החלטה: המועצה החליטה לאשר את תקציב הפעילות."
+    artifact = _artifact_dataclass(
+        real_text=f"נמנעים2 , בעד22. {formal_quote}",
+        topic_label_he="תקציב הפעילות",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+    segment = next(
+        item
+        for item in topic_subjects_module.topic_subject_v3_selection_candidate_segments(context=context)
+        if formal_quote in item["text_he"]
+    )
+
+    merged = topic_subjects_module.merge_topic_subject_v3_formal_result_quote_selection(
+        context=context,
+        event_payload={
+            "is_event": True,
+            "action_type_he": "אישור",
+            "matter_he": "תקציב הפעילות",
+            "outcome_is_decision": True,
+            "outcome": {
+                "outcome_type": "approved",
+                "outcome_label_he": "אושר",
+                "outcome_quote_he": "נמנעים2 , בעד22.",
+                "outcome_evidence_classification": "actual_result",
+            },
+            "event_status": "approved",
+            "lifecycle_evidence": [
+                {
+                    "phase": "formal_result",
+                    "quote_he": "נמנעים2 , בעד22.",
+                    "outcome_evidence_classification": "actual_result",
+                }
+            ],
+        },
+        selection_payload={
+            "selection_status": "replace_current",
+            "current_quote_role": "vote_tally",
+            "best_candidate_segment_id": segment["segment_id"],
+            "best_formal_result_quote_he": "החלטה: אושר תקציב אחר שלא הועתק במדויק.",
+            "outcome_evidence_classification": "actual_result",
+            "rationale_he": "המודל בחר את מקטע המקור הנכון אך העתיק את הציטוט ברעש.",
+        },
+    )
+
+    assert merged["outcome"]["outcome_quote_he"] == segment["text_he"]
+    assert merged["v3_formal_result_quote_selection"]["selected_quote_from_candidate_segment_id"] == segment["segment_id"]
+    assert topic_subjects_module.topic_subject_v3_formal_result_quote_selection_failures(merged) == []
 
 
 def test_process_topic_subject_v3_reconsiders_non_event_with_grounded_action_quote() -> None:
@@ -3830,7 +4303,12 @@ def test_process_topic_subject_v3_applies_linked_outcome_repair_before_evidence(
                 "field_assessments": {
                     "action_type_he": {"status": "entailed", "source_quote_he": event_payload["action_quote_he"], "rationale_he": "linked result row"},
                     "matter_he": {"status": "entailed", "source_quote_he": "מינוי נציג הציבור", "rationale_he": "same matter"},
-                    "outcome": {"status": "entailed", "source_quote_he": event_payload["outcome"]["outcome_quote_he"], "rationale_he": "formal result"},
+                    "outcome": {
+                        "status": "entailed",
+                        "source_quote_he": event_payload["outcome"]["outcome_quote_he"],
+                        "outcome_evidence_classification": "actual_result",
+                        "rationale_he": "formal result",
+                    },
                 },
                 "failure_reasons": [],
                 "rationale_he": "linked outcome is grounded",
@@ -4833,9 +5311,17 @@ def test_topic_subject_v3_formal_rejection_outcome_passes_formal_decision_eviden
                 "outcome_type": "rejected",
                 "outcome_label_he": "דחייה",
                 "outcome_quote_he": "הוחלט שלא לאשר את ההצעה",
+                "outcome_evidence_classification": "actual_result",
                 "confidence": 0.9,
                 "limitations": [],
             },
+            "lifecycle_evidence": [
+                {
+                    "phase": "formal_result",
+                    "quote_he": "הוחלט שלא לאשר את ההצעה",
+                    "outcome_evidence_classification": "actual_result",
+                }
+            ],
             "target_row_role": "action_anchor",
         },
         context=context,
