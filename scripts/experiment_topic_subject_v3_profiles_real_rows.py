@@ -26,6 +26,11 @@ HELPER_STAGES = {
     "topic_subject_v3_evidence_entailment",
     "topic_subject_v3_formal_decision_evidence_repair",
 }
+OPTIONAL_RECOVERY_STAGES = {
+    "topic_subject_v3_non_event_reconsideration",
+    "topic_subject_v3_json_repair",
+    "topic_subject_v3_formal_decision_evidence_repair",
+}
 PROFILE_CHOICES = [
     "baseline_current",
     "mixed_helpers_1_7b",
@@ -344,7 +349,7 @@ def _run_profile_on_row(*, module: Any, row: dict[str, Any], profile: str, args:
     prediction = _prediction_from_event(event_dict=event_dict, quality_dict=quality_dict)
     expected = EXPECTED_BY_ROW.get(spec["key"], {})
     semantic_problems = _semantic_problems(expected=expected, prediction=prediction)
-    stage_problems = _stage_problems(stage_calls=client.stage_calls)
+    stage_problems = _stage_problems(stage_calls=client.stage_calls, prediction=prediction)
     result = {
         "row": spec["key"],
         "profile": profile,
@@ -740,15 +745,24 @@ def _semantic_problems(*, expected: dict[str, Any], prediction: dict[str, Any]) 
     return problems
 
 
-def _stage_problems(*, stage_calls: list[dict[str, Any]]) -> list[str]:
+def _stage_problems(*, stage_calls: list[dict[str, Any]], prediction: Optional[dict[str, Any]] = None) -> list[str]:
     problems = []
+    final_quality = str((prediction or {}).get("quality_status") or "")
+    final_usable = final_quality not in {"model_error", "failed"}
     for call in stage_calls:
+        optional_recovery_failed_after_usable_prediction = final_usable and call.get("stage") in OPTIONAL_RECOVERY_STAGES
         quality = call.get("quality") or {}
         if call.get("error_code"):
+            if optional_recovery_failed_after_usable_prediction:
+                continue
             problems.append(f"{call.get('stage')} request_error:{call.get('error_code')}")
         for error in quality.get("errors") or []:
+            if optional_recovery_failed_after_usable_prediction:
+                continue
             problems.append(f"{call.get('stage')} {error}")
         if call.get("done_reason") and call.get("done_reason") != "stop":
+            if optional_recovery_failed_after_usable_prediction:
+                continue
             problems.append(f"{call.get('stage')} done_reason={call.get('done_reason')}")
     return problems
 
@@ -811,6 +825,8 @@ def _enum_value_valid_or_recoverable(*, path: str, value: Any, allowed: list[str
     text = str(value or "").strip()
     if text in allowed:
         return True
+    if isinstance(value, dict) and path == "entailment_status":
+        return _field_status_dict_recoverable(value)
     if isinstance(value, dict) and path == "prediction_comparison":
         return True
     alias = _enum_alias_for_path(path=path, value=text)
@@ -818,16 +834,20 @@ def _enum_value_valid_or_recoverable(*, path: str, value: Any, allowed: list[str
         return True
     if "|" in text and _path_accepts_composite_enum(path):
         parts = [part.strip() for part in text.split("|") if part.strip()]
-        if parts and all(part in allowed for part in parts):
+        normalized_parts = [_enum_alias_for_path(path=path, value=part) for part in parts if part != "null"]
+        if normalized_parts and all(part in allowed for part in normalized_parts):
             return True
     return False
 
 
 def _path_accepts_composite_enum(path: str) -> bool:
     return path in {
+        "target_row_role",
+        "event_status",
         "prediction_comparison",
         "row_quality.quality_status",
         "entailment_status",
+        "evidence_roles.subject_hint_relation",
     } or path.endswith("span_roles[].span_role") or path.endswith("row_roles[].row_role")
 
 
@@ -841,14 +861,29 @@ def _enum_alias_for_path(*, path: str, value: str) -> str:
             "not entailed": "not_entailed",
             "not-entailed": "not_entailed",
         },
+        "event_status": {
+            "non_event": "not_event",
+            "none": "not_event",
+            "no_event": "not_event",
+            "not an event": "not_event",
+            "pending": "open_request",
+            "in_discussion": "discussed",
+        },
         "prediction_comparison": {
             "partial": "partially_different",
             "partially different": "partially_different",
             "partly_different": "partially_different",
+            "model_invalidated": "model_invalid",
+            "invalidated": "model_invalid",
             "not_same": "different",
             "invalid": "model_invalid",
             "uncertain": "judge_uncertain",
             "unknown": "judge_uncertain",
+        },
+        "event_identity_status": {
+            "non_event": "unknown",
+            "not_event": "unknown",
+            "none": "unknown",
         },
         "row_quality.quality_status": {
             "good": "accepted",
@@ -856,14 +891,50 @@ def _enum_alias_for_path(*, path: str, value: str) -> str:
             "pass": "accepted",
             "passed": "accepted",
             "valid": "accepted",
+            "high": "accepted",
+            "high_confidence": "accepted",
+            "clear": "accepted",
             "review": "needs_review",
             "warning": "needs_review",
+            "medium": "needs_review",
+            "low": "needs_review",
             "error": "failed",
             "invalid": "failed",
             "rejected": "failed",
         },
     }
+    row_role_aliases = {
+        "body": "insufficient_context",
+        "current_row": "insufficient_context",
+        "target": "insufficient_context",
+        "target_row": "insufficient_context",
+        "non_event": "insufficient_context",
+        "not_event": "insufficient_context",
+        "outline": "structural_metadata",
+        "outline_item": "structural_metadata",
+        "agenda_item": "structural_metadata",
+        "heading": "structural_metadata",
+        "header": "structural_metadata",
+        "title": "event_title",
+    }
+    if path == "target_row_role" or path.endswith("row_roles[].row_role"):
+        return row_role_aliases.get(value, value)
     return aliases_by_path.get(path, {}).get(value, value)
+
+
+def _field_status_dict_recoverable(value: dict[str, Any]) -> bool:
+    allowed_field_statuses = {"entailed", "partially_entailed", "not_entailed", "uncertain", "not_applicable"}
+    for field_name in ("action_type_he", "matter_he", "outcome"):
+        field_payload = value.get(field_name)
+        if not isinstance(field_payload, dict):
+            continue
+        status = str(field_payload.get("status") or "").strip()
+        if not status:
+            continue
+        status = _enum_alias_for_path(path="entailment_status", value=status)
+        if status not in allowed_field_statuses:
+            return False
+    return True
 
 
 def _placeholder_like_fields(*, parsed: Any, schema: Any, prefix: str = "") -> list[str]:

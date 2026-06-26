@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 import importlib
 import os
+import re
+import unicodedata
 from typing import Any
 
 from municipality.qwen_ocr import (
@@ -79,8 +82,9 @@ def _parse_with_fitz(document: Any) -> ParsedLayoutDocument:
     for page_index in range(len(document)):
         page = document.load_page(page_index)
         page_payload = page.get_text("dict", sort=True)
+        page_words = page.get_text("words", sort=True)
         page_width = float(getattr(page.rect, "width", 0.0) or 0.0)
-        page_lines = _extract_page_lines(page_payload, page_width=page_width, page_number=page_index + 1)
+        page_lines = _extract_page_lines(page_payload, page_width=page_width, page_number=page_index + 1, page_words=page_words)
         page_text = "\n".join(line["text"] for line in page_lines if str(line.get("text") or "").strip())
         page_start = cursor
         page_end = page_start + len(page_text)
@@ -110,6 +114,15 @@ def _parse_with_fitz(document: Any) -> ParsedLayoutDocument:
                     "column_index": line.get("column_index"),
                     "is_table": bool(line.get("is_table") or False),
                     "role_guess": line.get("role_guess"),
+                    **(
+                        {
+                            "raw_extractor_text": line.get("raw_extractor_text"),
+                            "text_reconstructed_from_words": True,
+                            "reconstruction_source": line.get("reconstruction_source"),
+                        }
+                        if line.get("raw_extractor_text")
+                        else {}
+                    ),
                 }
             )
 
@@ -279,7 +292,7 @@ def _qwen_layout_blocks_for_page(
     return blocks
 
 
-def _extract_page_lines(page_payload: dict[str, Any], *, page_width: float, page_number: int) -> list[dict[str, Any]]:
+def _extract_page_lines(page_payload: dict[str, Any], *, page_width: float, page_number: int, page_words: list[Any] | None = None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     blocks = page_payload.get("blocks") if isinstance(page_payload, dict) else []
     if not isinstance(blocks, list):
@@ -300,10 +313,11 @@ def _extract_page_lines(page_payload: dict[str, Any], *, page_width: float, page
             if not isinstance(spans, list):
                 continue
             span_texts = [str(span.get("text") or "") for span in spans if isinstance(span, dict)]
-            text = "".join(span_texts).strip()
-            if not text:
+            raw_text = "".join(span_texts).strip()
+            if not raw_text:
                 continue
             bbox = _bbox_to_list(line.get("bbox") or block.get("bbox"))
+            text = _reconstruct_rtl_numeric_line_text(raw_text=raw_text, bbox=bbox, page_words=page_words or [])
             reading_direction = _reading_direction(text)
             font_size = max((float(span.get("size") or 0.0) for span in spans if isinstance(span, dict)), default=0.0)
             font_flags = [int(span.get("flags") or 0) for span in spans if isinstance(span, dict)]
@@ -323,11 +337,291 @@ def _extract_page_lines(page_payload: dict[str, Any], *, page_width: float, page
                     "column_index": _column_index_for_bbox(bbox, page_width=page_width),
                     "is_table": False,
                     "role_guess": _role_guess(text=text, font_size=font_size, alignment=alignment, font_weight=font_weight),
+                    **(
+                        {
+                            "raw_extractor_text": raw_text,
+                            "reconstruction_source": "pymupdf_words_directional_runs",
+                        }
+                        if text != raw_text
+                        else {}
+                    ),
                 }
             )
 
     rows.sort(key=lambda row: (row["bbox"][1] if row["bbox"] else 0.0, row["bbox"][0] if row["bbox"] else 0.0))
     return rows
+
+
+def _reconstruct_rtl_numeric_line_text(*, raw_text: str, bbox: list[float], page_words: list[Any]) -> str:
+    if not _needs_rtl_numeric_reconstruction(raw_text) or len(bbox) != 4 or not page_words:
+        return raw_text
+    x0, y0, x1, y1 = bbox
+    tolerance = 2.5
+    selected_words: list[Any] = []
+    for word in page_words:
+        if not isinstance(word, (list, tuple)) or len(word) < 5:
+            continue
+        word_x0, word_y0, word_x1, word_y1, word_text = word[:5]
+        if not str(word_text or "").strip():
+            continue
+        center_x = (float(word_x0) + float(word_x1)) / 2.0
+        center_y = (float(word_y0) + float(word_y1)) / 2.0
+        if x0 - tolerance <= center_x <= x1 + tolerance and y0 - tolerance <= center_y <= y1 + tolerance:
+            selected_words.append(word)
+    selected_words = _select_best_positioned_word_line(raw_text=raw_text, words=selected_words)
+    if len(selected_words) < 2:
+        return raw_text
+    if not _selected_words_cover_raw_line(raw_text=raw_text, words=selected_words):
+        return raw_text
+    reconstructed = _cleanup_reconstructed_rtl_numeric_text(_logical_text_from_positioned_words(selected_words))
+    if not reconstructed or not _reconstruction_preserves_audit_tokens(raw_text=raw_text, reconstructed=reconstructed):
+        return raw_text
+    return reconstructed
+
+
+def _reconstruction_preserves_audit_tokens(*, raw_text: str, reconstructed: str) -> bool:
+    # Reordering may change token order, but it should not invent or drop numeric evidence.
+    raw_digits = re.findall(r"\d", raw_text)
+    reconstructed_digits = re.findall(r"\d", reconstructed)
+    if sorted(raw_digits) != sorted(reconstructed_digits):
+        return False
+    raw_brackets = sum(raw_text.count(char) for char in "()[]{}")
+    reconstructed_brackets = sum(reconstructed.count(char) for char in "()[]{}")
+    return raw_brackets == reconstructed_brackets
+
+
+def _selected_words_cover_raw_line(*, raw_text: str, words: list[Any]) -> bool:
+    raw_score = len(_normalized_counter_text(raw_text))
+    if raw_score < 20:
+        return True
+    word_score = _positioned_word_group_score(words)
+    if word_score >= raw_score * 0.55:
+        return True
+    return _positioned_word_group_similarity(raw_text=raw_text, words=words) >= 0.55
+
+
+def _select_best_positioned_word_line(*, raw_text: str, words: list[Any]) -> list[Any]:
+    groups: dict[tuple[Any, Any], list[Any]] = {}
+    for word in words:
+        if isinstance(word, (list, tuple)) and len(word) >= 8:
+            groups.setdefault((word[5], word[6]), []).append(word)
+    if len(groups) <= 1:
+        return words
+    scored_groups = [(_positioned_word_group_similarity(raw_text=raw_text, words=group), _positioned_word_group_score(group), group) for group in groups.values()]
+    scored_groups.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    best_similarity, _, best_group = scored_groups[0]
+    second_similarity = scored_groups[1][0] if len(scored_groups) > 1 else 0.0
+    if best_similarity >= 0.68 and best_similarity - second_similarity >= 0.12:
+        return best_group
+    best_score = _positioned_word_group_score(best_group)
+    total_score = sum(_positioned_word_group_score(group) for group in groups.values())
+    raw_score = len("".join(str(raw_text or "").split()))
+    if best_score >= max(total_score * 0.65, raw_score * 0.45, 2):
+        return best_group
+    return words
+
+
+def _positioned_word_group_score(words: list[Any]) -> int:
+    return sum(len("".join(_positioned_word_text(word).split())) for word in words)
+
+
+def _positioned_word_group_similarity(*, raw_text: str, words: list[Any]) -> float:
+    raw = _normalized_counter_text(raw_text)
+    candidate = _normalized_counter_text("".join(_positioned_word_text(word) for word in sorted(words, key=lambda item: float(item[0]))))
+    if not raw or not candidate:
+        return 0.0
+    raw_counter = Counter(raw)
+    candidate_counter = Counter(candidate)
+    overlap = sum((raw_counter & candidate_counter).values())
+    return (2.0 * overlap) / (len(raw) + len(candidate))
+
+
+def _normalized_counter_text(value: str) -> str:
+    return "".join(char for char in str(value or "") if not char.isspace())
+
+
+def _logical_text_from_positioned_words(words: list[Any]) -> str:
+    visual_words = sorted(words, key=lambda word: (float(word[0]), float(word[1])))
+    if not visual_words:
+        return ""
+    base_direction = _positioned_words_base_direction(visual_words)
+    visual_words = _merge_touching_mixed_identifier_words(visual_words=visual_words, base_direction=base_direction)
+    directions = [_token_direction(_positioned_word_text(word)) for word in visual_words]
+    directions = _resolve_positioned_word_neutrals(visual_words=visual_words, directions=directions, base_direction=base_direction)
+    minor_direction = "L" if base_direction == "R" else "R"
+    runs: list[tuple[str, list[Any]]] = []
+    for word, direction in zip(visual_words, directions):
+        if direction == minor_direction and runs and runs[-1][0] == minor_direction:
+            runs[-1][1].append(word)
+        elif direction == base_direction and runs and runs[-1][0] == base_direction:
+            runs[-1][1].append(word)
+        else:
+            runs.append((direction, [word]))
+    if base_direction == "R":
+        runs.reverse()
+    ordered_words: list[Any] = []
+    for direction, run_words in runs:
+        if direction == "L":
+            ordered_words.extend(sorted(run_words, key=lambda word: float(word[0])))
+        else:
+            ordered_words.extend(sorted(run_words, key=lambda word: float(word[2]), reverse=True))
+    return " ".join(_positioned_word_text(word) for word in ordered_words if _positioned_word_text(word))
+
+
+def _merge_touching_mixed_identifier_words(*, visual_words: list[Any], base_direction: str) -> list[Any]:
+    merged: list[Any] = []
+    index = 0
+    while index < len(visual_words):
+        current = visual_words[index]
+        if index + 1 >= len(visual_words):
+            merged.append(current)
+            break
+        next_word = visual_words[index + 1]
+        combined_text = _touching_mixed_identifier_text(current=current, next_word=next_word, base_direction=base_direction)
+        if not combined_text:
+            merged.append(current)
+            index += 1
+            continue
+        merged.append(
+            (
+                min(float(current[0]), float(next_word[0])),
+                min(float(current[1]), float(next_word[1])),
+                max(float(current[2]), float(next_word[2])),
+                max(float(current[3]), float(next_word[3])),
+                combined_text,
+            )
+        )
+        index += 2
+    return merged
+
+
+def _touching_mixed_identifier_text(*, current: Any, next_word: Any, base_direction: str) -> str | None:
+    if not isinstance(current, (list, tuple)) or not isinstance(next_word, (list, tuple)) or len(current) < 5 or len(next_word) < 5:
+        return None
+    gap = float(next_word[0]) - float(current[2])
+    if gap > 0.75:
+        return None
+    current_text = _positioned_word_text(current)
+    next_text = _positioned_word_text(next_word)
+    if not _compact_identifier_pair(current_text, next_text):
+        return None
+    return f"{next_text}{current_text}" if base_direction == "R" else f"{current_text}{next_text}"
+
+
+def _compact_identifier_pair(left_text: str, right_text: str) -> bool:
+    return (_single_letter(left_text) and right_text.isdigit()) or (left_text.isdigit() and _single_letter(right_text))
+
+
+def _single_letter(value: str) -> bool:
+    return len(value) == 1 and any(unicodedata.category(char).startswith("L") for char in value)
+
+
+def _positioned_words_base_direction(words: list[Any]) -> str:
+    rtl = 0
+    ltr = 0
+    for word in words:
+        for char in _positioned_word_text(word):
+            bidi_class = unicodedata.bidirectional(char)
+            if bidi_class in {"R", "AL"}:
+                rtl += 1
+            elif bidi_class == "L":
+                ltr += 1
+    return "R" if rtl and rtl >= ltr else "L"
+
+
+def _token_direction(text: str) -> str:
+    classes = {unicodedata.bidirectional(char) for char in str(text or "") if not char.isspace()}
+    if classes & {"R", "AL"}:
+        return "R"
+    if "L" in classes or classes & {"EN", "AN"}:
+        return "L"
+    return "N"
+
+
+def _resolve_positioned_word_neutrals(*, visual_words: list[Any], directions: list[str], base_direction: str) -> list[str]:
+    resolved = directions.copy()
+    for index, direction in enumerate(directions):
+        if direction != "N":
+            continue
+        left_index = _nearest_non_neutral_index(directions=directions, start=index, step=-1)
+        right_index = _nearest_non_neutral_index(directions=directions, start=index, step=1)
+        left_direction = directions[left_index] if left_index is not None else None
+        right_direction = directions[right_index] if right_index is not None else None
+        if left_direction is not None and left_direction == right_direction:
+            resolved[index] = left_direction
+            continue
+        if _positioned_word_text(visual_words[index]) in {"%", "‰", "₪", "$", "€", "£"}:
+            numeric_neighbor = any(
+                neighbor_index is not None
+                and directions[neighbor_index] == "L"
+                and any(char.isdigit() for char in _positioned_word_text(visual_words[neighbor_index]))
+                for neighbor_index in (left_index, right_index)
+            )
+            if numeric_neighbor:
+                resolved[index] = "L"
+                continue
+        resolved[index] = base_direction
+    return resolved
+
+
+def _nearest_non_neutral_index(*, directions: list[str], start: int, step: int) -> int | None:
+    index = start + step
+    while 0 <= index < len(directions):
+        if directions[index] != "N":
+            return index
+        index += step
+    return None
+
+
+def _positioned_word_text(word: Any) -> str:
+    return str(word[4]).strip() if isinstance(word, (list, tuple)) and len(word) >= 5 else ""
+
+
+def _needs_rtl_numeric_reconstruction(value: str) -> bool:
+    text = str(value or "")
+    if not any("\u0590" <= char <= "\u05FF" for char in text):
+        return False
+    return any(char.isdigit() for char in text)
+
+
+def _cleanup_reconstructed_rtl_numeric_text(value: str) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    text = re.sub(r"([\u0590-\u05FF])\s*([\"”״])\s*([\u0590-\u05FF])", r"\1\2\3", text)
+    text = re.sub(r"([\"”״])\s+([\u0590-\u05FF])", r"\1\2", text)
+    text = re.sub(r"([\u0590-\u05FF])\s+([\"”״])", r"\1\2", text)
+    text = re.sub(r"([\u0590-\u05FF])\s+'", r"\1'", text)
+    text = re.sub(r"\s+([.,:;?!%)\]])", r"\1", text)
+    text = re.sub(r"([([{])\s+", r"\1", text)
+    text = re.sub(r"\b([\u0590-\u05FF]{1,3})\s+(\d+(?:\.\d+)?)%-", r"\1-\2%", text)
+    text = re.sub(r"\b([\u0590-\u05FF])\s+(\d[\d./]*)-", r"\1-\2", text)
+    text = re.sub(r"\)(\d{1,2}[./]\d{1,2}[./]\d{2,4})\(", r"(\1)", text)
+    text = re.sub(r"(\d{1,2}[./]\d{1,2}[./]\d{2,4})\(\)", r"(\1)", text)
+    text = re.sub(r"([\u0590-\u05FF])\((\d)", r"\1 (\2", text)
+    text = re.sub(r"([\u0590-\u05FF])\.(\d+)(?=\s|$)", r"\1 \2.", text)
+    text = re.sub(r"([\u0590-\u05FF])\s+-(\d[\d./]*/\d[\d./]*)\s+([\u0590-\u05FF])", r"\1 \2 - \3", text)
+    text = re.sub(r"(\d+):,\s+([\u0590-\u05FF][\u0590-\u05FF\"'׳״]*)", r"\1, \2:", text)
+    text = re.sub(r"(\d[\d./]*)\s+([\u0590-\u05FF])\s+([\u0590-\u05FF]{2,})\b", r"\1 \2\3", text)
+    text = re.sub(r"([\u0590-\u05FF][\u0590-\u05FF\"'׳״]*)\s+(\d{1,2})\s+(\d{4})-,", r"\1-\3, \2", text)
+    text = re.sub(r"([\u0590-\u05FF][\u0590-\u05FF\"'׳״]*)\s+(\d{1,2})\s+(\d{4})([-–])", r"\1\4\3 \2", text)
+    text = re.sub(r"([\u0590-\u05FF][\u0590-\u05FF\"'׳״]*)\s+([-–])\s+(\d{1,2})\s+(\d{4})", r"\1 \2 \4 \3", text)
+    text = re.sub(r"([\u0590-\u05FF][\u0590-\u05FF\"'׳״]*)([;\"'׳״]+)(\d{1,2})\s+(\d{4})-", r"\1-\4 \2\3", text)
+    text = re.sub(r"\b([\u0590-\u05FF]{1,2})\s+(\d[\d./]*)-\s+([\u0590-\u05FF])", r"\1-\2 \3", text)
+    text = re.sub(r"\b([\u0590-\u05FF]{3,})\s+(\d[\d./]*)-\s+([\u0590-\u05FF])", r"\1 \2 \3", text)
+    text = re.sub(r"(\d[\d./]*)-,\.,", r"\1,", text)
+    text = re.sub(r"^:,\s+([\u0590-\u05FF][\u0590-\u05FF\"'׳״]*)\s+(\d{2,3}-\d{5,8})$", r"\1: \2", text)
+    text = re.sub(r"^([\u0590-\u05FF][\u0590-\u05FF\"'׳״]*):,\s+(\d{2,3}-\d{5,8})$", r"\1: \2", text)
+    text = re.sub(r"^:,\s+([\u0590-\u05FF][\u0590-\u05FF\"'׳״]*)\s+(/?\d[\d./-]*)$", r"\1: \2", text)
+    text = re.sub(r"^:,\s+(.+?)\s+(\d{1,3})$", r"\2: \1", text)
+    text = re.sub(r"([\u0590-\u05FF][\u0590-\u05FF\"'׳״]*)\s+(\d{1,2}/\d{1,2}/\d{2,4}):,", r"\1: \2", text)
+    text = re.sub(r"(\d{4})\s+(\d{1,2}):,", r"\1, \2:", text)
+    text = re.sub(r"([\u0590-\u05FF][\u0590-\u05FF\"'׳״]*):,\s*(/?\d[\d./-]*)", r"\1: \2", text)
+    text = re.sub(r"(\d{1,2}:\d{2});,", r"\1;", text)
+    text = re.sub(r"([\u0590-\u05FF]):(\d[\d./]*)$", r"\1 \2:", text)
+    text = re.sub(r"^(\d{1,3})\s+(\d{4})\)\.\s+(.+?)\s*\(([^()]*)$", r"\1. \3 (\4) \2", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    return text.strip()
 
 
 def _bbox_to_list(value: Any) -> list[float]:

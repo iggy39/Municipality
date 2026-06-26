@@ -3369,6 +3369,28 @@ def test_topic_subject_v3_context_normalization_recovers_composite_row_roles() -
     assert any("row_role_normalized" in warning for warning in normalized["schema_warnings"])
 
 
+def test_topic_subject_v3_context_normalization_recovers_role_and_status_aliases() -> None:
+    artifact = _artifact_dataclass(real_text="רקע כללי על הדיון.", topic_label_he="דיון", artifact_id="artifact-alias", source_ordinal=1)
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact], max_context_rows=1)[0]
+
+    normalized = topic_subjects_module.topic_subject_v3_normalize_context_event_payload(
+        {
+            "target_artifact_id": artifact.artifact_id,
+            "is_event": False,
+            "target_row_role": "body",
+            "event_status": "non_event",
+            "span_roles": [],
+            "row_roles": [{"artifact_id": artifact.artifact_id, "row_role": "target", "role_reason_he": "model alias"}],
+        },
+        context=context,
+    )
+
+    assert normalized["target_row_role"] == "insufficient_context"
+    assert normalized["event_status"] == "not_event"
+    assert normalized["row_roles"][0]["row_role"] == "insufficient_context"
+    assert any("event_status_normalized:non_event->not_event" == warning for warning in normalized["schema_warnings"])
+
+
 def test_topic_subject_v3_event_payload_normalizes_composite_row_roles() -> None:
     anchor = _artifact_dataclass(real_text="אבקש לדון בתקציב השכונה.", topic_label_he="תקציב", artifact_id="artifact-anchor", source_ordinal=1)
     detail = _artifact_dataclass(real_text="פירוט רקע על התקציב.", topic_label_he="תקציב", artifact_id="artifact-detail", source_ordinal=2)
@@ -3410,6 +3432,25 @@ def test_topic_subject_v3_evidence_status_accepts_partial_alias() -> None:
 
     assert normalized["entailment_status"] == "partially_entailed"
     assert "invalid_entailment_status:partial" not in normalized["schema_warnings"]
+
+
+def test_topic_subject_v3_evidence_status_recovers_nested_field_payload() -> None:
+    normalized = topic_subjects_module.topic_subject_v3_normalize_evidence_assessment(
+        {
+            "entailment_status": {
+                "action_type_he": {"status": "entailed", "source_quote_he": "הצעה לסדר"},
+                "matter_he": {"status": "entailed", "source_quote_he": "תו חניה"},
+                "outcome": {"status": "not_applicable", "source_quote_he": None},
+            },
+            "repair_required": False,
+            "failure_reasons": [],
+        }
+    )
+
+    assert normalized["entailment_status"] == "entailed"
+    assert normalized["field_assessments"]["action_type_he"]["status"] == "entailed"
+    assert normalized["field_assessments"]["outcome"]["status"] == "not_applicable"
+    assert "entailment_status_recovered_from_field_assessments" in normalized["schema_warnings"]
 
 
 def test_topic_subject_v3_row_quality_normalizes_recoverable_judge_enum_drift() -> None:
@@ -4223,20 +4264,57 @@ def test_topic_subject_v3_profile_enum_checker_accepts_recoverable_values() -> N
 
     invalid = module._invalid_enum_fields(
         {
-            "row_roles": [{"row_role": "action_anchor|event_title|dependent_detail"}],
-            "entailment_status": "partial",
-            "prediction_comparison": {"action_type_he": "same", "matter_he": "same"},
-            "row_quality": {"quality_status": "good"},
+            "target_row_role": "body",
+            "event_status": "non_event",
+            "row_roles": [{"row_role": "action_anchor|event_title|dependent_detail"}, {"row_role": "target"}],
+            "entailment_status": {
+                "action_type_he": {"status": "entailed"},
+                "matter_he": {"status": "entailed"},
+                "outcome": {"status": "not_applicable"},
+            },
+            "prediction_comparison": "same|model_invalidated|judge_uncertain",
+            "event_identity_status": "non_event",
+            "evidence_roles": {"subject_hint_relation": "supports_matter|conflicts_with_raw_text|subject_only|not_relevant|null"},
+            "row_quality": {"quality_status": "high"},
         },
         {
+            "target_row_role": "action_anchor|event_title|dependent_detail|decision_result|vote_metadata|document_fragment|structural_metadata|duplicate_reference|insufficient_context",
+            "event_status": "open_request|discussed|approved|rejected|deferred|removed|referred|reported|not_event|unknown",
             "row_roles": [{"row_role": "action_anchor|event_title|dependent_detail|decision_result|vote_metadata|document_fragment|structural_metadata|duplicate_reference|insufficient_context"}],
             "entailment_status": "entailed|partially_entailed|not_entailed|uncertain",
             "prediction_comparison": "same|partially_different|different|model_invalid|judge_uncertain",
+            "event_identity_status": "new_event|same_as_existing_event|supporting_row_only|duplicate_prediction|unknown",
+            "evidence_roles": {"subject_hint_relation": "supports_matter|conflicts_with_raw_text|subject_only|not_relevant|null"},
             "row_quality": {"quality_status": "accepted|needs_review|failed|non_event"},
         },
     )
 
     assert invalid == []
+
+
+def test_topic_subject_v3_profile_stage_problems_ignore_optional_recovery_failure_after_usable_prediction() -> None:
+    module = _experiment_topic_subject_v3_profiles_module()
+
+    problems = module._stage_problems(
+        stage_calls=[
+            {
+                "stage": "topic_subject_v3_non_event_reconsideration",
+                "done_reason": "length",
+                "quality": {"errors": ["response_not_parsed_as_json_object"]},
+            },
+            {
+                "stage": "topic_subject_v3_action_subject_extraction",
+                "done_reason": "length",
+                "quality": {"errors": ["response_not_parsed_as_json_object"]},
+            },
+        ],
+        prediction={"quality_status": "accepted"},
+    )
+
+    assert problems == [
+        "topic_subject_v3_action_subject_extraction response_not_parsed_as_json_object",
+        "topic_subject_v3_action_subject_extraction done_reason=length",
+    ]
 
 
 def _artifact_dataclass(*, real_text: str, topic_label_he: str, artifact_id: str = "artifact-test", source_ordinal: int = 1, metadata: dict | None = None) -> TopicDecisionArtifact:

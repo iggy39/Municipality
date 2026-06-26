@@ -665,10 +665,49 @@ def topic_subject_v3_normalize_row_role_value(raw_role: Any, *, fallback: str = 
     fallback_role = compact_text(fallback)
     if fallback_role not in TOPIC_SUBJECT_V3_ROW_ROLE_VALUES:
         fallback_role = "insufficient_context"
+    aliases = {
+        "body": fallback_role,
+        "current_row": fallback_role,
+        "target": fallback_role,
+        "target_row": fallback_role,
+        "non_event": fallback_role,
+        "not_event": fallback_role,
+        "outline": "structural_metadata",
+        "outline_item": "structural_metadata",
+        "agenda_item": "structural_metadata",
+        "heading": "structural_metadata",
+        "header": "structural_metadata",
+        "title": "event_title" if fallback_role in {"action_anchor", "event_title"} else "structural_metadata",
+    }
+    if role in aliases:
+        return aliases[role], True
     parts = topic_subject_v3_enum_parts(role)
     if parts and all(part in TOPIC_SUBJECT_V3_ROW_ROLE_VALUES for part in parts):
         return fallback_role, True
     return fallback_role, bool(role)
+
+
+def topic_subject_v3_normalize_event_status_value(raw_status: Any, *, fallback: str = "unknown") -> tuple[str, bool]:
+    status = compact_text(raw_status)
+    if status in TOPIC_SUBJECT_V3_EVENT_STATUS_VALUES:
+        return status, False
+    fallback_status = compact_text(fallback)
+    if fallback_status not in TOPIC_SUBJECT_V3_EVENT_STATUS_VALUES:
+        fallback_status = "unknown"
+    aliases = {
+        "non_event": "not_event",
+        "none": "not_event",
+        "no_event": "not_event",
+        "not an event": "not_event",
+        "pending": "open_request",
+        "in_discussion": "discussed",
+    }
+    if status in aliases:
+        return aliases[status], True
+    parts = topic_subject_v3_enum_parts(status)
+    if parts and all(part in TOPIC_SUBJECT_V3_EVENT_STATUS_VALUES for part in parts):
+        return fallback_status, True
+    return fallback_status, bool(status)
 
 
 def topic_subject_v3_normalize_prediction_comparison(raw_value: Any) -> tuple[str, Any | None]:
@@ -693,6 +732,8 @@ def topic_subject_v3_normalize_prediction_comparison(raw_value: Any) -> tuple[st
         "partial": "partially_different",
         "partially different": "partially_different",
         "partly_different": "partially_different",
+        "model_invalidated": "model_invalid",
+        "invalidated": "model_invalid",
         "not_same": "different",
         "invalid": "model_invalid",
         "uncertain": "judge_uncertain",
@@ -701,7 +742,16 @@ def topic_subject_v3_normalize_prediction_comparison(raw_value: Any) -> tuple[st
     if value in aliases:
         return aliases[value], value
     parts = topic_subject_v3_enum_parts(value)
-    if parts and all(part in TOPIC_SUBJECT_V3_PREDICTION_COMPARISON_VALUES for part in parts):
+    normalized_parts = [aliases.get(part, part) for part in parts]
+    if normalized_parts and all(part in TOPIC_SUBJECT_V3_PREDICTION_COMPARISON_VALUES for part in normalized_parts):
+        if "model_invalid" in normalized_parts:
+            return "model_invalid", value
+        if "judge_uncertain" in normalized_parts:
+            return "judge_uncertain", value
+        if "different" in normalized_parts:
+            return "different", value
+        if "partially_different" in normalized_parts:
+            return "partially_different", value
         return "judge_uncertain", value
     return "unknown", value if value else None
 
@@ -723,8 +773,13 @@ def topic_subject_v3_normalize_quality_status(raw_value: Any, *, validation_stat
         "pass": "accepted",
         "passed": "accepted",
         "valid": "accepted",
+        "high": "accepted",
+        "high_confidence": "accepted",
+        "clear": "accepted",
         "review": "needs_review",
         "warning": "needs_review",
+        "medium": "needs_review",
+        "low": "needs_review",
         "error": "failed",
         "invalid": "failed",
         "rejected": "failed",
@@ -3129,6 +3184,10 @@ def topic_subject_v3_normalize_context_event_payload(payload: dict[str, Any], *,
     if target_row_role_changed:
         warnings.append(f"target_row_role_normalized:{compact_text(normalized.get('target_row_role'))}->{target_row_role}")
     normalized["target_row_role"] = target_row_role
+    event_status, event_status_changed = topic_subject_v3_normalize_event_status_value(normalized.get("event_status"), fallback="unknown")
+    if event_status_changed:
+        warnings.append(f"event_status_normalized:{compact_text(normalized.get('event_status'))}->{event_status}")
+    normalized["event_status"] = event_status
     span_roles = normalized.get("span_roles") if isinstance(normalized.get("span_roles"), list) else []
     normalized_span_roles: list[dict[str, str]] = []
     for item in span_roles:
@@ -3585,6 +3644,9 @@ def normalize_topic_subject_v3_event_payload(
     target_row_role, target_row_role_changed = topic_subject_v3_normalize_row_role_value(raw.get("target_row_role"), fallback="action_anchor" if is_event else "insufficient_context")
     if target_row_role_changed:
         schema_warnings.append(f"target_row_role_normalized:{compact_text(raw.get('target_row_role'))}->{target_row_role}")
+    event_status, event_status_changed = topic_subject_v3_normalize_event_status_value(raw.get("event_status"), fallback="unknown")
+    if event_status_changed:
+        schema_warnings.append(f"event_status_normalized:{compact_text(raw.get('event_status'))}->{event_status}")
     raw_row_roles = raw.get("row_roles") if isinstance(raw.get("row_roles"), list) else []
     row_roles: list[dict[str, str]] = []
     for item in raw_row_roles:
@@ -3631,6 +3693,7 @@ def normalize_topic_subject_v3_event_payload(
         "outcome": outcome if outcome_is_decision or outcome else None,
         "event_phase": topic_subject_v3_event_phase(context=context, is_event=is_event, action_type=action_type, outcome_is_decision=outcome_is_decision),
         "target_row_role": target_row_role,
+        "event_status": event_status,
         "row_roles": row_roles,
         "confidence": clamp_float(raw.get("confidence"), default=0.0),
         "rationale_he": compact_text(raw.get("rationale_he"))[:1000],
@@ -4167,6 +4230,16 @@ def merge_topic_subject_v3_evidence_assessment(*, context: TopicSubjectV3EventCo
 def topic_subject_v3_normalize_evidence_assessment(assessment_payload: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(assessment_payload)
     warnings = [compact_text(item) for item in normalized.get("schema_warnings") or [] if compact_text(item)]
+    raw_entailment_status = normalized.get("entailment_status")
+    field_assessments = dict(normalized.get("field_assessments") if isinstance(normalized.get("field_assessments"), dict) else {})
+    if isinstance(raw_entailment_status, dict):
+        for field_name in ("action_type_he", "matter_he", "outcome"):
+            raw_field = raw_entailment_status.get(field_name)
+            if field_name not in field_assessments and isinstance(raw_field, dict):
+                field_assessments[field_name] = raw_field
+        normalized["raw_entailment_status_payload"] = compact_payload_for_prompt(raw_entailment_status)
+        normalized["entailment_status"] = topic_subject_v3_aggregate_evidence_status(field_assessments)
+        warnings.append("entailment_status_recovered_from_field_assessments")
     status = compact_text(normalized.get("entailment_status"))
     aliased_status = TOPIC_SUBJECT_V3_EVIDENCE_STATUS_ALIASES.get(status, status)
     if aliased_status != status:
@@ -4177,7 +4250,6 @@ def topic_subject_v3_normalize_evidence_assessment(assessment_payload: dict[str,
         if status:
             warnings.append(f"invalid_entailment_status:{status}")
         normalized["entailment_status"] = "uncertain"
-    field_assessments = dict(normalized.get("field_assessments") if isinstance(normalized.get("field_assessments"), dict) else {})
     for field_name in ("action_type_he", "matter_he", "outcome"):
         top_level_field = normalized.get(field_name)
         if field_name not in field_assessments and isinstance(top_level_field, dict):
@@ -4189,6 +4261,11 @@ def topic_subject_v3_normalize_evidence_assessment(assessment_payload: dict[str,
             continue
         field_payload = dict(raw_field)
         field_status = compact_text(field_payload.get("status"))
+        aliased_field_status = TOPIC_SUBJECT_V3_EVIDENCE_STATUS_ALIASES.get(field_status, field_status)
+        if aliased_field_status != field_status:
+            warnings.append(f"{field_name}_status_normalized:{field_status}->{aliased_field_status}")
+            field_status = aliased_field_status
+            field_payload["status"] = field_status
         allowed_statuses = TOPIC_SUBJECT_V3_EVIDENCE_OUTCOME_STATUSES if field_name == "outcome" else TOPIC_SUBJECT_V3_EVIDENCE_FIELD_STATUSES
         if field_status not in allowed_statuses:
             if field_status:
@@ -4199,6 +4276,29 @@ def topic_subject_v3_normalize_evidence_assessment(assessment_payload: dict[str,
     normalized["field_assessments"] = normalized_fields
     normalized["schema_warnings"] = unique_strings(warnings)
     return normalized
+
+
+def topic_subject_v3_aggregate_evidence_status(field_assessments: dict[str, Any]) -> str:
+    statuses: list[str] = []
+    for field_name in ("action_type_he", "matter_he", "outcome"):
+        field_payload = field_assessments.get(field_name) if isinstance(field_assessments.get(field_name), dict) else {}
+        raw_status = compact_text(field_payload.get("status"))
+        status = TOPIC_SUBJECT_V3_EVIDENCE_STATUS_ALIASES.get(raw_status, raw_status)
+        if status == "not_applicable":
+            continue
+        if status:
+            statuses.append(status)
+    if not statuses:
+        return "uncertain"
+    if any(status == "not_entailed" for status in statuses):
+        return "not_entailed"
+    if any(status == "uncertain" for status in statuses):
+        return "uncertain"
+    if any(status == "partially_entailed" for status in statuses):
+        return "partially_entailed"
+    if all(status == "entailed" for status in statuses):
+        return "entailed"
+    return "uncertain"
 
 
 def topic_subject_v3_evidence_field_status(*, assessment_payload: dict[str, Any], field_name: str) -> str:
