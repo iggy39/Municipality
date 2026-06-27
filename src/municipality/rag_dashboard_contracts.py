@@ -39,6 +39,11 @@ class EvidencePageSpan(StrictModel):
 class RagDashboardEvidence(StrictModel):
     id: str
     source_type: str
+    source_type_label_he: str
+    source_type_plural_label_he: str
+    source_type_filter_label_he: str
+    source_type_semantic_notes_en: str
+    source_type_semantic_description_he: str
     source_title: str
     source_url: str | None = None
     retrieval_artifact_id: str

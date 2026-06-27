@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from municipality.resident_gis_registry import load_resident_gis_registry
+from municipality.source_type_taxonomy import source_type_display_fields, source_type_filter_options, source_type_taxonomy_payload
 
 
 TEL_AVIV_MUNICIPALITY_ID = "tel_aviv"
@@ -823,6 +824,7 @@ def _evidence_rows(scenario: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "id": evidence_id,
                 "source_type": "protocol",
+                **source_type_display_fields("protocol"),
                 "source_title": f"פרוטוקול תל אביב {title} - {scenario['topic']}",
                 "source_url": f"https://example.local/tel-aviv/protocols/{scenario['key']}-{date_value}.pdf",
                 "retrieval_artifact_id": f"artifact_{scenario['key']}_{index}",
@@ -1611,8 +1613,9 @@ def build_mock_rag_dashboard_payload(question: str | None = None, selected_event
             "map": {"title": f"מפת סיפור GIS: {selected_story_card['title_he'] if selected_story_card else scenario['topic']}", "description": (f"מוקד: {_story_location_label(selected_story)}. סטטוס סיפור: {progress.get('label_he', '')}. המפה סכמטית והשכבות הן הקשר GIS." if selected_story else f"כתובת: {_address_with_city(scenario)}. סטטוס נבחר: {progress.get('label_he', '')}"), "provenance_label": "מפה סכמטית בלבד", "provenance_description": "שכבות GovMap נטענות כהקשר עדכני וקבוע לנושא; ציר הזמן הוא דוגמת פרוטוקולים ולא היסטוריית GIS רשמית.", "sea_label": "חוף הים", "legend_title": "מקרא", "control_labels": ["מרכז מפה", "התקרבות", "התרחקות", "שכבות מפה"], "area_labels": ["צפון העיר", "מרכז העיר", "מערב העיר", "מזרח העיר", "דרום העיר"], "marker_labels": ["תחנת תחבורה ציבורית", "פארק", "מבנה ציבור"]},
             "timeline": {"title": "ציר זמן", "previous_label": "אירוע קודם", "next_label": "אירוע הבא"},
             "start_discovery_panel": {"categories_title": "קטגוריות", "hot_topics_title": "נושאים בולטים", "topic_tree_title": "עץ נושאים", "show_more_label": "הצג עוד", "show_full_tree_label": "הצג כל העץ"},
-            "filter_modal": {"title": "סינון תוצאות", "close_label": "סגירת מסננים", "sections": ["אזור", "טווח זמן", "קטגוריה", "סוגי מקורות", "ודאות"], "reset_label": "איפוס", "apply_label": "החל סינון", "options": {"area": ["כל העיר", "מרכז תל אביב"], "time_range": ["2024", "כל השנים"], "category": ["תכנון ובנייה", "תחבורה", "חינוך", "רווחה", "סביבה"], "source_types": ["פרוטוקולים ונספחים", "פרוטוקולים"], "confidence": ["גבוהה ובינונית", "כל הרמות"]}},
+            "filter_modal": {"title": "סינון תוצאות", "close_label": "סגירת מסננים", "sections": ["אזור", "טווח זמן", "קטגוריה", "סוגי מקורות", "ודאות"], "reset_label": "איפוס", "apply_label": "החל סינון", "options": {"area": ["כל העיר", "מרכז תל אביב"], "time_range": ["2024", "כל השנים"], "category": [{"value": "", "label_he": "כל הקטגוריות"}, "תכנון ובנייה", "תחבורה", "חינוך", "רווחה", "סביבה"], "source_types": [{"value": "", "label_he": "כל סוגי המקורות"}, *source_type_filter_options()], "confidence": ["גבוהה ובינונית", "כל הרמות"]}},
             "popular_searches": {"title": "חיפושים פופולריים", "choices": POPULAR_QUESTIONS, "story_title": "סיפורי פרוטוקולים", "story_choices": _popular_story_questions()},
+            "source_type_taxonomy": source_type_taxonomy_payload(),
         },
         "state": {
             "municipality_id": TEL_AVIV_MUNICIPALITY_ID,

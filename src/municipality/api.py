@@ -82,6 +82,7 @@ from municipality.rag_dashboard_mock import (
 from municipality.rag_dashboard_ui import render_rag_dashboard_page
 from municipality.search import search_thresholds_snapshot
 from municipality.semantic_canonicalization import SemanticCanonicalizer
+from municipality.source_type_taxonomy import source_type_display_fields, source_type_metadata_payload
 from municipality.subject_browser_ui import render_subject_browser_page
 
 
@@ -964,6 +965,7 @@ def _active_embedding_cache_summary(*, db) -> dict[str, Any]:
         missing_value = max(0, total_value - embedded_value)
         row_payload = {
             "source_type": str(source_kind or "unknown"),
+            **source_type_display_fields(str(source_kind or "unknown")),
             count_label: total_value,
             embedded_label: embedded_value,
             missing_label: missing_value,
@@ -3496,6 +3498,7 @@ def _run_ask(
         {
             "chunk_id": citation.chunk_id,
             "source_type": citation.source_kind,
+            **source_type_display_fields(citation.source_kind),
             "citation": citation.citation_label,
             "start_page": citation.start_page,
             "end_page": citation.end_page,
@@ -3518,6 +3521,7 @@ def _run_ask(
             "reason_code": answer_result.refusal_reason_code,
             "message_he": answer_result.refusal_message_he,
             "missing_source_types": answer_result.missing_source_kinds,
+            "missing_source_type_details": [source_type_metadata_payload(code) for code in answer_result.missing_source_kinds],
         }
 
     response_payload = {
@@ -3542,6 +3546,9 @@ def _run_ask(
             "source_types": sorted(retrieval_result.source_kinds),
             "answer_source_types": sorted({context.source_kind for context in answering_contexts}),
             "requested_source_types": retrieval_result.requested_source_kinds,
+            "source_type_details": [source_type_metadata_payload(code) for code in sorted(retrieval_result.source_kinds)],
+            "answer_source_type_details": [source_type_metadata_payload(code) for code in sorted({context.source_kind for context in answering_contexts})],
+            "requested_source_type_details": [source_type_metadata_payload(code) for code in retrieval_result.requested_source_kinds],
             "top_k": retrieval_result.top_k,
             "semantic_mode": request.semantic_mode,
             "semantic_node_id": request.semantic_node_id,
@@ -3676,6 +3683,7 @@ def _decision_payload(decision_id: int, db) -> dict | None:
             "decision_text": decision.decision_text,
             "parser_confidence": decision.parser_confidence,
             "source_type": "protocol",
+            **source_type_display_fields("protocol"),
             "metadata": _fallback_metadata_from_json(decision.metadata_json),
             "request_context": _decision_request_context_payload(db=db, decision_id=decision.id),
             "linked_gis_features": decision_gis_feature_links(db, decision_id=decision.id),
@@ -3701,6 +3709,7 @@ def _decision_payload(decision_id: int, db) -> dict | None:
                     "title": document.title_he,
                     "url": document.canonical_url,
                     "source_type": citation.source_type,
+                    **source_type_display_fields(citation.source_type),
                 },
                 "page": citation.page_number,
                 "start_offset": citation.start_offset,
@@ -3717,6 +3726,7 @@ def _decision_payload(decision_id: int, db) -> dict | None:
                 "url": document.canonical_url,
                 "doc_kind": document.doc_kind,
                 "source_type": link.source_type,
+                **source_type_display_fields(link.source_type),
                 "provenance": link.provenance,
             }
             for link, document in linked_docs
@@ -4450,6 +4460,7 @@ def search(
             "snippet": hit.snippet,
             "citation": hit.citation,
             "source_type": hit.source_kind,
+            **source_type_display_fields(hit.source_kind),
             "artifact_kind": hit.artifact_kind,
             "header_path": list(hit.section_path),
             "document": {
@@ -4575,6 +4586,8 @@ def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
             "count": len(retrieval_result.contexts),
             "source_types": sorted(retrieval_result.source_kinds),
             "requested_source_types": retrieval_result.requested_source_kinds,
+            "source_type_details": [source_type_metadata_payload(code) for code in sorted(retrieval_result.source_kinds)],
+            "requested_source_type_details": [source_type_metadata_payload(code) for code in retrieval_result.requested_source_kinds],
             "top_k": retrieval_result.top_k,
             "semantic_mode": request.semantic_mode,
             "semantic_node_id": request.semantic_node_id,
@@ -4602,6 +4615,7 @@ def ask_debug_retrieval(request: AskRequest, db=Depends(get_db)) -> dict:
                 "score": context.score,
                 "citation": context.citation,
                 "source_type": context.source_kind,
+                **source_type_display_fields(context.source_kind),
                 "document": {
                     "id": context.document_id,
                     "version_id": context.document_version_id,
@@ -5412,7 +5426,7 @@ def debug_playground_page() -> HTMLResponse:
                   const sourceMeta = document.createElement("span");
                   sourceMeta.className = "muted";
                   const citationLabel = citation.citation || (page ? `עמוד ${page}` : citation.chunk_id || "source");
-                  sourceMeta.textContent = ` [${citation.source_type || "source"} | ${citationLabel}]`;
+                  sourceMeta.textContent = ` [${sourceTypeLabel(citation)} | ${citationLabel}]`;
                   sourceItem.appendChild(sourceMeta);
 
                   sourceList.appendChild(sourceItem);
@@ -5475,6 +5489,19 @@ def debug_playground_page() -> HTMLResponse:
       const cleanText = (value) => {
         const compact = String(value || "").trim();
         return compact || null;
+      };
+      const sourceTypeLabel = (value) => {
+        if (value && typeof value === "object") {
+          return value.source_type_filter_label_he || value.source_type_label_he || value.filter_label_he || value.label_he || value.source_type || value.code || "source";
+        }
+        return String(value || "source");
+      };
+      const sourceTypeLabels = (details, codes = []) => {
+        const detailLabels = Array.isArray(details) ? details.map(sourceTypeLabel).filter(Boolean) : [];
+        if (detailLabels.length > 0) {
+          return detailLabels.join(", ");
+        }
+        return Array.isArray(codes) ? codes.filter(Boolean).join(", ") : "";
       };
       const applyQueryParams = () => {
         const params = new URLSearchParams(window.location.search || "");
@@ -5601,7 +5628,7 @@ def debug_playground_page() -> HTMLResponse:
           appendItem(metaList, `status: ${data.status || "-"}`);
           appendItem(metaList, `retrieval_set_id: ${retrieval.retrieval_set_id || "-"}`);
           appendItem(metaList, `retrieval_count: ${retrieval.count || 0}`);
-          appendItem(metaList, `retrieved_source_types: ${(retrieval.source_types || []).join(", ") || "-"}`);
+          appendItem(metaList, `retrieved_source_types: ${sourceTypeLabels(retrieval.source_type_details, retrieval.source_types) || "-"}`);
           appendItem(metaList, `effective_document_version_ids: ${(retrieval.effective_document_version_ids || []).join(", ") || "-"}`);
           appendItem(metaList, `forced_pdf_first_scope: ${retrieval.forced_pdf_first_scope === true ? "yes" : "no"}`);
           appendItem(metaList, `model: ${model.provider || "-"} / ${model.name || "-"}`);
@@ -5724,7 +5751,7 @@ def debug_playground_page() -> HTMLResponse:
 
                 const meta = document.createElement("span");
                 meta.className = "muted";
-                meta.textContent = ` [${citation.source_type || "source"}] ${doc.title || "document"}`;
+                meta.textContent = ` [${sourceTypeLabel(citation)}] ${doc.title || "document"}`;
 
                 const item = document.createElement("li");
                 item.appendChild(anchor);
@@ -5748,7 +5775,8 @@ def debug_playground_page() -> HTMLResponse:
             : [];
           const refusalMessage = refusalPayload.message_he || "אין מספיק ראיות כדי להשיב.";
           const reasonCode = refusalPayload.reason_code || "-";
-          const missingHint = missingTypes.length ? ` Missing sources: ${missingTypes.join(", ")}.` : "";
+          const missingLabelText = sourceTypeLabels(refusalPayload.missing_source_type_details, missingTypes);
+          const missingHint = missingLabelText ? ` Missing sources: ${missingLabelText}.` : "";
           refusalText.textContent = `${refusalMessage}${missingHint}`;
           appendItem(metaList, `reason_code: ${reasonCode}`);
 
@@ -6069,6 +6097,7 @@ def semantic_node_detail(node_id: int, db=Depends(get_db)) -> dict:
                 "confidence": link.confidence,
                 "source_mention_id": link.source_mention_id,
                 "source_type": artifact.source_kind,
+                **source_type_display_fields(artifact.source_kind),
                 "artifact_kind": artifact.artifact_kind,
                 "header_path": _loads_json(artifact.header_path_json) or [],
                 "citation": artifact.citation_label,
@@ -6243,6 +6272,7 @@ def meeting_detail(meeting_id: int, db=Depends(get_db)) -> dict:
                 "parser_confidence": decision.parser_confidence,
                 "citation_count": len(citation_count),
                 "source_type": "protocol",
+                **source_type_display_fields("protocol"),
                 "vote": {
                     "for_count": vote.for_count,
                     "against_count": vote.against_count,
@@ -6277,6 +6307,7 @@ def meeting_detail(meeting_id: int, db=Depends(get_db)) -> dict:
                 "url": document.canonical_url,
                 "doc_kind": document.doc_kind,
                 "source_type": link.source_type,
+                **source_type_display_fields(link.source_type),
                 "provenance": link.provenance,
                 "is_primary": bool(link.is_primary),
             }
@@ -6618,6 +6649,20 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
         }};
       }};
 
+      const sourceTypeLabel = (value) => {{
+        if (value && typeof value === "object") {{
+          return value.source_type_filter_label_he || value.source_type_label_he || value.filter_label_he || value.label_he || value.source_type || value.code || "מקור";
+        }}
+        return String(value || "מקור");
+      }};
+      const sourceTypeLabels = (details, codes = []) => {{
+        const detailLabels = Array.isArray(details) ? details.map(sourceTypeLabel).filter(Boolean) : [];
+        if (detailLabels.length > 0) {{
+          return detailLabels.join(", ");
+        }}
+        return Array.isArray(codes) ? codes.filter(Boolean).join(", ") : "";
+      }};
+
       form.addEventListener("submit", async (event) => {{
         event.preventDefault();
         const question = (questionInput.value || "").trim();
@@ -6821,9 +6866,8 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
 
                         const sourceMeta = document.createElement("span");
                         sourceMeta.className = "muted";
-                        const sourceType = citation.source_type || "source";
                         const citationLabel = citation.citation || (page ? `עמוד ${{page}}` : "מקור");
-                        sourceMeta.textContent = ` [${{sourceType}} | ${{citationLabel}}]`;
+                        sourceMeta.textContent = ` [${{sourceTypeLabel(citation)}} | ${{citationLabel}}]`;
                         sourceItem.appendChild(sourceMeta);
                         sourceList.appendChild(sourceItem);
                       }}
@@ -6864,9 +6908,8 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
 
                 const meta = document.createElement("span");
                 meta.className = "muted";
-                const sourceType = citation.source_type || "source";
                 const citationLabel = citation.citation || (page ? `עמוד ${{page}}` : "מקור");
-                meta.textContent = ` [${{sourceType}} | ${{citationLabel}}]`;
+                meta.textContent = ` [${{sourceTypeLabel(citation)}} | ${{citationLabel}}]`;
 
                 const item = document.createElement("li");
                 item.appendChild(link);
@@ -6889,7 +6932,8 @@ def decision_card_page(decision_id: int, db=Depends(get_db)) -> HTMLResponse:
           const missingTypes = Array.isArray(refusalPayload.missing_source_types)
             ? refusalPayload.missing_source_types.filter((value) => typeof value === "string" && value)
             : [];
-          const missingHint = missingTypes.length ? ` חסרים: ${{missingTypes.join(", ")}}.` : "";
+          const missingLabelText = sourceTypeLabels(refusalPayload.missing_source_type_details, missingTypes);
+          const missingHint = missingLabelText ? ` חסרים: ${{missingLabelText}}.` : "";
           refusalText.textContent = `${{refusalMessage}}${{missingHint}}`;
 
           show(refusalPanel);

@@ -137,10 +137,18 @@ def test_rag_dashboard_mock_endpoint_returns_contract_shaped_payload() -> None:
     assert payload["contracts"]["topic_nodes"]
     assert payload["contracts"]["decisions"] == drawer["decisions"]
     assert payload["contracts"]["evidence"] == payload["evidence"]
+    assert payload["evidence"][0]["source_type"] == "protocol"
+    assert payload["evidence"][0]["source_type_label_he"] == "פרוטוקול"
+    assert payload["evidence"][0]["source_type_filter_label_he"] == "פרוטוקולים"
+    assert "ישיבות עירייה" in payload["evidence"][0]["source_type_semantic_description_he"]
     assert payload["evidence"][0]["artifact_kind"] == "agenda_item"
     assert payload["evidence"][0]["header_path"] == ["עיריית תל אביב-יפו", "תכנון ובנייה", DEFAULT_TOPIC]
     assert payload["evidence"][0]["page_span"] == {"start": 3, "end": 3}
     assert payload["ui_copy"]["popular_searches"]["choices"] == POPULAR_QUESTIONS
+    budget_taxonomy = next(row for row in payload["ui_copy"]["source_type_taxonomy"] if row["code"] == "budget")
+    assert budget_taxonomy["filter_label_he"] == "תקציבים / מסמכי תקציב"
+    assert "Annual budget books" in budget_taxonomy["semantic_notes_en"]
+    assert "הקצאות כספיות" in budget_taxonomy["semantic_description_he"]
     assert len(payload["ui_copy"]["popular_searches"]["choices"]) == 24
     story_choices = payload["ui_copy"]["popular_searches"]["story_choices"]
     assert len(story_choices) == 18
@@ -879,7 +887,11 @@ def test_rag_dashboard_query_endpoint_adapts_ask_answer(monkeypatch) -> None:
     assert payload["end_detail_drawer"]["decisions"][0]["outcome_status"]["code"] == "APPROVED"
     assert payload["end_detail_drawer"]["decisions"][0]["legal_effect"]["code"] == "BINDING"
     assert payload["end_detail_drawer"]["decisions"][0]["resident_evidence_links"][0]["evidence_ref"].startswith("artifact_")
+    assert payload["end_detail_drawer"]["decisions"][0]["resident_evidence_links"][0]["label_he"] == "פרוטוקול"
     assert payload["evidence"][0]["retrieval_artifact_id"] == "artifact-real-1"
+    assert payload["evidence"][0]["source_type"] == "pdf_first_protocol"
+    assert payload["evidence"][0]["source_type_label_he"] == "פרוטוקול"
+    assert "PDF-first" in payload["evidence"][0]["source_type_semantic_description_he"]
     assert payload["evidence"][0]["source_url"] == "/document-versions/20/source.pdf#page=2"
     assert payload["main_civic_workspace"]["map"]["spatial_representation"] == "schematic"
     assert payload["main_civic_workspace"]["map"]["real_gis_available"] is False
@@ -961,6 +973,8 @@ def test_rag_dashboard_evidence_endpoint_resolves_real_artifact(tmp_path: Path) 
     assert evidence["id"] == evidence_id
     assert evidence["retrieval_artifact_id"] == artifact_id
     assert evidence["source_type"] == "pdf_first_protocol"
+    assert evidence["source_type_label_he"] == "פרוטוקול"
+    assert evidence["source_type_filter_label_he"] == "פרוטוקולים"
     assert evidence["source_title"] == "פרוטוקול בדיקה"
     assert evidence["page_span"] == {"start": 2, "end": 3}
     assert evidence["source_url"].endswith("#page=2")

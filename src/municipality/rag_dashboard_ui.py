@@ -3426,7 +3426,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       <label>אזור<select name="area"><option>כל העיר</option><option>רובע טו</option></select></label>
       <label>טווח זמן<select name="time_range"><option>2024</option><option>כל השנים</option></select></label>
       <label>קטגוריה<select name="category"><option value="">כל הקטגוריות</option><option value="planning">תכנון ובנייה</option><option value="transport">תחבורה</option></select></label>
-      <label>סוגי מקורות<select name="source_types"><option>פרוטוקולים ונספחים</option><option>פרוטוקולים</option></select></label>
+      <label>סוגי מקורות<select name="source_types"><option value="">כל סוגי המקורות</option></select></label>
       <label>ודאות<select name="confidence"><option>גבוהה ובינונית</option><option>כל הרמות</option></select></label>
     </div>
     <div class="dialogActions">
@@ -3704,6 +3704,42 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           }
         }
         return out;
+      };
+
+      const filterOptionValue = (option) => {
+        if (option && typeof option === "object") {
+          return String(option.value ?? option.code ?? option.label_he ?? option.label ?? "");
+        }
+        return String(option ?? "");
+      };
+
+      const filterOptionLabel = (option) => {
+        if (option && typeof option === "object") {
+          return String(option.label_he ?? option.filter_label_he ?? option.label ?? option.value ?? option.code ?? "");
+        }
+        return String(option ?? "");
+      };
+
+      const renderFilterOptions = (filterCopy = {}) => {
+        if (!filterModal || !filterCopy.options || typeof filterCopy.options !== "object") {
+          return;
+        }
+        for (const select of filterModal.querySelectorAll("select[name]")) {
+          const options = filterCopy.options[select.name];
+          if (!Array.isArray(options) || options.length === 0) {
+            continue;
+          }
+          const previousValue = select.value;
+          select.replaceChildren();
+          for (const option of options) {
+            const optionNode = document.createElement("option");
+            optionNode.value = filterOptionValue(option);
+            optionNode.textContent = filterOptionLabel(option);
+            select.appendChild(optionNode);
+          }
+          const values = new Set(Array.from(select.options).map((option) => option.value));
+          select.value = values.has(previousValue) ? previousValue : (filterDefaults[select.name] ?? "");
+        }
       };
 
       const collectFilterValues = () => {
@@ -6830,6 +6866,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           const label = document.createTextNode(filterSections[idx] || "");
           filterLabels[idx].replaceChildren(label, select);
         }
+        renderFilterOptions(filterCopy);
         const dialogActions = Array.from(document.querySelectorAll(".dialogAction"));
         if (dialogActions[0]) {
           dialogActions[0].textContent = filterCopy.reset_label || "";
@@ -6916,7 +6953,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           return;
         }
         setText("#evidence-preview-title", evidence.source_title || "מקור");
-        setText("#evidence-artifact-kind", evidence.artifact_kind || "-");
+        setText("#evidence-artifact-kind", evidence.source_type_label_he || evidence.source_type_filter_label_he || evidence.source_type || evidence.artifact_kind || "-");
         const pageSpan = evidence.page_span || {};
         setText("#evidence-page-span", pageSpan.start ? `עמודים ${pageSpan.start}-${pageSpan.end || pageSpan.start}` : "עמוד לא ידוע");
         setText("#evidence-confidence", evidence.confidence_label || "-");

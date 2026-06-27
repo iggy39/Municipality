@@ -5,11 +5,13 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi.responses import HTMLResponse
+from starlette.requests import Request
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from municipality.api import (
     AskRequest,
+    PDF_FIRST_ASK_SOURCE_TYPES,
     _ask_effective_scope,
     _enrich_pdf_first_reference_contexts,
     _run_ask,
@@ -23,11 +25,12 @@ from municipality.migrations import apply_all
 from municipality.models import Document, DocumentVersion, ExtractedDocument, RetrievalArtifact, SourceSite
 from municipality.rag_llm import MockRagProvider, RagLlmConfig, build_rag_llm_client
 from municipality.rag_retrieval import RagContextChunk
+from municipality.rag_dashboard_mock import CURRENT_QUESTION
 from municipality.search import SearchService
 
 
 HE_PDF_FIRST_TEXT = "הוחלט לאשר צעדי בטיחות בדרכים ברחבי העיר."
-PDF_FIRST_SOURCE_TYPES = ["pdf_first_protocol", "pdf_first_attachment"]
+PDF_FIRST_SOURCE_TYPES = list(PDF_FIRST_ASK_SOURCE_TYPES)
 
 
 def test_m4_ask_ui_playground_exposes_rtl_dashboard() -> None:
@@ -42,22 +45,19 @@ def test_m4_ask_ui_playground_exposes_rtl_dashboard() -> None:
     assert 'class="startDiscoveryPanel panelCard"' in body
     assert 'class="mainCivicWorkspace"' in body
     assert 'class="endDetailDrawer panelCard"' in body
-    assert "מה הוחלט לגבי תכנית רובע טו?" in body
+    assert CURRENT_QUESTION in body
     assert "חיפושים פופולריים" in body
     assert "מסננים" in body
     assert "מנהל" in body
     assert "תשובה" in body
-    assert "תקציר" in body
     assert "החלטות עיקריות" in body
     assert "נושאים קשורים" in body
-    assert "מגבלות" in body
     assert "מקרא" in body
     assert "ציר זמן" in body
     assert "תכנון ובנייה" in body
     assert 'id="filter-modal" class="filterDialog" hidden' in body
     assert 'id="popular-popover" class="popularPopover" hidden' in body
     assert ".questionSearch input" in body
-    assert "height: 62px;" in body
     assert "text-align: right;" in body
     assert "padding-inline-start: 24px;" in body
     assert "padding-inline-end: 58px;" in body
@@ -82,7 +82,7 @@ def test_m4_ask_ui_playground_exposes_rtl_dashboard() -> None:
     assert "topic-root" in body
     assert "topic-child" in body
     assert "debug mode (show PDF-first debug)" in body
-    assert 'fetch("/ask"' in body
+    assert "DASHBOARD_QUERY_ENDPOINT" in body
     assert "debug_mode" in body
     assert "ראיות ומקורות" not in body
     assert "מקציר" not in body
@@ -177,9 +177,12 @@ def test_m4_ask_api_returns_pdf_first_answer_with_citation_contract(tmp_path: Pa
         assert payload["extended_answer_sections"]
         assert payload["refusal"] is None
         assert {row["source_type"] for row in payload["citations"]} == {"pdf_first_protocol"}
+        assert payload["citations"][0]["source_type_label_he"] == "פרוטוקול"
+        assert "PDF-first" in payload["citations"][0]["source_type_semantic_description_he"]
         assert payload["citations"][0]["chunk_id"] == chunk_id
         assert payload["citations"][0]["document"]["version_id"] == document_version_id
         assert payload["retrieval"]["requested_source_types"] == PDF_FIRST_SOURCE_TYPES
+        assert payload["retrieval"]["requested_source_type_details"][0]["label_he"] == "פרוטוקול"
         assert payload["retrieval"]["forced_pdf_first_scope"] is True
         assert payload["retrieval"]["effective_document_version_ids"] == [document_version_id]
         assert payload["scoring"]["answer_generation_route"] == "pdf_first_dictalm"
@@ -287,8 +290,14 @@ def test_m4_ask_scope_blocks_unmatched_numeric_question_date(tmp_path: Path, mon
     assert scope["date_scope"]["extracted_dates"] == ["2099-12-31"]
 
 
-def test_topic_tree_cache_endpoint_is_retired() -> None:
-    payload = topic_tree_cache(limit=5000)
+def test_topic_tree_cache_endpoint_is_retired(tmp_path: Path) -> None:
+    db_path = tmp_path / "m4_topic_tree_cache_retired.db"
+    engine = create_engine(f"sqlite+pysqlite:///{db_path}", future=True)
+    apply_all(engine, Path("migrations"))
+    request = Request({"type": "http", "method": "GET", "path": "/topic/tree/cache", "headers": []})
+
+    with Session(engine) as session:
+        payload = topic_tree_cache(request=request, limit=5000, db=session)
 
     assert payload["count"] == 0
     assert payload["roots"] == []

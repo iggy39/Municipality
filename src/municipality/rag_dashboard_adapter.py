@@ -10,6 +10,7 @@ from sqlalchemy import select
 from municipality.models import Document, DocumentVersion, RetrievalArtifact, SourceSite
 from municipality.rag_dashboard_contracts import RagDashboardPayload
 from municipality.rag_dashboard_mock import get_mock_rag_dashboard_payload
+from municipality.source_type_taxonomy import source_type_codes_from_filter_value, source_type_display_fields, source_type_metadata
 
 
 SCHEMATIC_MAP_PROVENANCE = {
@@ -294,9 +295,11 @@ def _citation_to_evidence(row: dict[str, Any], idx: int, *, ask_payload: dict[st
         return None
     document = row.get("document") if isinstance(row.get("document"), dict) else {}
     header_path = [str(item) for item in row.get("header_path") or [] if str(item).strip()]
+    source_type = str(row.get("source_type") or "unknown")
     return {
         "id": encode_artifact_evidence_id(artifact_id),
-        "source_type": str(row.get("source_type") or "unknown"),
+        "source_type": source_type,
+        **source_type_display_fields(source_type),
         "source_title": str(document.get("title") or row.get("citation") or "מקור עירוני"),
         "source_url": _source_url_with_page(_citation_document_url(document), row.get("start_page")),
         "retrieval_artifact_id": artifact_id,
@@ -315,9 +318,11 @@ def _citation_to_evidence(row: dict[str, Any], idx: int, *, ask_payload: dict[st
 
 def _artifact_to_evidence(artifact: RetrievalArtifact, document: Document, version: DocumentVersion, *, retrieval_set_id: str | None) -> dict[str, Any]:
     header_path = _load_header_path(artifact.header_path_json)
+    source_type = str(artifact.source_kind or "unknown")
     return {
         "id": encode_artifact_evidence_id(str(artifact.artifact_id)),
-        "source_type": str(artifact.source_kind or "unknown"),
+        "source_type": source_type,
+        **source_type_display_fields(source_type),
         "source_title": str(document.title_he or artifact.title_he or "מקור עירוני"),
         "source_url": _source_url_with_page(f"/document-versions/{int(version.id)}/source.pdf", artifact.start_page),
         "retrieval_artifact_id": str(artifact.artifact_id),
@@ -366,7 +371,7 @@ def _citation_to_decision(row: dict[str, Any], idx: int, evidence: dict[str, Any
         "entity_ids": [],
         "timeline_event_ids": [],
         "evidence_refs": [evidence_ref],
-        "resident_evidence_links": [{"label_he": "מקור", "icon": "document-link", "evidence_ref": evidence_ref}],
+        "resident_evidence_links": [{"label_he": source_type_metadata(evidence.get("source_type")).label_he, "icon": "document-link", "evidence_ref": evidence_ref}],
         "normalized_by": "ask_result_adapter",
         "curation_status": "unreviewed",
         "limitations": [],
@@ -527,11 +532,13 @@ def _selected_time_range_from_filters(filters: dict[str, Any]) -> dict[str, str]
 
 
 def _source_filter_from_filters(filters: dict[str, Any]) -> list[str]:
-    value = str(filters.get("source_types") or "")
-    if "פרוטוקולים ונספחים" in value:
-        return ["protocol", "attachment"]
-    if "פרוטוקולים" in value:
-        return ["protocol"]
+    raw = filters.get("source_types")
+    values = raw if isinstance(raw, list) else [raw]
+    selected: list[str] = []
+    for item in values:
+        selected.extend(source_type_codes_from_filter_value(str(item or "")))
+    if selected:
+        return list(dict.fromkeys(selected))
     return []
 
 
