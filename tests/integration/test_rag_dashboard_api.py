@@ -854,6 +854,7 @@ def test_rag_dashboard_query_endpoint_adapts_ask_answer(monkeypatch) -> None:
     def fake_run_ask(*, request, db):
         seen_request["year"] = request.year
         seen_request["semantic_label"] = request.semantic_label
+        seen_request["source_types"] = request.source_types
         return _fake_ask_payload(question=request.question)
 
     monkeypatch.setattr(api_module, "_run_ask", fake_run_ask)
@@ -865,14 +866,14 @@ def test_rag_dashboard_query_endpoint_adapts_ask_answer(monkeypatch) -> None:
             "question": "מה הוחלט על פארק לכיש?",
             "muni": "ashdod",
             "top_k": 3,
-            "filters": {"time_range": "2024", "category": "transport", "area": "רובע טו", "source_types": "פרוטוקולים", "confidence": "גבוהה ובינונית"},
+            "filters": {"time_range": "2024", "category": "transport", "area": "רובע טו", "source_types": ["protocol", "budget"], "confidence": "גבוהה ובינונית"},
         },
     )
 
     assert response.status_code == 200
     payload = response.json()
     validate_dashboard_payload(payload)
-    assert seen_request == {"year": 2024, "semantic_label": "תחבורה"}
+    assert seen_request == {"year": 2024, "semantic_label": "תחבורה", "source_types": ["protocol", "budget"]}
     assert payload["state"]["current_question"] == "מה הוחלט על פארק לכיש?"
     assert payload["state"]["generation_status"] == "answer_ready"
     assert payload["state"]["active_filter_count"] == 5
@@ -880,7 +881,7 @@ def test_rag_dashboard_query_endpoint_adapts_ask_answer(monkeypatch) -> None:
     assert payload["state"]["selected_category_id"] == "transport"
     assert next(row for row in payload["start_discovery_panel"]["categories"] if row["id"] == "transport")["selected"] is True
     assert payload["state"]["selected_time_range"] == {"start": "2024-01-01", "end": "2024-12-31"}
-    assert payload["state"]["source_type_filter"] == ["protocol"]
+    assert payload["state"]["source_type_filter"] == ["protocol", "budget"]
     assert payload["state"]["confidence_filter"] == "medium_and_high"
     assert payload["end_detail_drawer"]["brief"] == "הוחלט לאשר שדרוג של פארק לכיש."
     assert payload["end_detail_drawer"]["decisions"][0]["decision_kind"]["code"] == "APPROVAL"

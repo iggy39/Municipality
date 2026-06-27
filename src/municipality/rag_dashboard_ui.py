@@ -1,8 +1,23 @@
 from __future__ import annotations
 
 import json
+from html import escape as html_escape
 from typing import Any
 from urllib.parse import urlencode
+
+from municipality.source_type_taxonomy import source_type_filter_options
+
+
+def _source_type_filter_checkbox_options_html() -> str:
+    return "\n".join(
+        (
+            '        <label class="sourceTypeOption">'
+            f'<input type="checkbox" name="source_types" value="{html_escape(str(option["value"]), quote=True)}" />'
+            f'<span>{html_escape(str(option.get("plural_label_he") or option["label_he"]))}</span>'
+            '</label>'
+        )
+        for option in source_type_filter_options()
+    )
 
 
 def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = None) -> str:
@@ -2658,22 +2673,85 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
     .dialogFilters {
       display: grid;
-      gap: 10px;
+      gap: 12px;
       color: #253047;
     }
 
-    .dialogFilters label {
+    .dialogFilterField {
       display: grid;
       gap: 5px;
       font-weight: 800;
     }
 
-    .dialogFilters select {
+    .dialogFilterField select {
       height: 38px;
       border: 1px solid #d8e0eb;
       border-radius: 8px;
       padding-inline: 10px;
       background: #fff;
+    }
+
+    .dialogFilterSection {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid #d8e0eb;
+      border-radius: 12px;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+    }
+
+    .dialogFilterSectionHeader {
+      display: grid;
+      gap: 3px;
+    }
+
+    .dialogFilterSectionHeader h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 900;
+    }
+
+    .dialogFilterSectionHeader p {
+      margin: 0;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .sourceTypeOptions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      max-height: 240px;
+      overflow-y: auto;
+      padding-inline-end: 2px;
+    }
+
+    .sourceTypeOption {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      min-height: 38px;
+      padding: 8px 10px;
+      border: 1px solid #e1e8f0;
+      border-radius: 10px;
+      background: #fff;
+      color: #253047;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.35;
+      cursor: pointer;
+    }
+
+    .sourceTypeOption:has(input:checked) {
+      border-color: #b59cff;
+      background: #f4f0ff;
+      color: #4c2c96;
+    }
+
+    .sourceTypeOption input {
+      margin-block-start: 2px;
+      accent-color: var(--purple);
     }
 
     .dialogActions {
@@ -2779,6 +2857,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       .headerButton { flex: 1 1 auto; min-width: 0; height: 48px; padding-inline: 10px; }
       .questionSearch input { font-size: 17px; height: 56px; }
       .questionSearch { height: 56px; }
+      .sourceTypeOptions { grid-template-columns: 1fr; }
       .dashboardGrid { min-height: auto; }
       .mainCivicWorkspace { grid-template-rows: 420px auto; }
       .timelineCards { grid-template-columns: 1fr; gap: 8px; }
@@ -3423,11 +3502,19 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
       <button class="dialogClose" type="button" aria-label="סגירת מסננים">×</button>
     </div>
     <div class="dialogFilters">
-      <label>אזור<select name="area"><option>כל העיר</option><option>רובע טו</option></select></label>
-      <label>טווח זמן<select name="time_range"><option>2024</option><option>כל השנים</option></select></label>
-      <label>קטגוריה<select name="category"><option value="">כל הקטגוריות</option><option value="planning">תכנון ובנייה</option><option value="transport">תחבורה</option></select></label>
-      <label>סוגי מקורות<select name="source_types"><option value="">כל סוגי המקורות</option></select></label>
-      <label>ודאות<select name="confidence"><option>גבוהה ובינונית</option><option>כל הרמות</option></select></label>
+      <label class="dialogFilterField" data-filter-section-index="0">אזור<select name="area"><option>כל העיר</option><option>רובע טו</option></select></label>
+      <label class="dialogFilterField" data-filter-section-index="1">טווח זמן<select name="time_range"><option>2024</option><option>כל השנים</option></select></label>
+      <label class="dialogFilterField" data-filter-section-index="2">קטגוריה<select name="category"><option value="">כל הקטגוריות</option><option value="planning">תכנון ובנייה</option><option value="transport">תחבורה</option></select></label>
+      <section class="dialogFilterSection sourceTypeFilterSection" data-filter-section-index="3" aria-labelledby="source-types-filter-title">
+        <div class="dialogFilterSectionHeader">
+          <h3 id="source-types-filter-title">סוגי מקורות</h3>
+          <p id="source-types-filter-help">אפשר לבחור כמה סוגים. בלי בחירה מיוחדת החיפוש נשאר במסלול ברירת המחדל.</p>
+        </div>
+        <div id="source-type-options" class="sourceTypeOptions" role="group" aria-describedby="source-types-filter-help">
+<!-- SOURCE_TYPE_OPTIONS -->
+        </div>
+      </section>
+      <label class="dialogFilterField" data-filter-section-index="4">ודאות<select name="confidence"><option>גבוהה ובינונית</option><option>כל הרמות</option></select></label>
     </div>
     <div class="dialogActions">
       <button class="dialogAction" type="button">איפוס</button>
@@ -3659,7 +3746,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         area: "כל העיר",
         time_range: "כל השנים",
         category: "",
-        source_types: "",
+        source_types: [],
         confidence: "כל הרמות"
       };
 
@@ -3695,9 +3782,31 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         }
       };
 
+      const sourceTypeValues = (value) => {
+        const values = Array.isArray(value) ? value : [value];
+        const out = [];
+        const seen = new Set();
+        for (const item of values) {
+          const compact = String(item || "").trim();
+          if (!compact || seen.has(compact)) {
+            continue;
+          }
+          out.push(compact);
+          seen.add(compact);
+        }
+        return out;
+      };
+
       const normalizeFilters = (filters = {}) => {
         const out = {};
         for (const [key, value] of Object.entries(filters || {})) {
+          if (key === "source_types") {
+            const selected = sourceTypeValues(value);
+            if (selected.length) {
+              out[key] = selected;
+            }
+            continue;
+          }
           const compact = String(value || "").trim();
           if (compact && compact !== filterDefaults[key]) {
             out[key] = compact;
@@ -3720,10 +3829,37 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         return String(option ?? "");
       };
 
+      const renderSourceTypeOptions = (options = []) => {
+        const container = document.getElementById("source-type-options");
+        if (!container || !Array.isArray(options) || options.length === 0) {
+          return;
+        }
+        const previousValues = new Set(Array.from(container.querySelectorAll('input[name="source_types"]:checked')).map((input) => input.value));
+        container.replaceChildren();
+        for (const option of options) {
+          const value = filterOptionValue(option);
+          if (!value) {
+            continue;
+          }
+          const label = document.createElement("label");
+          label.className = "sourceTypeOption";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.name = "source_types";
+          input.value = value;
+          input.checked = previousValues.has(value);
+          const text = document.createElement("span");
+          text.textContent = String(option?.plural_label_he ?? filterOptionLabel(option));
+          label.append(input, text);
+          container.appendChild(label);
+        }
+      };
+
       const renderFilterOptions = (filterCopy = {}) => {
         if (!filterModal || !filterCopy.options || typeof filterCopy.options !== "object") {
           return;
         }
+        renderSourceTypeOptions(filterCopy.options.source_types);
         for (const select of filterModal.querySelectorAll("select[name]")) {
           const options = filterCopy.options[select.name];
           if (!Array.isArray(options) || options.length === 0) {
@@ -3750,6 +3886,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         for (const select of filterModal.querySelectorAll("select[name]")) {
           values[select.name] = select.value || "";
         }
+        values.source_types = Array.from(filterModal.querySelectorAll('input[name="source_types"]:checked')).map((input) => input.value);
         return normalizeFilters(values);
       };
 
@@ -3760,6 +3897,10 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
         for (const select of filterModal.querySelectorAll("select[name]")) {
           const value = filters[select.name] ?? filterDefaults[select.name] ?? "";
           select.value = value;
+        }
+        const selectedSourceTypes = new Set(sourceTypeValues(filters.source_types));
+        for (const input of filterModal.querySelectorAll('input[name="source_types"]')) {
+          input.checked = selectedSourceTypes.has(input.value);
         }
       };
 
@@ -6859,12 +7000,17 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 
         setText("#filter-title", filterCopy.title);
         setAttr(".dialogClose", "aria-label", filterCopy.close_label);
-        const filterLabels = Array.from(document.querySelectorAll(".dialogFilters label"));
+        const filterLabels = Array.from(document.querySelectorAll(".dialogFilterField"));
         const filterSections = Array.isArray(filterCopy.sections) ? filterCopy.sections : [];
         for (let idx = 0; idx < filterLabels.length; idx += 1) {
           const select = filterLabels[idx].querySelector("select");
-          const label = document.createTextNode(filterSections[idx] || "");
+          const sectionIndex = Number.parseInt(filterLabels[idx].dataset.filterSectionIndex ?? String(idx), 10);
+          const label = document.createTextNode(filterSections[sectionIndex] || "");
           filterLabels[idx].replaceChildren(label, select);
+        }
+        const sourceTypeTitle = document.getElementById("source-types-filter-title");
+        if (sourceTypeTitle && filterSections[3]) {
+          sourceTypeTitle.textContent = filterSections[3];
         }
         renderFilterOptions(filterCopy);
         const dialogActions = Array.from(document.querySelectorAll(".dialogAction"));
@@ -8000,6 +8146,13 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           filtersButton.setAttribute("aria-expanded", "false");
           filtersButton.focus();
         };
+        const rerunCurrentQuestion = () => {
+          if (form && typeof form.requestSubmit === "function") {
+            form.requestSubmit();
+            return true;
+          }
+          return false;
+        };
         if (closeButton) {
           closeButton.addEventListener("click", closeFilters);
         }
@@ -8013,7 +8166,9 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
           syncFilterModal(activeFilters);
           updateFilterBadge(0);
           closeFilters();
-          applyDashboardInteraction("reset_filters", "filters");
+          if (!rerunCurrentQuestion()) {
+            applyDashboardInteraction("reset_filters", "filters");
+          }
         });
         dialogActions[1]?.addEventListener("click", () => {
           const filters = collectFilterValues();
@@ -8028,7 +8183,9 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
             applySelectedCategoryToRows(selectedCategoryId);
           }
           closeFilters();
-          applyDashboardInteraction("apply_filters", "filters", { filters });
+          if (!rerunCurrentQuestion()) {
+            applyDashboardInteraction("apply_filters", "filters", { filters });
+          }
         });
       }
 
@@ -8526,6 +8683,7 @@ def render_rag_dashboard_page(initial_gis_map_payload: dict[str, Any] | None = N
 </body>
 </html>
 """
+    html = html.replace("<!-- SOURCE_TYPE_OPTIONS -->", _source_type_filter_checkbox_options_html(), 1)
     if initial_gis_map_payload and initial_gis_map_payload.get("status") == "found":
         return _inject_initial_gis_map(html, initial_gis_map_payload)
     return html

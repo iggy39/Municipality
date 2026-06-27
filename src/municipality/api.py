@@ -82,7 +82,7 @@ from municipality.rag_dashboard_mock import (
 from municipality.rag_dashboard_ui import render_rag_dashboard_page
 from municipality.search import search_thresholds_snapshot
 from municipality.semantic_canonicalization import SemanticCanonicalizer
-from municipality.source_type_taxonomy import source_type_display_fields, source_type_metadata_payload
+from municipality.source_type_taxonomy import source_type_codes_from_filter_value, source_type_display_fields, source_type_metadata_payload
 from municipality.subject_browser_ui import render_subject_browser_page
 
 
@@ -172,6 +172,10 @@ PDF_FIRST_ASK_SOURCE_TYPES = ["pdf_first_protocol", "pdf_first_attachment", "pdf
 PDF_FIRST_PROTOCOL_SOURCE_TYPES = {"pdf_first_protocol", "pdf_first_v4_protocol"}
 PDF_FIRST_ATTACHMENT_SOURCE_TYPES = {"pdf_first_attachment", "pdf_first_v4_attachment"}
 PDF_FIRST_RETRIEVAL_ARTIFACT_KINDS = {"pdf_first_retrieval_chunk", "pdf_first_v4_retrieval_chunk"}
+SOURCE_TYPE_QUERY_EXPANSIONS = {
+    "protocol": ("protocol", "pdf_first_protocol", "pdf_first_v4_protocol"),
+    "attachment": ("attachment", "pdf_first_attachment", "pdf_first_v4_attachment"),
+}
 MUNICIPALITY_CODE_TO_SLUG = {
     "0070": "ashdod",
     "3000": "jerusalem",
@@ -180,6 +184,24 @@ MUNICIPALITY_CODE_TO_SLUG = {
     "9000": "beer_sheva",
     "0831": "yeruham",
 }
+
+
+def _source_type_query_codes(values: list[str] | None) -> list[str]:
+    selected: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        raw = str(value or "").strip()
+        if not raw:
+            continue
+        codes = source_type_codes_from_filter_value(raw)
+        for code in codes:
+            for expanded_code in SOURCE_TYPE_QUERY_EXPANSIONS.get(code, (code,)):
+                if expanded_code and expanded_code not in seen:
+                    selected.append(expanded_code)
+                    seen.add(expanded_code)
+    return selected
+
+
 TOPIC_SUBJECT_DISPLAY_RULES = {
     ("שאילתה", ""): ("council_inquiry", "שאילתות מועצה", None),
     ("מענה לשאילתה", ""): ("council_inquiry_response", "מענים לשאילתות", None),
@@ -339,6 +361,7 @@ class AskRequest(BaseModel):
     semantic_label: str | None = None
     semantic_mode: str = "off"
     retrieval_strategy: str = "auto"
+    source_types: list[str] = Field(default_factory=list)
     document_id: int | None = Field(default=None, ge=1)
     document_version_id: int | None = Field(default=None, ge=1)
     pipeline_run_id: str | None = None
@@ -346,13 +369,25 @@ class AskRequest(BaseModel):
 
 
 def _ask_effective_scope(request: AskRequest, *, db=None) -> dict[str, Any]:
-    """Force /ask onto the accepted PDF-first pipeline artifacts only."""
+    """Keep the default PDF-first scope unless the resident selected source-type filters."""
     allowed_docvers = _pdf_first_allowed_document_version_ids()
     requested_docver = int(request.document_version_id) if request.document_version_id else None
     requested_doc_id = int(request.document_id) if request.document_id else None
+    requested_source_types = _source_type_query_codes(request.source_types)
+    date_scope = _empty_pdf_first_date_scope_debug(question=request.question)
+    if requested_source_types:
+        return {
+            "source_types": requested_source_types,
+            "required_source_types": [],
+            "document_ids": [requested_doc_id] if requested_doc_id is not None else None,
+            "document_version_ids": [requested_docver] if requested_docver is not None else None,
+            "forced_pdf_first_scope": False,
+            "scope_reason": "request_source_types",
+            "date_scope": date_scope,
+        }
+
     document_version_ids = list(allowed_docvers) if allowed_docvers is not None else None
     scope_reason = "env_allowed_document_versions" if allowed_docvers is not None else "all_pdf_first_document_versions"
-    date_scope = _empty_pdf_first_date_scope_debug(question=request.question)
 
     if requested_docver is not None:
         if allowed_docvers is None or requested_docver in allowed_docvers:
@@ -3442,12 +3477,15 @@ def _run_ask(
     )
     retrieval_ms = round((time.perf_counter() - retrieval_started) * 1000.0, 3)
 
-    answering_contexts, reference_enrichment_debug = _enrich_pdf_first_reference_contexts(
-        db=db,
-        contexts=list(retrieval_result.contexts),
-        municipality_slug=request.muni,
-        allowed_document_version_ids=_pdf_first_allowed_document_version_ids(),
-    )
+    answering_contexts = list(retrieval_result.contexts)
+    reference_enrichment_debug = {"applied": False, "enrichment_map": {}, "candidate_count": 0, "linked_count": 0}
+    if effective_scope["forced_pdf_first_scope"]:
+        answering_contexts, reference_enrichment_debug = _enrich_pdf_first_reference_contexts(
+            db=db,
+            contexts=answering_contexts,
+            municipality_slug=request.muni,
+            allowed_document_version_ids=_pdf_first_allowed_document_version_ids(),
+        )
     answering_contexts = _hydrate_context_semantic_topic_labels(db=db, contexts=answering_contexts)
     answering_contexts, context_dedupe_stats = _collapse_duplicate_answering_contexts(
         embedding_service=embedding_service,
@@ -3473,17 +3511,25 @@ def _run_ask(
             },
         },
     )
-    if set(retrieval_result.requested_source_kinds) != set(PDF_FIRST_ASK_SOURCE_TYPES):
+    if effective_scope["forced_pdf_first_scope"] and set(retrieval_result.requested_source_kinds) != set(PDF_FIRST_ASK_SOURCE_TYPES):
         raise HTTPException(status_code=500, detail="ask_pdf_first_scope_missing")
 
     resolved_llm_client = llm_client or _build_ask_llm_client(request=request)
     answering_service = RagAnsweringService(llm_client=resolved_llm_client)
     answering_started = time.perf_counter()
-    answer_result = answering_service.compose_pdf_first(
-        question=request.question,
-        retrieval=retrieval_for_answering,
-        ask_request_id=ask_request_id,
-    )
+    if effective_scope["forced_pdf_first_scope"]:
+        answer_result = answering_service.compose_pdf_first(
+            question=request.question,
+            retrieval=retrieval_for_answering,
+            ask_request_id=ask_request_id,
+        )
+    else:
+        answer_result = answering_service.compose(
+            question=request.question,
+            retrieval=retrieval_for_answering,
+            required_source_kinds=effective_scope["required_source_types"],
+            ask_request_id=ask_request_id,
+        )
     answering_ms = round((time.perf_counter() - answering_started) * 1000.0, 3)
     total_ms = round((time.perf_counter() - request_started) * 1000.0, 3)
 
@@ -3844,6 +3890,7 @@ def rag_dashboard_query(request: RagDashboardQueryRequest, db=Depends(get_db)) -
     dashboard_filters = request.filters if isinstance(request.filters, dict) else {}
     filter_year = _dashboard_filter_year(dashboard_filters)
     filter_semantic_label = request.semantic_label or _dashboard_filter_semantic_label(dashboard_filters)
+    filter_source_types = _dashboard_filter_source_types(dashboard_filters)
     geo_intent = resolve_geo_intent(request.question)
     geo_intent_payload = geo_intent.to_payload()
     map_context = _dashboard_map_context(db=db, geo_intent_payload=geo_intent_payload) if geo_intent.needs_gis else None
@@ -3860,6 +3907,7 @@ def rag_dashboard_query(request: RagDashboardQueryRequest, db=Depends(get_db)) -
                 muni=effective_muni,
                 top_k=request.top_k,
                 year=filter_year,
+                source_types=filter_source_types,
                 semantic_node_id=request.semantic_node_id,
                 semantic_label=filter_semantic_label,
                 semantic_mode=request.semantic_mode,
@@ -3895,6 +3943,23 @@ def rag_dashboard_query(request: RagDashboardQueryRequest, db=Depends(get_db)) -
 def _dashboard_filter_year(filters: dict[str, Any]) -> int | None:
     raw = str(filters.get("time_range") or "").strip()
     return int(raw) if raw.isdigit() and len(raw) == 4 else None
+
+
+def _dashboard_filter_source_types(filters: dict[str, Any]) -> list[str]:
+    raw = filters.get("source_types")
+    values = raw if isinstance(raw, list) else [raw]
+    selected: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        compact = str(value or "").strip()
+        if not compact:
+            continue
+        codes = source_type_codes_from_filter_value(compact)
+        for code in codes:
+            if code and code not in seen:
+                selected.append(code)
+                seen.add(code)
+    return selected
 
 
 def _dashboard_map_context(*, db, geo_intent_payload: dict[str, Any]) -> dict[str, Any] | None:

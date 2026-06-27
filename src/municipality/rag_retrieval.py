@@ -9,6 +9,7 @@ from municipality.embeddings import EmbeddingReranker
 from municipality.query_rewrite import QueryRewriteResult, QueryRewriteService
 from municipality.rag_arch import RagArchitectureConfig
 from municipality.rag_observability import build_retrieval_set_id, hash_text, log_rag_event
+from municipality.source_type_taxonomy import SOURCE_TYPE_BY_CODE
 
 
 HEBREW_TOKEN_RE = re.compile(r"[\u0590-\u05FF]{2,}")
@@ -581,7 +582,7 @@ def _ensure_requested_source_coverage(hits: list[Any], requested_source_kinds: l
 def _normalize_source_kinds(source_kinds: list[str] | None) -> list[str]:
     if not source_kinds:
         return []
-    accepted = {"protocol", "pdf_first_protocol", "pdf_first_attachment", "pdf_first_v4_protocol", "pdf_first_v4_attachment", "attachment", "other"}
+    accepted = set(SOURCE_TYPE_BY_CODE) | {"other"}
     out: list[str] = []
     seen: set[str] = set()
     for source_kind in source_kinds:

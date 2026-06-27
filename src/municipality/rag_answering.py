@@ -15,6 +15,7 @@ from municipality.fallback import BYTEZ_PROVIDER
 from municipality.rag_llm import RAG_CALL_ANSWER, RAG_CALL_REFUSE, RAG_CALL_VERIFY, RAG_PROVIDER_AI21, RagLlmClient
 from municipality.rag_observability import log_rag_event
 from municipality.rag_retrieval import RagContextChunk, RagRetrievalResult
+from municipality.source_type_taxonomy import SOURCE_TYPE_BY_CODE
 from municipality.topic_label_quality import is_low_quality_topic_label
 
 
@@ -616,7 +617,9 @@ class RagAnsweringService:
         ask_request_id: str | None = None,
     ) -> RagAnswerResult:
         compose_started = time.perf_counter()
-        required_sources = _normalize_source_kinds(required_source_kinds or retrieval.requested_source_kinds)
+        required_sources = _normalize_source_kinds(
+            retrieval.requested_source_kinds if required_source_kinds is None else required_source_kinds
+        )
         log_rag_event(
             "rag.answering.start",
             ask_request_id=ask_request_id,
@@ -3697,7 +3700,7 @@ def _normalize_chunk_ids(values: list[Any]) -> list[str]:
 
 
 def _normalize_source_kinds(source_kinds: list[str]) -> list[str]:
-    accepted = {"protocol", "pdf_first_protocol", "pdf_first_attachment", "pdf_first_v4_protocol", "pdf_first_v4_attachment", "attachment", "other"}
+    accepted = set(SOURCE_TYPE_BY_CODE) | {"other"}
     out: list[str] = []
     seen: set[str] = set()
     for source_kind in source_kinds:

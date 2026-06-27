@@ -56,6 +56,9 @@ def test_m4_ask_ui_playground_exposes_rtl_dashboard() -> None:
     assert "ציר זמן" in body
     assert "תכנון ובנייה" in body
     assert 'id="filter-modal" class="filterDialog" hidden' in body
+    assert 'id="source-type-options" class="sourceTypeOptions"' in body
+    assert 'type="checkbox" name="source_types" value="protocol"' in body
+    assert 'type="checkbox" name="source_types" value="budget"' in body
     assert 'id="popular-popover" class="popularPopover" hidden' in body
     assert ".questionSearch input" in body
     assert "text-align: right;" in body
@@ -257,6 +260,17 @@ def test_m4_ask_scope_resolves_numeric_question_date_to_pdf_first_document(tmp_p
     assert scope["scope_reason"] == "question_date_match"
     assert scope["date_scope"]["applied"] is True
     assert scope["date_scope"]["extracted_dates"] == ["2022-02-02"]
+
+
+def test_m4_ask_scope_uses_selected_source_types_as_allowed_filters() -> None:
+    scope = _ask_effective_scope(
+        AskRequest(question="מה קרה ליד פארק לכיש?", source_types=["protocol", "budget"]),
+    )
+
+    assert scope["source_types"] == ["protocol", "pdf_first_protocol", "pdf_first_v4_protocol", "budget"]
+    assert scope["required_source_types"] == []
+    assert scope["forced_pdf_first_scope"] is False
+    assert scope["scope_reason"] == "request_source_types"
 
 
 def test_m4_ask_scope_blocks_unmatched_numeric_question_date(tmp_path: Path, monkeypatch) -> None:

@@ -518,6 +518,12 @@ def _normalize_filters(filters: dict[str, Any] | None) -> dict[str, Any]:
     for key, value in filters.items():
         if value in (None, "", [], {}):
             continue
+        if key == "source_types" and isinstance(value, list):
+            selected = list(dict.fromkeys(" ".join(str(item or "").split()) for item in value))
+            selected = [item for item in selected if item]
+            if selected:
+                out[str(key)] = selected
+            continue
         compact = " ".join(str(value).split())
         if compact and compact != defaults.get(key):
             out[str(key)] = compact
