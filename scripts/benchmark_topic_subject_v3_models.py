@@ -57,6 +57,7 @@ def main() -> int:
     parser.add_argument("--docver-row", action="append", help="Exact processed row as municipality_slug:document_version_id:source_ordinal. Can be repeated.")
     parser.add_argument("--topic-assignments-json", action="append", type=Path, help="Step 4 topic_assignments.json to benchmark directly without DB import. Can be repeated.")
     parser.add_argument("--json-row", action="append", type=int, help="Exact source ordinal from --topic-assignments-json. Can be repeated.")
+    parser.add_argument("--json-row-spec", action="append", help="Exact JSON row as path_index:source_ordinal for --topic-assignments-json inputs. Can be repeated.")
     parser.add_argument("--json-max-samples", type=int, default=6, help="Maximum topic-bearing rows to sample from JSON inputs when --json-row is not used.")
     parser.add_argument("--json-muni", default="json", help="Municipality slug label for JSON-only benchmark inputs.")
     parser.add_argument("--max-per-docver", type=int, default=12, help="Evenly sample at most this many accepted artifacts per --docver. Use 0 for all rows.")
@@ -69,6 +70,7 @@ def main() -> int:
     parser.add_argument("--disable-schema-no-think-helpers", action="store_true", help="Disable the default V3 helper-stage schema/no-think profile for A/B debugging.")
     parser.add_argument("--disable-judge", action="store_true", help="Run extraction/evidence/repair without the optional judge stage.")
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    parser.add_argument("--output-dir", type=Path, help="Fixed output directory. When omitted, a timestamped directory is created under --output-root.")
     args = parser.parse_args()
 
     json_paths = [path.expanduser().resolve() for path in args.topic_assignments_json or []]
@@ -76,15 +78,22 @@ def main() -> int:
     sample_offsets = [_parse_sample(value) for value in sample_specs]
     docver_specs = [_parse_docver(value) for value in args.docver or []]
     docver_row_specs = [_parse_docver_row(value) for value in args.docver_row or []]
+    json_row_specs = [_parse_json_row_spec(value) for value in args.json_row_spec or []]
 
     events: list[Any] = []
     quality_rows: list[Any] = []
     client = OllamaTopicSubjectV3Client()
 
     if json_paths:
-        benchmark_items = _json_benchmark_items(paths=json_paths, municipality_slug=str(args.json_muni), json_rows=args.json_row or [], max_samples=int(args.json_max_samples or 0))
+        benchmark_items = _json_benchmark_items(
+            paths=json_paths,
+            municipality_slug=str(args.json_muni),
+            json_rows=args.json_row or [],
+            json_row_specs=json_row_specs,
+            max_samples=int(args.json_max_samples or 0),
+        )
         selection_summary = _selection_summary(benchmark_items)
-        output_dir = args.output_root.expanduser().resolve() / _run_dir_name(sample_labels=[item.sample_label for item in benchmark_items], model=str(args.model), small_model=str(args.small_model))
+        output_dir = _benchmark_output_dir(args=args, benchmark_items=benchmark_items)
         print(
             json.dumps(
                 {
@@ -97,6 +106,7 @@ def main() -> int:
                     "judge_enabled": not bool(args.disable_judge),
                     "topic_assignments_json": [str(path) for path in json_paths],
                     "json_rows": args.json_row or [],
+                    "json_row_specs": args.json_row_spec or [],
                     "selected_artifacts": len(benchmark_items),
                     "estimated_execution_time": "about 1-3 hours for 6 rows; larger sample sets scale roughly linearly with 24B Thinking latency",
                     "output_dir": str(output_dir),
@@ -129,7 +139,7 @@ def main() -> int:
                 max_per_docver=int(args.max_per_docver or 0),
             )
             selection_summary = _selection_summary(benchmark_items)
-            output_dir = args.output_root.expanduser().resolve() / _run_dir_name(sample_labels=[item.sample_label for item in benchmark_items], model=str(args.model), small_model=str(args.small_model))
+            output_dir = _benchmark_output_dir(args=args, benchmark_items=benchmark_items)
             print(
                 json.dumps(
                     {
@@ -242,6 +252,12 @@ def _process_items(*, benchmark_items: list[BenchmarkItem], events: list[Any], q
         )
 
 
+def _benchmark_output_dir(*, args: argparse.Namespace, benchmark_items: list[BenchmarkItem]) -> Path:
+    if args.output_dir:
+        return args.output_dir.expanduser().resolve()
+    return args.output_root.expanduser().resolve() / _run_dir_name(sample_labels=[item.sample_label for item in benchmark_items], model=str(args.model), small_model=str(args.small_model))
+
+
 def _parse_sample(value: str) -> tuple[str, int]:
     if ":" not in value:
         raise ValueError(f"sample must be municipality_slug:offset, got: {value}")
@@ -264,13 +280,27 @@ def _parse_docver_row(value: str) -> tuple[str, int, int]:
     return municipality_slug.strip(), int(docver_text), int(ordinal_text)
 
 
-def _json_benchmark_items(*, paths: list[Path], municipality_slug: str, json_rows: list[int], max_samples: int) -> list[BenchmarkItem]:
+def _parse_json_row_spec(value: str) -> tuple[int, int]:
+    parts = value.split(":")
+    if len(parts) != 2:
+        raise ValueError(f"json-row-spec must be path_index:source_ordinal, got: {value}")
+    path_index_text, ordinal_text = parts
+    return int(path_index_text), int(ordinal_text)
+
+
+def _json_benchmark_items(*, paths: list[Path], municipality_slug: str, json_rows: list[int], max_samples: int, json_row_specs: list[tuple[int, int]] | None = None) -> list[BenchmarkItem]:
     selected: list[BenchmarkItem] = []
     row_filter = set(json_rows)
+    exact_row_specs = set(json_row_specs or [])
     for path_index, path in enumerate(paths):
         all_artifacts = _topic_assignment_artifacts(path=path, source_document_version_id=900000 + path_index)
         artifacts = list(all_artifacts)
-        if row_filter:
+        path_exact_rows = {ordinal for exact_path_index, ordinal in exact_row_specs if exact_path_index == path_index}
+        if path_exact_rows:
+            artifacts = [artifact for artifact in artifacts if artifact.source_ordinal in path_exact_rows]
+        elif exact_row_specs:
+            artifacts = []
+        elif row_filter:
             artifacts = [artifact for artifact in artifacts if artifact.source_ordinal in row_filter]
         else:
             topic_bearing = [artifact for artifact in artifacts if bool(artifact.metadata.get("artifact_metadata", {}).get("topic_assignment", {}).get("is_topic_bearing"))]

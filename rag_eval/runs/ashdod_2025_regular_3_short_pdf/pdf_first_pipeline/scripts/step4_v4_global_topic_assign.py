@@ -4694,6 +4694,8 @@ def _active_subject_non_topic_reason(row: dict[str, Any]) -> str | None:
     normalized = _norm(text)
     if _looks_like_numeric_or_partial_evidence_fragment(row=row, subject=subject, text=text):
         return "active_numeric_or_partial_evidence_fragment"
+    if _looks_like_attribution_fragment(subject) and not _has_explicit_local_topic_marker(text):
+        return "active_person_attribution_subject"
     if _looks_like_dialogue_exchange_subject(subject=subject, text=text):
         return "active_conversational_subject"
     if _has_explicit_local_topic_marker(normalized) or _has_bounded_substantive_topic_signal(subject):
@@ -5649,7 +5651,7 @@ def _looks_like_attribution_fragment(text: str) -> bool:
     tokens = _hebrew_tokens(compact)
     if len(tokens) > 8:
         return False
-    if re.search(r"\b(?:עו\"ד|מר|גב'|גברת|הרב|ד\"ר)\b", compact) and not any(term in compact for term in ["בנושא", "הסכם", "מינוי", "תמיכות", "הקצאה"]):
+    if re.search(r"(?:^|\s)(?:עו\"ד|מר|גב['׳]?|גברת|הרב|ד\"ר)(?=\s|[-–]|$)", compact) and not any(term in compact for term in ["בנושא", "הסכם", "מינוי", "תמיכות", "הקצאה"]):
         return True
     return bool(re.fullmatch(r"[\d\s./()\-–:]+", compact))
 
@@ -5658,7 +5660,7 @@ def _looks_like_vote_fragment(text: str) -> bool:
     compact = _compact(text)
     if not compact:
         return False
-    vote_terms = ["הצביעו נגד", "הצביעו בעד", "לא השתתפו בהצבעה", "נמנע", "נמנעו", "בעד:", "נגד:", "מי בעד", "מי נגד"]
+    vote_terms = ["הצביעו נגד", "הצביעו בעד", "לא השתתפו בהצבעה", "נוכחות בהצבעה", "משתתפים בהצבעה", "השתתפו בהצבעה", "נמנע", "נמנעו", "בעד:", "נגד:", "מי בעד", "מי נגד"]
     if not any(term in compact for term in vote_terms):
         return False
     substantive_terms = ["בנושא", "הסכם", "הקצאה", "מינוי", "תמיכות", "תקציב", "היטל", "שירותי שמירה"]

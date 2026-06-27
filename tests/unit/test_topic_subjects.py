@@ -3148,6 +3148,218 @@ def test_process_topic_subject_v3_promotes_grounded_actual_result_evidence_witho
     assert row.quality_status == "accepted"
 
 
+def test_process_topic_subject_v3_repairs_non_decision_actual_result_conflict_without_judge() -> None:
+    formal_quote = "הדיון הסתיים בתוצאה סופית: תקציב הפעילות עבר."
+    artifact = _artifact_dataclass(
+        real_text=f"אני מבקש לאשר את תקציב הפעילות. {formal_quote}",
+        topic_label_he="תקציב הפעילות",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+    repair_failures: list[list[str]] = []
+    selector_calls: list[str] = []
+
+    class ActualResultConflictClient(MockTopicSubjectV3Client):
+        def extract_event(self, *, context, normalized_event, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "is_event": True,
+                "action_type_he": "אישור",
+                "action_type_confidence": 0.91,
+                "matter_he": "תקציב הפעילות",
+                "action_quote_he": "אני מבקש לאשר את תקציב הפעילות.",
+                "outcome_is_decision": False,
+                "outcome": {
+                    "outcome_type": "none",
+                    "outcome_label_he": "אושר",
+                    "outcome_quote_he": "המודל הסביר שיש תוצאה סופית אבל לא העתיק ציטוט מקור.",
+                    "outcome_evidence_classification": "actual_result",
+                    "confidence": 0.0,
+                },
+                "event_status": "approved",
+                "target_row_role": "action_anchor",
+                "confidence": 0.9,
+            }
+
+        def assess_event_evidence(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "entailment_status": "entailed",
+                "field_assessments": {
+                    "action_type_he": {"status": "entailed", "source_quote_he": event_payload["action_quote_he"]},
+                    "matter_he": {"status": "entailed", "source_quote_he": "תקציב הפעילות"},
+                    "outcome": {
+                        "status": "entailed",
+                        "source_quote_he": event_payload["outcome"]["outcome_quote_he"],
+                        "outcome_evidence_classification": "actual_result",
+                    },
+                },
+                "repair_required": False,
+                "failure_reasons": [],
+            }
+
+        def repair_formal_decision_evidence(self, *, context, normalized_event, event_payload, validation_failures, config):  # type: ignore[no-untyped-def]
+            repair_failures.append(list(validation_failures))
+            return {
+                **event_payload,
+                "outcome_is_decision": True,
+                "outcome": {
+                    "outcome_type": "approved",
+                    "outcome_label_he": "אישור",
+                    "outcome_summary_he": "תקציב הפעילות עבר",
+                    "outcome_quote_he": formal_quote,
+                    "outcome_evidence_classification": "actual_result",
+                    "confidence": 0.9,
+                    "limitations": [],
+                },
+                "lifecycle_evidence": [
+                    {
+                        "phase": "formal_result",
+                        "quote_he": formal_quote,
+                        "outcome_evidence_classification": "actual_result",
+                        "reason_he": "המודל סיווג את המשפט כתוצאה סופית של האירוע.",
+                    }
+                ],
+                "confidence": 0.9,
+            }
+
+        def select_formal_result_quote(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            selector_calls.append(event_payload["outcome"]["outcome_quote_he"])
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "selection_status": "keep_current",
+                "current_quote_role": "formal_result",
+                "best_formal_result_quote_he": formal_quote,
+                "best_quote_artifact_id": context.target_artifact.artifact_id,
+                "outcome_evidence_classification": "actual_result",
+                "failure_reasons": [],
+                "rationale_he": "הציטוט הנוכחי הוא תוצאה פורמלית.",
+            }
+
+        def judge_event(self, *, context, normalized_event, extraction_payload, config):  # type: ignore[no-untyped-def]
+            raise AssertionError("judge stage should not run")
+
+    event, row = process_topic_subject_v3_context(
+        context=context,
+        client=ActualResultConflictClient(),
+        config=TopicSubjectResearchConfig(run_v3_judge=False),
+    )
+
+    assert event is not None
+    assert repair_failures == [["actual_result_outcome_without_decision_flag"]]
+    assert selector_calls == [formal_quote]
+    assert event.event_payload["outcome_is_decision"] is True
+    assert event.event_payload["outcome"]["outcome_quote_he"] == formal_quote
+    assert event.event_payload["v3_formal_decision_repair"]["repair_applied"] is True
+    assert event.validation_status == "accepted"
+    assert row.quality_status == "accepted"
+
+
+def test_process_topic_subject_v3_selector_adds_missing_formal_result_lifecycle_without_judge() -> None:
+    request_quote = "אני מבקש לאשר את תקציב הפעילות."
+    vote_quote = "נמנעים2 , בעד22."
+    formal_quote = "בסיום הדיון נרשמה תוצאה סופית: תקציב הפעילות עבר."
+    artifact = _artifact_dataclass(
+        real_text=f"{request_quote} {vote_quote} {formal_quote}",
+        topic_label_he="תקציב הפעילות",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+    selector_calls: list[str] = []
+
+    class MissingLifecycleClient(MockTopicSubjectV3Client):
+        def extract_event(self, *, context, normalized_event, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "is_event": True,
+                "action_type_he": "אישור",
+                "action_type_confidence": 0.91,
+                "matter_he": "תקציב הפעילות",
+                "action_quote_he": request_quote,
+                "outcome_is_decision": True,
+                "outcome": {
+                    "outcome_type": "approved",
+                    "outcome_label_he": "אישור",
+                    "outcome_summary_he": "תקציב הפעילות עבר",
+                    "outcome_quote_he": vote_quote,
+                    "outcome_evidence_classification": "actual_result",
+                    "confidence": 0.9,
+                },
+                "event_status": "approved",
+                "target_row_role": "action_anchor",
+                "confidence": 0.9,
+            }
+
+        def assess_event_evidence(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "entailment_status": "entailed",
+                "field_assessments": {
+                    "action_type_he": {"status": "entailed", "source_quote_he": request_quote},
+                    "matter_he": {"status": "entailed", "source_quote_he": "תקציב הפעילות"},
+                    "outcome": {
+                        "status": "entailed",
+                        "source_quote_he": "המודל מזהה תוצאה סופית אבל לא העתיק ציטוט מקור.",
+                        "outcome_evidence_classification": "actual_result",
+                    },
+                },
+                "repair_required": False,
+                "failure_reasons": [],
+            }
+
+        def select_formal_result_quote(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            selector_calls.append(event_payload["outcome"]["outcome_quote_he"])
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "selection_status": "replace_current",
+                "current_quote_role": "vote_tally",
+                "best_formal_result_quote_he": formal_quote,
+                "best_quote_artifact_id": context.target_artifact.artifact_id,
+                "outcome_evidence_classification": "actual_result",
+                "lifecycle_evidence": [
+                    {
+                        "phase": "request_or_intent",
+                        "quote_he": request_quote,
+                        "outcome_evidence_classification": "proposal_or_intent",
+                    },
+                    {
+                        "phase": "formal_result",
+                        "quote_he": formal_quote,
+                        "outcome_evidence_classification": "actual_result",
+                    },
+                ],
+                "failure_reasons": [],
+                "rationale_he": "הציטוט השני מתאר את התוצאה הסופית, והראשון הוא רק בקשה.",
+            }
+
+        def repair_formal_decision_evidence(self, *, context, normalized_event, event_payload, validation_failures, config):  # type: ignore[no-untyped-def]
+            raise AssertionError("formal decision repair should not run when selector can add lifecycle evidence")
+
+        def judge_event(self, *, context, normalized_event, extraction_payload, config):  # type: ignore[no-untyped-def]
+            raise AssertionError("judge stage should not run")
+
+    event, row = process_topic_subject_v3_context(
+        context=context,
+        client=MissingLifecycleClient(),
+        config=TopicSubjectResearchConfig(run_v3_judge=False),
+    )
+
+    assert event is not None
+    assert selector_calls == [vote_quote]
+    assert event.event_payload["outcome"]["outcome_quote_he"] == formal_quote
+    assert any(
+        item["phase"] == "formal_result" and item["quote_he"] == formal_quote
+        for item in event.event_payload["lifecycle_evidence"]
+    )
+    assert event.event_payload["v3_formal_result_quote_selection"]["selection_applied"] is True
+    assert event.validation_status == "accepted"
+    assert row.quality_status == "accepted"
+
+
 def test_process_topic_subject_v3_selects_clearer_formal_result_quote_without_judge() -> None:
     formal_quote = "החלטה: המועצה החליטה לאשר את תקציב הפעילות."
     vote_quote = "נמנעים2 , בעד22."
@@ -3368,6 +3580,44 @@ def test_topic_subject_v3_selector_can_copy_grounded_candidate_segment_by_id() -
     assert merged["outcome"]["outcome_quote_he"] == segment["text_he"]
     assert merged["v3_formal_result_quote_selection"]["selected_quote_from_candidate_segment_id"] == segment["segment_id"]
     assert topic_subjects_module.topic_subject_v3_formal_result_quote_selection_failures(merged) == []
+
+
+def test_topic_subject_v3_selector_requires_lifecycle_when_creating_formal_result_evidence() -> None:
+    request_quote = "אני מבקש לאשר את תקציב הפעילות."
+    artifact = _artifact_dataclass(
+        real_text=f"{request_quote} בסיום הדיון נרשמה תוצאה סופית: תקציב הפעילות עבר.",
+        topic_label_he="תקציב הפעילות",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    merged = topic_subjects_module.merge_topic_subject_v3_formal_result_quote_selection(
+        context=context,
+        event_payload={
+            "is_event": True,
+            "action_type_he": "אישור",
+            "matter_he": "תקציב הפעילות",
+            "outcome_is_decision": True,
+            "outcome": {
+                "outcome_type": "approved",
+                "outcome_label_he": "אושר",
+                "outcome_quote_he": request_quote,
+                "outcome_evidence_classification": "actual_result",
+            },
+            "event_status": "approved",
+            "lifecycle_evidence": [],
+        },
+        selection_payload={
+            "selection_status": "replace_current",
+            "current_quote_role": "unknown",
+            "best_formal_result_quote_he": request_quote,
+            "outcome_evidence_classification": "actual_result",
+            "rationale_he": "המודל בחר בטעות את ציטוט הבקשה ללא ledger סמנטי.",
+        },
+    )
+
+    assert merged["v3_formal_result_quote_selection"]["selection_invalid_reason"] == "missing_formal_result_lifecycle_evidence"
+    assert topic_subjects_module.topic_subject_v3_formal_result_quote_selection_failures(merged) == ["formal_result_quote_selection_uncertain"]
+    assert "formal_decision_outcome_without_formal_evidence" in validate_topic_subject_v3_event_payload(context=context, event_payload=merged)
 
 
 def test_process_topic_subject_v3_reconsiders_non_event_with_grounded_action_quote() -> None:

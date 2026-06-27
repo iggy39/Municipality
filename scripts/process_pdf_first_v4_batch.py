@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -64,6 +65,9 @@ def main() -> int:
     parser.add_argument("--vision-model", default="mistral-small3.1:latest")
     parser.add_argument("--dictalm-model", default="dicta-il/DictaLM-3.0-24B-Thinking:bf16")
     parser.add_argument("--dicta-mode", choices=["auto", "disabled", "required"], default="auto", help="auto uses Dicta only for ambiguous topic items; disabled imports ambiguous topics as candidates")
+    parser.add_argument("--topic-subject-v3-mode", choices=["disabled", "problem_rows", "all"], default="disabled", help="Optional V3 subject/event hint pass before the final Step 4 run")
+    parser.add_argument("--topic-subject-v3-max-rows", type=int, default=24, help="Maximum rows sent to V3 in problem_rows mode. Use 0 for no limit.")
+    parser.add_argument("--topic-subject-v3-disable-judge", action="store_true", help="Disable the optional V3 judge stage to reduce runtime.")
     parser.add_argument("--ollama-base-url", default="http://localhost:11434")
     parser.add_argument("--timeout-seconds", type=float, default=180.0)
     parser.add_argument("--api-base-url", help="Optional running API base URL for /semantic/tree and /ask checks")
@@ -121,7 +125,7 @@ def main() -> int:
                         source_site_id = _source_site_id_for_docver(session=session, docver_id=docver_id)
                         existing_tree_json = _write_existing_tree_snapshot(session=session, run_dir=run_dir, source_site_id=source_site_id)
                         session.commit()
-                    paths = _run_v4_pipeline(scripts_dir=scripts_dir, pdf_path=pdf_path, run_dir=run_dir, docver_id=docver_id, packet_role=packet_role, pages=args.pages, vision_model=args.vision_model, dictalm_model=args.dictalm_model, dicta_mode=str(args.dicta_mode), ollama_base_url=args.ollama_base_url, timeout_seconds=args.timeout_seconds, attachment_context_paths=attachment_context_paths if packet_role == "protocol" else [], existing_tree_json=existing_tree_json)
+                    paths = _run_v4_pipeline(scripts_dir=scripts_dir, pdf_path=pdf_path, run_dir=run_dir, docver_id=docver_id, packet_role=packet_role, pages=args.pages, vision_model=args.vision_model, dictalm_model=args.dictalm_model, dicta_mode=str(args.dicta_mode), ollama_base_url=args.ollama_base_url, timeout_seconds=args.timeout_seconds, attachment_context_paths=attachment_context_paths if packet_role == "protocol" else [], existing_tree_json=existing_tree_json, topic_subject_v3_mode=str(args.topic_subject_v3_mode), topic_subject_v3_max_rows=int(args.topic_subject_v3_max_rows or 0), topic_subject_v3_disable_judge=bool(args.topic_subject_v3_disable_judge))
                     with Session(engine) as session:
                         extracted_id = _upsert_extracted_document(session=session, docver_id=docver_id, pages_json=paths["pages_json"])
                         session.commit()
@@ -162,7 +166,7 @@ def main() -> int:
     return 0
 
 
-def _run_v4_pipeline(*, scripts_dir: Path, pdf_path: Path, run_dir: Path, docver_id: int, packet_role: str, pages: str | None, vision_model: str, dictalm_model: str, dicta_mode: str, ollama_base_url: str, timeout_seconds: float, attachment_context_paths: list[Path], existing_tree_json: Path | None) -> dict[str, Path]:
+def _run_v4_pipeline(*, scripts_dir: Path, pdf_path: Path, run_dir: Path, docver_id: int, packet_role: str, pages: str | None, vision_model: str, dictalm_model: str, dicta_mode: str, ollama_base_url: str, timeout_seconds: float, attachment_context_paths: list[Path], existing_tree_json: Path | None, topic_subject_v3_mode: str = "disabled", topic_subject_v3_max_rows: int = 24, topic_subject_v3_disable_judge: bool = False) -> dict[str, Path]:
     outputs = run_dir / "pdf_first_pipeline" / "outputs"
     step1 = outputs / "step1_page_dissect"
     overlays = outputs / "step1_bbox_overlays"
@@ -171,10 +175,12 @@ def _run_v4_pipeline(*, scripts_dir: Path, pdf_path: Path, run_dir: Path, docver
     step3 = outputs / "step3_semantic_interpretation"
     step31 = outputs / "step3_1_structure_normalization"
     step35 = outputs / "step3_5_entity_grounding"
+    step4_initial = outputs / "step4_v4_global_topic_assignment_initial"
+    step4_v3 = outputs / "step4_v4_topic_subject_v3"
     step4 = outputs / "step4_v4_global_topic_assignment"
     step45 = outputs / "step4_5_v4_topic_validation"
     step5 = outputs / "step5_v4_retrieval_chunks"
-    for directory in (step1, overlays, qa, step2, step3, step31, step35, step4, step45, step5):
+    for directory in (step1, overlays, qa, step2, step3, step31, step35, step4_initial, step4_v3, step4, step45, step5):
         directory.mkdir(parents=True, exist_ok=True)
 
     page_args = ["--pages", pages] if pages else []
@@ -199,11 +205,221 @@ def _run_v4_pipeline(*, scripts_dir: Path, pdf_path: Path, run_dir: Path, docver
         attachment_args.extend(["--attachment-context-json", str(context_path)])
     existing_tree_args = ["--existing-tree-json", str(existing_tree_json)] if existing_tree_json else []
     topic_assignments = step4 / "topic_assignments.json"
-    _run_or_skip([sys.executable, str(scripts_dir / "step4_v4_global_topic_assign.py"), "--structure-units-json", str(structure_units), "--entity-facts-json", str(entity_facts), "--output-dir", str(step4), "--input-pdf", str(pdf_path), "--packet-role", packet_role, "--model", dictalm_model, "--dicta-mode", dicta_mode, "--ollama-base-url", ollama_base_url, "--timeout-seconds", str(timeout_seconds), *existing_tree_args, *attachment_args], outputs=[topic_assignments])
+    step4_command = [sys.executable, str(scripts_dir / "step4_v4_global_topic_assign.py"), "--structure-units-json", str(structure_units), "--entity-facts-json", str(entity_facts), "--input-pdf", str(pdf_path), "--packet-role", packet_role, "--model", dictalm_model, "--dicta-mode", dicta_mode, "--ollama-base-url", ollama_base_url, "--timeout-seconds", str(timeout_seconds), *existing_tree_args, *attachment_args]
+    if packet_role == "protocol" and topic_subject_v3_mode != "disabled":
+        initial_topic_assignments = step4_initial / "topic_assignments.json"
+        _run_or_skip([*step4_command, "--output-dir", str(step4_initial)], outputs=[initial_topic_assignments], allowed_returncodes={0, 2})
+        v3_hints_json = _run_topic_subject_v3_hints(
+            initial_topic_assignments=initial_topic_assignments,
+            output_dir=step4_v3,
+            mode=topic_subject_v3_mode,
+            max_rows=topic_subject_v3_max_rows,
+            dictalm_model=dictalm_model,
+            ollama_base_url=ollama_base_url,
+            timeout_seconds=timeout_seconds,
+            disable_judge=topic_subject_v3_disable_judge,
+        )
+        if v3_hints_json is not None:
+            _run_or_skip([*step4_command, "--output-dir", str(step4), "--topic-subject-v3-json", str(v3_hints_json)], outputs=[topic_assignments], allowed_returncodes={0, 2})
+        else:
+            _mirror_step4_output(source_dir=step4_initial, target_dir=step4)
+    else:
+        _run_or_skip([*step4_command, "--output-dir", str(step4)], outputs=[topic_assignments], allowed_returncodes={0, 2})
     canonical_topics = step45 / "canonical_topics.json"
     _run_or_skip([sys.executable, str(scripts_dir / "step4_5_v4_validate_topics.py"), "--topic-assignments-json", str(topic_assignments), "--output-dir", str(step45)], outputs=[canonical_topics])
     _run_or_skip([sys.executable, str(scripts_dir / "step5_v4_build_retrieval_chunks.py"), "--structure-units-json", str(structure_units), "--canonical-topics-json", str(canonical_topics), "--entity-facts-json", str(entity_facts), "--output-dir", str(step5), "--input-pdf", str(pdf_path), "--document-version-id", str(docver_id)], outputs=[step5 / "retrieval_chunks.json", step5 / "validation_report.json"], allowed_returncodes={0, 2})
     return {"pages_json": pages_json, "qa_report": qa_report, "visual_report": visual_report, "semantic_units_json": semantic_units, "structure_units_json": structure_units, "topic_assignments_json": topic_assignments, "canonical_topics_json": canonical_topics, "entity_facts_json": entity_facts, "retrieval_chunks_json": step5 / "retrieval_chunks.json", "step5_validation_json": step5 / "validation_report.json"}
+
+
+def _run_topic_subject_v3_hints(*, initial_topic_assignments: Path, output_dir: Path, mode: str, max_rows: int, dictalm_model: str, ollama_base_url: str, timeout_seconds: float, disable_judge: bool) -> Path | None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    selection_path = output_dir / "selected_rows.json"
+    selection = _write_topic_subject_v3_selection(topic_assignments_json=initial_topic_assignments, output_path=selection_path, mode=mode, max_rows=max_rows)
+    selected_rows = selection.get("selected_rows") if isinstance(selection.get("selected_rows"), list) else []
+    print(json.dumps({"run": "topic_subject_v3_selection", "selected_rows": len(selected_rows), "selection_json": str(selection_path)}, ensure_ascii=False), flush=True)
+    if not selected_rows:
+        return None
+    research_json = output_dir / "v3_research_events_subjects.json"
+    command = [
+        sys.executable,
+        str(SCRIPTS_ROOT / "benchmark_topic_subject_v3_models.py"),
+        "--topic-assignments-json",
+        str(initial_topic_assignments),
+        "--json-max-samples",
+        "0",
+        "--json-muni",
+        _municipality_slug_from_path(initial_topic_assignments),
+        "--output-dir",
+        str(output_dir),
+        "--model",
+        dictalm_model,
+        "--small-model",
+        dictalm_model,
+        "--ollama-base-url",
+        ollama_base_url,
+        "--timeout-seconds",
+        str(max(300.0, float(timeout_seconds))),
+    ]
+    for row in selected_rows:
+        command.extend(["--json-row-spec", f"0:{int(row['source_ordinal'])}"])
+    if disable_judge:
+        command.append("--disable-judge")
+    _run_or_skip(command, outputs=[research_json])
+    return research_json if research_json.exists() and research_json.stat().st_size > 0 else None
+
+
+def _write_topic_subject_v3_selection(*, topic_assignments_json: Path, output_path: Path, mode: str, max_rows: int) -> dict[str, Any]:
+    payload = json.loads(topic_assignments_json.read_text(encoding="utf-8"))
+    items = [row for row in payload.get("items") or [] if isinstance(row, dict)]
+    assignments = [row for row in payload.get("topic_assignments") or [] if isinstance(row, dict)]
+    assignment_by_id = {str(row.get("structure_unit_id") or ""): row for row in assignments}
+    selected: list[dict[str, Any]] = []
+    for source_ordinal, item in enumerate(items):
+        assignment = assignment_by_id.get(str(item.get("structure_unit_id") or ""), {})
+        reason = _topic_subject_v3_selection_reason(item=item, assignment=assignment, mode=mode)
+        if not reason:
+            continue
+        selected.append(
+            {
+                "source_ordinal": source_ordinal,
+                "structure_unit_id": item.get("structure_unit_id"),
+                "reason": reason,
+                "row_type": item.get("row_type"),
+                "root_topic_id": assignment.get("root_topic_id"),
+                "topic_node_status": assignment.get("topic_node_status"),
+                "topic_subject_he": assignment.get("topic_subject_he") or item.get("topic_subject_he"),
+            }
+        )
+    selected.sort(key=lambda row: (_v3_selection_priority(str(row.get("reason") or "")), int(row.get("source_ordinal") or 0)))
+    limit = max(0, int(max_rows or 0))
+    if mode == "problem_rows" and limit > 0:
+        selected = selected[:limit]
+    summary = {
+        "topic_assignments_json": str(topic_assignments_json),
+        "mode": mode,
+        "max_rows": limit,
+        "selected_count": len(selected),
+        "selected_rows": selected,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
+
+
+def _topic_subject_v3_selection_reason(*, item: dict[str, Any], assignment: dict[str, Any], mode: str) -> str | None:
+    raw = _compact_text(_join_unique([item.get("unit_raw_text"), item.get("raw_text"), item.get("topic_identification_context"), item.get("topic_headline_he")]))
+    if not raw:
+        return None
+    if mode == "all":
+        return "all_rows"
+    if mode != "problem_rows":
+        return None
+    status = str(assignment.get("topic_node_status") or "")
+    review_status = str(assignment.get("topic_review_status") or "")
+    route = str(assignment.get("topic_assignment_route") or "")
+    root_topic_id = str(assignment.get("root_topic_id") or "")
+    subject = _compact_text(assignment.get("topic_subject_he") or item.get("topic_subject_he"))
+    row_type = str(item.get("row_type") or assignment.get("row_type") or "")
+    if status in {"candidate", "needs_review"} or review_status == "needs_review":
+        return "candidate_or_review"
+    if any(marker in route for marker in ("weak_candidate", "ambiguous", "model_error", "model_omitted", "missing_after_retry", "topic_subject_rejected")):
+        return "weak_assignment_route"
+    if root_topic_id in {"root_geo", "root_people_roles"} and (status != "active" or "fallback" in route):
+        return "generic_fallback_needs_confirmation"
+    if root_topic_id in {"root_agenda_queries", "root_order_proposals", "root_mayor_updates"} and _v3_text_has_substantive_topic_marker(raw):
+        return "procedural_root_with_substantive_marker"
+    if assignment.get("is_topic_bearing") is True and _v3_subject_needs_semantic_help(subject=subject, evidence_text=raw):
+        return "weak_or_dialogue_subject"
+    if row_type in {"fragment", "attribution_fragment", "vote_or_result", "metadata"} and _v3_text_has_substantive_topic_marker(raw):
+        return "non_topic_with_substantive_marker"
+    return None
+
+
+def _v3_selection_priority(reason: str) -> int:
+    order = {
+        "candidate_or_review": 0,
+        "weak_assignment_route": 1,
+        "weak_or_dialogue_subject": 2,
+        "procedural_root_with_substantive_marker": 3,
+        "generic_fallback_needs_confirmation": 4,
+        "non_topic_with_substantive_marker": 5,
+        "all_rows": 99,
+    }
+    return order.get(reason, 50)
+
+
+def _v3_text_has_substantive_topic_marker(text: str) -> bool:
+    normalized = _norm_text(text)
+    if not normalized:
+        return False
+    topic_markers = ("בנושא", "הנדון", "בעניין", "לעניין", "נושא לדיון", "הצעה לסדר")
+    action_markers = ("אישור", "הסכם", "התקשרות", "מינוי", "הקצאה", "תקציב", "תכנית", "תוכנית", "מכרז", "ארנונה", "שדרוג", "הקמת", "טיפול", "סיוע")
+    return any(marker in normalized for marker in topic_markers) or any(marker in normalized for marker in action_markers)
+
+
+def _v3_subject_needs_semantic_help(*, subject: str, evidence_text: str) -> bool:
+    normalized = _norm_text(subject)
+    if not normalized:
+        return True
+    tokens = _hebrew_tokens(normalized)
+    if len(tokens) <= 1:
+        return True
+    if len(tokens) <= 4 and any(cue in normalized for cue in ("למעלה מ", "אנחנו", "אני", "צריך", "צריכים", "אפשר", "הודענו", "אומרים")):
+        return True
+    if re.search(r"\b(?:מר|גב['׳]?|גברת|עו[\"”]?ד|ד[\"”]?ר)\b", subject) and not _v3_text_has_substantive_topic_marker(subject):
+        return True
+    if "?" in evidence_text and len(tokens) <= 6 and not _v3_text_has_substantive_topic_marker(subject):
+        return True
+    return False
+
+
+def _mirror_step4_output(*, source_dir: Path, target_dir: Path) -> None:
+    if (target_dir / "topic_assignments.json").exists():
+        return
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for source in source_dir.iterdir():
+        target = target_dir / source.name
+        if target.exists():
+            continue
+        if source.is_dir():
+            shutil.copytree(source, target)
+        else:
+            shutil.copy2(source, target)
+
+
+def _municipality_slug_from_path(path: Path) -> str:
+    text = str(path)
+    if "tel_aviv" in text:
+        return "tel_aviv"
+    if "ashdod" in text:
+        return "ashdod"
+    if "jerusalem" in text:
+        return "jerusalem"
+    return "json"
+
+
+def _compact_text(value: Any) -> str:
+    return " ".join(re.sub(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", str(value or "")).split())
+
+
+def _norm_text(value: Any) -> str:
+    return _compact_text(value).replace("\u05f4", '"').replace("\u05f3", "'")
+
+
+def _hebrew_tokens(value: Any) -> list[str]:
+    return re.findall(r"[\u0590-\u05FF]{2,}", _norm_text(value))
+
+
+def _join_unique(values: list[Any]) -> str:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _compact_text(value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return "\n".join(out)
 
 
 def _run_v4_import(*, docver_id: int, source_kind: str, retrieval_chunks_json: Path, model_name: str) -> dict[str, Any]:

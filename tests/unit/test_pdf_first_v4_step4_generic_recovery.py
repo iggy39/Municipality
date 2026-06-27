@@ -2075,6 +2075,39 @@ def test_personal_announcement_handoff_is_non_topic() -> None:
     assert step4._non_topic_protocol_reason(headline=text, raw_text=text, structural_role="outline_item", packet_role="protocol") == "personal_announcement_handoff"
 
 
+def test_person_attribution_only_row_is_not_topic_item() -> None:
+    unit = {
+        "structure_unit_id": "u1",
+        "structural_role": "body",
+        "raw_text": "גב' מזל אסולין- רכזת וועדה על סדר היום",
+    }
+    contract = step4._topic_contract_from_headline(unit["raw_text"], structural_role="body", packet_role="protocol")
+
+    assert step4._row_type_for_unit(unit=unit, topic_contract=contract, packet_role="protocol") == "attribution_fragment"
+
+
+def test_active_person_attribution_subject_is_demoted_after_assignment() -> None:
+    row = {
+        "packet_role": "protocol",
+        "row_type": "topic_item",
+        "structural_role": "body",
+        "root_topic_id": "root_people_roles",
+        "topic_node_status": "active",
+        "is_topic_bearing": True,
+        "topic_subject_he": "גב' מזל אסולין",
+        "topic_identification_context": "גב' מזל אסולין- רכזת וועדה על סדר היום",
+        "topic_assignment_route": "dictalm_v4_global_tree",
+    }
+
+    assert step4._post_assignment_non_topic_reason(row) == "active_person_attribution_subject"
+
+
+def test_vote_attendance_text_is_vote_fragment() -> None:
+    text = "בביתן הצפוני, נמל יפו תל אביב נוכחות בהצבעה חברי המועצה"
+
+    assert step4._looks_like_vote_fragment(text) is True
+
+
 def test_canonical_topic_label_rejects_clause_fragment() -> None:
     canonical, reason = step4.canonicalize_topic_label("כוח אדם, שנוגעת לכוח אדם")
 

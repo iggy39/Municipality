@@ -4452,26 +4452,36 @@ def process_topic_subject_v3_context(
                 context=context,
                 action_confidence_threshold=config.action_confidence_threshold,
             )
-    if bool(event_payload.get("outcome_is_decision")) and topic_subject_v3_has_semantic_actual_result_evidence(event_payload) and not evidence_stage_failures:
-        for _selection_attempt in range(3):
-            quote_selection = client.select_formal_result_quote(
-                context=context,
-                normalized_event=normalized_event,
-                event_payload=event_payload,
-                config=config,
-            )
-            event_payload = normalize_topic_subject_v3_event_payload(
-                payload=merge_topic_subject_v3_formal_result_quote_selection(
+    def select_formal_result_quote_if_ready(current_payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+        current_failures: list[str] = []
+        current_outcome = current_payload.get("outcome") if isinstance(current_payload.get("outcome"), dict) else {}
+        should_select = bool(current_payload.get("outcome_is_decision")) and not evidence_stage_failures and (
+            topic_subject_v3_has_semantic_actual_result_evidence(current_payload)
+            or compact_text(current_outcome.get("outcome_evidence_classification") or current_payload.get("outcome_evidence_classification")) == "actual_result"
+        )
+        if should_select:
+            for _selection_attempt in range(3):
+                quote_selection = client.select_formal_result_quote(
                     context=context,
-                    event_payload=event_payload,
-                    selection_payload=quote_selection,
-                ),
-                context=context,
-                action_confidence_threshold=config.action_confidence_threshold,
-            )
-            selection_stage_failures = topic_subject_v3_formal_result_quote_selection_failures(event_payload)
-            if not selection_stage_failures:
-                break
+                    normalized_event=normalized_event,
+                    event_payload=current_payload,
+                    config=config,
+                )
+                current_payload = normalize_topic_subject_v3_event_payload(
+                    payload=merge_topic_subject_v3_formal_result_quote_selection(
+                        context=context,
+                        event_payload=current_payload,
+                        selection_payload=quote_selection,
+                    ),
+                    context=context,
+                    action_confidence_threshold=config.action_confidence_threshold,
+                )
+                current_failures = topic_subject_v3_formal_result_quote_selection_failures(current_payload)
+                if not current_failures:
+                    break
+        return current_payload, current_failures
+
+    event_payload, selection_stage_failures = select_formal_result_quote_if_ready(event_payload)
 
     local_failures = validate_topic_subject_v3_event_payload(context=context, event_payload=event_payload)
     local_failures = unique_strings([*local_failures, *evidence_stage_failures, *selection_stage_failures])
@@ -4479,7 +4489,13 @@ def process_topic_subject_v3_context(
         evidence_metadata = event_payload.get("v3_evidence_entailment") if isinstance(event_payload.get("v3_evidence_entailment"), dict) else {}
         if not evidence_assessment.get("error_code") and not bool(evidence_metadata.get("repair_applied")):
             local_failures = unique_strings([*local_failures, *topic_subject_v3_unrepaired_evidence_failures(assessment_payload=evidence_assessment, event_payload=event_payload)])
-    if "formal_decision_outcome_without_formal_evidence" in local_failures and bool(event_payload.get("is_event")) and not evidence_stage_failures:
+    if any(
+        reason in local_failures
+        for reason in (
+            "formal_decision_outcome_without_formal_evidence",
+            "actual_result_outcome_without_decision_flag",
+        )
+    ) and bool(event_payload.get("is_event")) and not evidence_stage_failures:
         decision_repair = client.repair_formal_decision_evidence(
             context=context,
             normalized_event=normalized_event,
@@ -4496,6 +4512,7 @@ def process_topic_subject_v3_context(
                 context=context,
                 action_confidence_threshold=config.action_confidence_threshold,
             )
+            event_payload, selection_stage_failures = select_formal_result_quote_if_ready(event_payload)
             local_failures = unique_strings([*validate_topic_subject_v3_event_payload(context=context, event_payload=event_payload), *evidence_stage_failures, *selection_stage_failures])
             if "formal_decision_outcome_without_formal_evidence" in local_failures:
                 repair_metadata = dict(event_payload.get("v3_formal_decision_repair") or {})
@@ -5843,10 +5860,16 @@ def merge_topic_subject_v3_formal_result_quote_selection(*, context: TopicSubjec
 
     selected_artifact_id = topic_subject_v3_quote_artifact_id(context=context, quote=selected_quote) or compact_text(selection_payload.get("best_quote_artifact_id"))
     selected_lifecycle = topic_subject_v3_grounded_selection_lifecycle(context=context, selection_payload=selection_payload)
-    if not any(
+    selected_lifecycle_has_formal_result = any(
         compact_text(item.get("phase")) == "formal_result" and topic_subject_v3_evidence_quote_text(item.get("quote_he")) == selected_quote
         for item in selected_lifecycle
-    ):
+    )
+    if not topic_subject_v3_has_semantic_actual_result_evidence(event_payload) and not selected_lifecycle_has_formal_result:
+        metadata["selection_invalid"] = True
+        metadata["selection_invalid_reason"] = "missing_formal_result_lifecycle_evidence"
+        merged["v3_formal_result_quote_selection"] = metadata
+        return merged
+    if not selected_lifecycle_has_formal_result:
         selected_lifecycle.append(
             {
                 "phase": "formal_result",

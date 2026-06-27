@@ -32,6 +32,9 @@ def main() -> int:
     parser.add_argument("--vision-model", default="mistral-small3.1:latest")
     parser.add_argument("--dictalm-model", default="dicta-il/DictaLM-3.0-24B-Thinking:bf16")
     parser.add_argument("--dicta-mode", choices=["auto", "disabled", "required"], default="auto")
+    parser.add_argument("--topic-subject-v3-mode", choices=["disabled", "problem_rows", "all"], default="problem_rows")
+    parser.add_argument("--topic-subject-v3-max-rows", type=int, default=24)
+    parser.add_argument("--topic-subject-v3-disable-judge", action="store_true")
     parser.add_argument("--ollama-base-url", default="http://localhost:11434")
     parser.add_argument("--timeout-seconds", type=float, default=180.0)
     parser.add_argument("--heartbeat-seconds", type=float, default=120.0)
@@ -63,7 +66,7 @@ def main() -> int:
     manifest_path = output_root / "v4_shadow_status.jsonl"
     completed = set() if args.force else batch._completed_keys(manifest_path)
     batch._run_cmd = _heartbeat_run_cmd(args.heartbeat_seconds)  # type: ignore[method-assign]
-    batch._run_or_skip = _shadow_run_or_skip  # type: ignore[method-assign]
+    batch._run_or_skip = _shadow_run_or_skip_factory(force=bool(args.force))  # type: ignore[method-assign]
 
     for pdf_index, pdf_path in enumerate(pdfs, start=1):
         key = batch._item_key(pdf_path)
@@ -89,6 +92,9 @@ def main() -> int:
                 timeout_seconds=float(args.timeout_seconds),
                 attachment_context_paths=[],
                 existing_tree_json=None,
+                topic_subject_v3_mode=str(args.topic_subject_v3_mode),
+                topic_subject_v3_max_rows=int(args.topic_subject_v3_max_rows or 0),
+                topic_subject_v3_disable_judge=bool(args.topic_subject_v3_disable_judge),
             )
             stats = batch._collect_v4_stats(paths=paths, import_result={})
             status = {
@@ -153,15 +159,18 @@ def _heartbeat_run_cmd(heartbeat_seconds: float):
     return run_cmd
 
 
-def _shadow_run_or_skip(command: list[str], *, outputs: list[Path], capture: bool = False, allowed_returncodes: set[int] | None = None) -> subprocess.CompletedProcess[str] | None:
-    if outputs and all(path.exists() and path.stat().st_size > 0 for path in outputs):
+def _shadow_run_or_skip_factory(*, force: bool):
+    def run_or_skip(command: list[str], *, outputs: list[Path], capture: bool = False, allowed_returncodes: set[int] | None = None) -> subprocess.CompletedProcess[str] | None:
+        if not force and outputs and all(path.exists() and path.stat().st_size > 0 for path in outputs):
+            name = Path(command[1]).name if len(command) > 1 else command[0]
+            print(json.dumps({"skip_existing": name}, ensure_ascii=False), flush=True)
+            return None
         name = Path(command[1]).name if len(command) > 1 else command[0]
-        print(json.dumps({"skip_existing": name}, ensure_ascii=False), flush=True)
-        return None
-    name = Path(command[1]).name if len(command) > 1 else command[0]
-    if allowed_returncodes is None and name in {"step4_v4_global_topic_assign.py", "step4_5_v4_validate_topics.py"}:
-        allowed_returncodes = {0, 2}
-    return batch._run_cmd(command, capture=capture, allowed_returncodes=allowed_returncodes)
+        if allowed_returncodes is None and name in {"step4_v4_global_topic_assign.py", "step4_5_v4_validate_topics.py"}:
+            allowed_returncodes = {0, 2}
+        return batch._run_cmd(command, capture=capture, allowed_returncodes=allowed_returncodes)
+
+    return run_or_skip
 
 
 def _compact_status(status: dict) -> dict:
