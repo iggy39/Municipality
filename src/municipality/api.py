@@ -17,6 +17,10 @@ import httpx
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, inspect, or_, select
 
+from municipality.admin_ingestion_coverage import (
+    build_admin_ingestion_coverage,
+    render_admin_ingestion_coverage_page,
+)
 from municipality.chunking import normalize_for_search
 from municipality.db import build_engine, build_session_factory
 from municipality.embeddings import ChunkEmbeddingService, EmbeddingReranker
@@ -3883,6 +3887,17 @@ def rebuild_decision_gis_links(limit: int | None = None, db=Depends(get_db)) -> 
         "matched_decisions": summary.matched_decisions,
         "inserted_or_updated": summary.inserted_or_updated,
     }
+
+
+@app.get("/api/admin/ingestion-coverage")
+def admin_ingestion_coverage(db=Depends(get_db)) -> dict[str, Any]:
+    return build_admin_ingestion_coverage(db)
+
+
+@app.get("/admin/ingestion-coverage", response_class=HTMLResponse)
+def admin_ingestion_coverage_page(db=Depends(get_db)) -> HTMLResponse:
+    payload = build_admin_ingestion_coverage(db)
+    return HTMLResponse(render_admin_ingestion_coverage_page(payload), headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/ui/rag-dashboard/query")
