@@ -1458,7 +1458,7 @@ class OllamaTopicSubjectV3Client(OllamaTopicSubjectClient):
             ),
             system_prompt="You judge whether a Hebrew municipal extraction is entailed by supplied source evidence. Use short source quotes only. Return strict JSON only.",
             config=config,
-            num_predict=1400,
+            num_predict=2400,
         )
 
     def repair_formal_decision_evidence(
@@ -1480,7 +1480,7 @@ class OllamaTopicSubjectV3Client(OllamaTopicSubjectClient):
             ),
             system_prompt="Repair unsupported formal-decision inferences in Hebrew municipal extraction. Return strict JSON only.",
             config=config,
-            num_predict=1600,
+            num_predict=2600,
         )
 
     def select_formal_result_quote(
@@ -4288,6 +4288,104 @@ def topic_subject_v3_has_semantic_actual_result_evidence(event_payload: dict[str
     return classification == "actual_result" and has_formal_result
 
 
+def topic_subject_v3_promote_actual_result_decision_flag(*, context: TopicSubjectV3EventContext, event_payload: dict[str, Any], repair_reason: str) -> dict[str, Any]:
+    if not bool(event_payload.get("is_event")) or bool(event_payload.get("outcome_is_decision")):
+        return event_payload
+    if not topic_subject_v3_has_semantic_actual_result_evidence(event_payload):
+        return event_payload
+    repaired = dict(event_payload)
+    outcome = dict(repaired.get("outcome") if isinstance(repaired.get("outcome"), dict) else {})
+    outcome_type = compact_text(outcome.get("outcome_type"))
+    if outcome_type in {"", "none"}:
+        mapped_outcome = TOPIC_SUBJECT_V3_DECISION_EVENT_STATUS_OUTCOME_MAP.get(compact_text(repaired.get("event_status")))
+        if mapped_outcome is not None:
+            outcome["outcome_type"] = mapped_outcome[0]
+            if not compact_text(outcome.get("outcome_label_he")):
+                outcome["outcome_label_he"] = mapped_outcome[1]
+        else:
+            outcome["outcome_type"] = "unknown"
+    if not compact_text(outcome.get("outcome_summary_he")):
+        outcome["outcome_summary_he"] = compact_text(outcome.get("outcome_label_he")) or compact_text(outcome.get("outcome_quote_he"))[:300]
+    repaired["outcome_is_decision"] = True
+    repaired["outcome"] = outcome
+    repaired["event_phase"] = topic_subject_v3_event_phase(
+        context=context,
+        is_event=True,
+        action_type=compact_text(repaired.get("action_type_he")),
+        outcome_is_decision=True,
+    )
+    repaired["semantic_repairs"] = unique_strings(
+        [
+            *[compact_text(item) for item in repaired.get("semantic_repairs") or [] if compact_text(item)],
+            "promoted_decision_flag_from_semantic_actual_result_evidence",
+        ]
+    )
+    metadata = dict(repaired.get("v3_decision_flag_consistency_repair") or {})
+    metadata["repair_applied"] = True
+    metadata["repair_reason"] = repair_reason
+    metadata["evidence_basis"] = "grounded_semantic_formal_result_lifecycle_evidence"
+    repaired["v3_decision_flag_consistency_repair"] = metadata
+    return repaired
+
+
+def topic_subject_v3_remove_unentailed_insufficient_context_event(
+    *,
+    context: TopicSubjectV3EventContext,
+    normalized_event: dict[str, Any],
+    event_payload: dict[str, Any],
+    assessment_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not bool(event_payload.get("is_event")) or not isinstance(assessment_payload, dict) or assessment_payload.get("error_code"):
+        return event_payload
+    role = compact_text(normalized_event.get("target_row_role") or event_payload.get("target_row_role"))
+    if role not in {"insufficient_context", "document_fragment", "structural_metadata", "duplicate_reference"}:
+        return event_payload
+    action_status = topic_subject_v3_evidence_field_status(assessment_payload=assessment_payload, field_name="action_type_he")
+    matter_status = topic_subject_v3_evidence_field_status(assessment_payload=assessment_payload, field_name="matter_he")
+    if action_status != "not_entailed" or matter_status != "not_entailed":
+        return event_payload
+    repaired = dict(event_payload)
+    repaired.update(
+        {
+            "is_event": False,
+            "action_type_he": "",
+            "action_type_norm": "",
+            "action_type_status": "non_event",
+            "action_subtype_he": "",
+            "action_subtype_norm": "",
+            "other_action_type_he": "",
+            "other_action_type_norm": "",
+            "matter_he": "",
+            "matter_norm": "",
+            "matter_display_he": "",
+            "matter_identifiers": [],
+            "outcome_is_decision": False,
+            "outcome": None,
+            "event_phase": "not_part_of_event",
+            "event_status": "not_event",
+            "target_row_role": role or "insufficient_context",
+            "confidence": 0.0,
+            "lifecycle_evidence": [],
+            "action_quote_he": "",
+            "action_focus_quote_he": "",
+            "primary_action_span_ids": [],
+            "primary_outcome_span_ids": [],
+        }
+    )
+    evidence_metadata = dict(repaired.get("v3_evidence_entailment") or {})
+    evidence_metadata["event_removed_by_evidence"] = True
+    evidence_metadata["event_removed_reason"] = "target_row_role_insufficient_and_action_matter_not_entailed"
+    repaired["v3_evidence_entailment"] = evidence_metadata
+    repaired["row_roles"] = [
+        {
+            "artifact_id": context.target_artifact.artifact_id,
+            "row_role": role or "insufficient_context",
+            "role_reason_he": "semantic evidence did not entail the extracted action or matter for the target row",
+        }
+    ]
+    return repaired
+
+
 def topic_subject_v3_apply_normalized_event_defaults(
     *,
     extraction_payload: dict[str, Any],
@@ -4452,6 +4550,16 @@ def process_topic_subject_v3_context(
                 context=context,
                 action_confidence_threshold=config.action_confidence_threshold,
             )
+            event_payload = normalize_topic_subject_v3_event_payload(
+                payload=topic_subject_v3_remove_unentailed_insufficient_context_event(
+                    context=context,
+                    normalized_event=normalized_event,
+                    event_payload=event_payload,
+                    assessment_payload=evidence_assessment,
+                ),
+                context=context,
+                action_confidence_threshold=config.action_confidence_threshold,
+            )
     def select_formal_result_quote_if_ready(current_payload: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         current_failures: list[str] = []
         current_outcome = current_payload.get("outcome") if isinstance(current_payload.get("outcome"), dict) else {}
@@ -4481,11 +4589,20 @@ def process_topic_subject_v3_context(
                     break
         return current_payload, current_failures
 
+    event_payload = normalize_topic_subject_v3_event_payload(
+        payload=topic_subject_v3_promote_actual_result_decision_flag(
+            context=context,
+            event_payload=event_payload,
+            repair_reason="pre_validation_semantic_actual_result_consistency",
+        ),
+        context=context,
+        action_confidence_threshold=config.action_confidence_threshold,
+    )
     event_payload, selection_stage_failures = select_formal_result_quote_if_ready(event_payload)
 
     local_failures = validate_topic_subject_v3_event_payload(context=context, event_payload=event_payload)
     local_failures = unique_strings([*local_failures, *evidence_stage_failures, *selection_stage_failures])
-    if evidence_assessment is not None:
+    if evidence_assessment is not None and bool(event_payload.get("is_event")):
         evidence_metadata = event_payload.get("v3_evidence_entailment") if isinstance(event_payload.get("v3_evidence_entailment"), dict) else {}
         if not evidence_assessment.get("error_code") and not bool(evidence_metadata.get("repair_applied")):
             local_failures = unique_strings([*local_failures, *topic_subject_v3_unrepaired_evidence_failures(assessment_payload=evidence_assessment, event_payload=event_payload)])
@@ -4509,6 +4626,15 @@ def process_topic_subject_v3_context(
         else:
             event_payload = normalize_topic_subject_v3_event_payload(
                 payload=merge_topic_subject_v3_formal_decision_repair(event_payload=event_payload, repair_payload=decision_repair),
+                context=context,
+                action_confidence_threshold=config.action_confidence_threshold,
+            )
+            event_payload = normalize_topic_subject_v3_event_payload(
+                payload=topic_subject_v3_promote_actual_result_decision_flag(
+                    context=context,
+                    event_payload=event_payload,
+                    repair_reason="post_formal_decision_repair_semantic_actual_result_consistency",
+                ),
                 context=context,
                 action_confidence_threshold=config.action_confidence_threshold,
             )
@@ -4943,6 +5069,7 @@ def normalize_topic_subject_v3_event_payload(
         "v3_formal_decision_repair": raw.get("v3_formal_decision_repair") if isinstance(raw.get("v3_formal_decision_repair"), dict) else None,
         "v3_formal_result_quote_selection": raw.get("v3_formal_result_quote_selection") if isinstance(raw.get("v3_formal_result_quote_selection"), dict) else None,
         "v3_linked_outcome_local_repair": raw.get("v3_linked_outcome_local_repair") if isinstance(raw.get("v3_linked_outcome_local_repair"), dict) else None,
+        "v3_decision_flag_consistency_repair": raw.get("v3_decision_flag_consistency_repair") if isinstance(raw.get("v3_decision_flag_consistency_repair"), dict) else None,
         "raw_model_payload": compact_payload_for_prompt(payload),
     }
     return repair_topic_subject_v3_request_outcome_payload(context=context, event_payload=normalized)
@@ -4976,6 +5103,8 @@ def topic_subject_v3_event_phase(*, context: TopicSubjectV3EventContext, is_even
 
 def repair_topic_subject_v3_request_outcome_payload(*, context: TopicSubjectV3EventContext, event_payload: dict[str, Any]) -> dict[str, Any]:
     if not bool(event_payload.get("is_event")) or not bool(event_payload.get("outcome_is_decision")):
+        return event_payload
+    if topic_subject_v3_has_semantic_actual_result_evidence(event_payload):
         return event_payload
     outcome = event_payload.get("outcome") if isinstance(event_payload.get("outcome"), dict) else {}
     quote = compact_text(outcome.get("outcome_quote_he"))

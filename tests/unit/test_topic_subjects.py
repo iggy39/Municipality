@@ -3257,6 +3257,149 @@ def test_process_topic_subject_v3_repairs_non_decision_actual_result_conflict_wi
     assert row.quality_status == "accepted"
 
 
+def test_process_topic_subject_v3_promotes_actual_result_flag_after_repair_without_judge() -> None:
+    formal_quote = "תוצאה סופית נרשמה: הטיפול עבר לשלב ביצוע."
+    artifact = _artifact_dataclass(
+        real_text=f"הצעה לסדר בנושא פינוי פסולת. {formal_quote}",
+        topic_label_he="פינוי פסולת",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    class ContradictoryRepairClient(MockTopicSubjectV3Client):
+        def extract_event(self, *, context, normalized_event, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "is_event": True,
+                "action_type_he": "הצעה לסדר יום",
+                "action_type_confidence": 0.9,
+                "matter_he": "פינוי פסולת",
+                "action_quote_he": "הצעה לסדר בנושא פינוי פסולת.",
+                "outcome_is_decision": False,
+                "outcome": {
+                    "outcome_type": "approved",
+                    "outcome_label_he": "אישור",
+                    "outcome_summary_he": "הטיפול עבר לשלב ביצוע",
+                    "outcome_quote_he": formal_quote,
+                    "outcome_evidence_classification": "actual_result",
+                    "confidence": 0.9,
+                },
+                "event_status": "approved",
+                "target_row_role": "action_anchor",
+                "confidence": 0.9,
+            }
+
+        def assess_event_evidence(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "entailment_status": "entailed",
+                "field_assessments": {
+                    "action_type_he": {"status": "entailed", "source_quote_he": "הצעה לסדר בנושא פינוי פסולת."},
+                    "matter_he": {"status": "entailed", "source_quote_he": "פינוי פסולת"},
+                    "outcome": {"status": "not_applicable", "source_quote_he": None},
+                },
+                "repair_required": False,
+                "failure_reasons": [],
+            }
+
+        def repair_formal_decision_evidence(self, *, context, normalized_event, event_payload, validation_failures, config):  # type: ignore[no-untyped-def]
+            return {
+                **event_payload,
+                "outcome_is_decision": False,
+                "outcome": {
+                    **event_payload["outcome"],
+                    "outcome_evidence_classification": "actual_result",
+                    "outcome_quote_he": formal_quote,
+                },
+                "lifecycle_evidence": [
+                    {
+                        "phase": "formal_result",
+                        "quote_he": formal_quote,
+                        "outcome_evidence_classification": "actual_result",
+                    }
+                ],
+            }
+
+        def judge_event(self, *, context, normalized_event, extraction_payload, config):  # type: ignore[no-untyped-def]
+            raise AssertionError("judge stage should not run")
+
+    event, row = process_topic_subject_v3_context(
+        context=context,
+        client=ContradictoryRepairClient(),
+        config=TopicSubjectResearchConfig(run_v3_judge=False),
+    )
+
+    assert event is not None
+    assert event.event_payload["outcome_is_decision"] is True
+    assert event.event_payload["event_phase"] == "decision_made"
+    assert event.event_payload["v3_decision_flag_consistency_repair"]["repair_applied"] is True
+    assert event.validation_status == "accepted"
+    assert row.quality_status == "accepted"
+
+
+def test_process_topic_subject_v3_routes_unentailed_insufficient_context_to_non_event_without_judge() -> None:
+    artifact = _artifact_dataclass(
+        real_text="2024 .), לעניין חברות בוועדה",
+        topic_label_he="לעניין חברות בוועדה",
+    )
+    context = build_topic_subject_v3_event_contexts(artifacts=[artifact])[0]
+
+    class UnentailedFragmentClient(MockTopicSubjectV3Client):
+        def normalize_event(self, *, context, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "is_event": True,
+                "target_row_role": "insufficient_context",
+                "event_status": "unknown",
+                "normalized_event_summary_he": "קטע חסר הקשר",
+                "matter_candidate_he": "מינוי לוועדה",
+                "confidence": 0.7,
+            }
+
+        def extract_event(self, *, context, normalized_event, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "is_event": True,
+                "action_type_he": "אישור",
+                "action_type_confidence": 0.9,
+                "matter_he": "מינוי לוועדה",
+                "action_quote_he": "החלטה: מינוי לוועדה",
+                "outcome_is_decision": False,
+                "target_row_role": "action_anchor",
+                "confidence": 0.9,
+            }
+
+        def assess_event_evidence(self, *, context, normalized_event, event_payload, config):  # type: ignore[no-untyped-def]
+            return {
+                "context_id": context.context_id,
+                "target_artifact_id": context.target_artifact.artifact_id,
+                "entailment_status": "not_entailed",
+                "field_assessments": {
+                    "action_type_he": {"status": "not_entailed", "source_quote_he": None},
+                    "matter_he": {"status": "not_entailed", "source_quote_he": None},
+                    "outcome": {"status": "not_applicable", "source_quote_he": None},
+                },
+                "repair_required": False,
+                "failure_reasons": [],
+            }
+
+        def judge_event(self, *, context, normalized_event, extraction_payload, config):  # type: ignore[no-untyped-def]
+            raise AssertionError("judge stage should not run")
+
+    event, row = process_topic_subject_v3_context(
+        context=context,
+        client=UnentailedFragmentClient(),
+        config=TopicSubjectResearchConfig(run_v3_judge=False),
+    )
+
+    assert event is None
+    assert row.quality_status == "non_event"
+    assert row.row_role == "insufficient_context"
+
+
 def test_process_topic_subject_v3_selector_adds_missing_formal_result_lifecycle_without_judge() -> None:
     request_quote = "אני מבקש לאשר את תקציב הפעילות."
     vote_quote = "נמנעים2 , בעד22."
