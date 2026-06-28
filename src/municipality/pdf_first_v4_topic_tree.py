@@ -49,11 +49,11 @@ V4_ROOT_TOPICS: tuple[dict[str, Any], ...] = (
     {"root_topic_id": "root_agreements", "root_label_he": "הסכמים והתקשרויות", "keywords": ["הסכם", "הסכמים", "התקשרות", "מכרז", "פטור ממכרז", "הרשאה"]},
     {"root_topic_id": "root_supports", "root_label_he": "תמיכות", "keywords": ["תמיכה", "תמיכות", "ועדת תמיכות", "מלגה", "מלגות", "מפעל הפיס", "פר\"ח", "תבחין", "תבחינים", "שיטת ניקוד"]},
     {"root_topic_id": "root_budget_finance", "root_label_he": "תקציב וכספים", "keywords": ["תקציב", "כספים", "תב\"ר", "תבר", "חובות", "דוח כספי", "דוחות כספיים", "הרשאות", "ארנונה", "צו ארנונה", "אגרה", "אגרות", "תעריף", "סיווג", "מיסוי", "מסים", "מיסים", "הנחות במיסים", "הנחות במסים", "הטבות", "מדד חברתי", "חברתי-כלכלי", "היטל השבחה", "בנק", "חשבון בנק", "בנק הדואר", "כרטיס אשראי"]},
-    {"root_topic_id": "root_planning_building", "root_label_he": "תכנון ובנייה", "keywords": ["תכנון", "בנייה", "בניה", "תוכנית", "תכנית", "היתר", "הסכם הגג", "טופס", "מבנה יביל", "מבנים מסוכנים", "מבנה מסוכן", "מבני ציבור", "מבנה ציבור", "מתנ\"סים", "מתנסים", "שיפוץ חזיתות", "חזיתות"]},
+    {"root_topic_id": "root_planning_building", "root_label_he": "תכנון ובנייה", "keywords": ["תכנון", "בנייה", "בניה", "תוכנית", "תכנית", "היתר", "הסכם הגג", "טופס", "מבנה יביל", "מבנים מסוכנים", "מבנה מסוכן", "מבני ציבור", "מבנה ציבור", "מתנ\"ס", "מתנ ס", "מתנס", "מתנ\"סים", "מתנסים", "מרכז קהילתי", "שיפוץ חזיתות", "חזיתות"]},
     {"root_topic_id": "root_transport_safety", "root_label_he": "תחבורה ובטיחות", "keywords": ["תחבורה", "בטיחות", "בטיחות בדרכים", "תמרור", "חניה", "חנייה", "תווי חניה", "תווי חנייה", "כביש", "אוטובוס", "תאונות", "תאונות דרכים", "אפס תאונות", "צומת", "רחוב", "רחובות", "שדרות", "רמזור", "מעבר חציה", "באמפר", "באמפרים", "פס האטה", "פסי האטה", "מהירות", "תחבורתית"]},
-    {"root_topic_id": "root_education", "root_label_he": "חינוך", "keywords": ["חינוך", "בית ספר", "בתי ספר", "גן", "גנים", "תלמידים", "צהרון", "צהרונים", "מעונות", "תשלומי הורים", "מדעניות העתיד"]},
+    {"root_topic_id": "root_education", "root_label_he": "חינוך", "keywords": ["חינוך", "פרס חינוך", "בית ספר", "בתי ספר", "בתי הספר", "ביה\"ס", "ביה ס", "כיתות", "תיכוניים", "גן", "גנים", "תלמידים", "צהרון", "צהרונים", "מעונות", "תשלומי הורים", "מדעניות העתיד"]},
     {"root_topic_id": "root_welfare_social", "root_label_he": "רווחה ושירותים חברתיים", "keywords": ["רווחה", "שירותים חברתיים", "נזקקים", "קשישים", "הגיל השלישי", "עריריים", "אלמנים", "אלמנות", "היפוטרמיה", "דרי רחוב", "חסרי בית", "ביטחון תזונתי", "בטחון תזונתי", "חתולי רחוב", "גורי חתולי רחוב"]},
-    {"root_topic_id": "root_culture_sport", "root_label_he": "תרבות וספורט", "keywords": ["תרבות", "ספורט", "איצטדיון", "אצטדיון", "כדורסל", "כדורגל", "כדוריד", "ליגה", "אליפות", "גביע", "קבוצת ספורט", "ספורטאי", "משכן", "אומנויות הבמה", "אמנויות הבמה", "אודיטוריום", "אולם", "אולמות", "תיאטרון", "מרכז תרבות", "פסל", "פסל ציבורי"], "profile": {"aliases_he": ["ספורט ופנאי", "קבוצות ספורט", "ספורט עירוני"], "aliases_en": ["sports", "sport", "recreation", "football", "soccer", "handball", "basketball"]}},
+    {"root_topic_id": "root_culture_sport", "root_label_he": "תרבות וספורט", "keywords": ["תרבות", "ספורט", "איצטדיון", "אצטדיון", "כדורסל", "כדורגל", "כדוריד", "ליגה", "אליפות", "גביע", "קבוצת ספורט", "ספורטאי", "מענק עליה לשלב", "מענק עלייה לשלב", "משכן", "אומנויות הבמה", "אמנויות הבמה", "אודיטוריום", "אולם", "אולמות", "תיאטרון", "מרכז תרבות", "פסל", "פסל ציבורי"], "profile": {"aliases_he": ["ספורט ופנאי", "קבוצות ספורט", "ספורט עירוני"], "aliases_en": ["sports", "sport", "recreation", "football", "soccer", "handball", "basketball"]}},
     {"root_topic_id": "root_infrastructure_environment", "root_label_he": "תשתיות וסביבה", "keywords": ["תשתיות", "סביבה", "סביבתי", "סביבתית", "איכות הסביבה", "הגנת הסביבה", "הסברה סביבתית", "מחזור", "מיחזור", "הצפות", "הצפה", "ניקוז", "נגר", "ניקיון", "ביוב", "מים", "פארק", "גינה", "עצים", "שתילת עצים", "נטיעת עצים", "גיזום", "זיהום", "פינוי אשפה", "מניעת רעש", "מפגעים", "אנרגיה מתחדשת", "אנרגיה ירוקה", "פאנלים סולאריים", "פאנלים סולריים", "סולארי", "סולרי"]},
     {"root_topic_id": "root_religious_services", "root_label_he": "דת ושירותי דת", "keywords": ["דת", "דתית", "שירותי דת", "מועצה דתית", "בית כנסת", "מקווה", "מקווה טהרה", "רב", "הרבצת תורה"]},
     {"root_topic_id": "root_administration", "root_label_he": "מנהל עירוני ומינויים", "keywords": ["מינוי", "מינויים", "מינויו", "מינויה", "הארכת מינוי", "מורשי חתימה", "האצלת סמכויות", "ועדה", "דירקטוריון", "דירקטוריונים", "תאגידים", "ביקורת", "דוח ביקורת", "דו\"ח ביקורת", "החלטות מועצה", "חברי מועצה", "מליאה", "ישיבות מליאה", "היעדרויות", "איחורים", "נוכחות", "חילופי גברי", "קריאת רחוב", "שם רחוב", "שמות רחובות", "לוח מודעות", "לוחות מודעות", "מודעות אלקטרוני", "מסרונים", "מסרי וידאו", "מאגר מסרונים", "שימוע", "מהנדס העיר"]},
@@ -74,7 +74,7 @@ CURATED_V4_CHILD_TOPICS: tuple[dict[str, Any], ...] = (
     {"root_topic_id": "root_security_enforcement", "child_label_he": "ביטחון במרחב הציבורי", "aliases_he": ["סדר ציבורי", "ביטחון ציבורי"]},
     {"root_topic_id": "root_security_enforcement", "child_label_he": "בטיחות ובריאות הציבור", "aliases_he": ["בטיחות ציבורית", "אפיפן במרחב הציבורי"]},
     {"root_topic_id": "root_security_enforcement", "child_label_he": "מוכנות לחירום", "aliases_he": ["מל\"ח", "רעידת אדמה", "מיגון עירוני"]},
-    {"root_topic_id": "root_security_enforcement", "child_label_he": "מאבק באלימות קהילתית", "aliases_he": ["מיגור תופעת האלימות"]},
+    {"root_topic_id": "root_security_enforcement", "child_label_he": "מאבק באלימות קהילתית", "aliases_he": ["מיגור תופעת האלימות", "אלימות ופשע ברחובות העיר", "פשע ברחובות העיר"]},
     {"root_topic_id": "root_security_enforcement", "child_label_he": "אלימות במשפחה", "aliases_he": ["התמודדות עם אלימות במשפחה"]},
     {"root_topic_id": "root_security_enforcement", "child_label_he": "קמפיינים להעלאת מודעות ציבורית", "aliases_he": ["קמפיין מודעות"]},
     {"root_topic_id": "root_agreements", "child_label_he": "מכרזים והתקשרויות", "aliases_he": ["מכרז", "פטור ממכרז", "התקשרות"]},
@@ -88,7 +88,7 @@ CURATED_V4_CHILD_TOPICS: tuple[dict[str, Any], ...] = (
     {"root_topic_id": "root_allocations", "child_label_he": "הקצאת מקרקעין למוסדות ציבור", "aliases_he": ["הקצאות קרקע", "ועדת הקצאות"]},
     {"root_topic_id": "root_allocations", "child_label_he": "הקצאות לפעילויות ציבוריות", "aliases_he": ["הקצאה לפעילות"]},
     {"root_topic_id": "root_allocations", "child_label_he": "הקצאות מקרקעין לגופים ציבוריים", "aliases_he": ["הקצאת מקרקעין"]},
-    {"root_topic_id": "root_education", "child_label_he": "מוסדות חינוך", "aliases_he": ["בית ספר", "בתי ספר", "גני ילדים"]},
+    {"root_topic_id": "root_education", "child_label_he": "מוסדות חינוך", "aliases_he": ["בית ספר", "בתי ספר", "גני ילדים", "כיתות", "כיתות אזרחים ותיקים"]},
     {"root_topic_id": "root_education", "child_label_he": "תשלומי חינוך", "aliases_he": ["תשלומי הורים", "צהרונים"]},
     {"root_topic_id": "root_education", "child_label_he": "מאבק בתופעות חברתיות בבתי ספר", "aliases_he": ["חרמות בבתי הספר", "שיימינג בבתי הספר"]},
     {"root_topic_id": "root_education", "child_label_he": "תוכניות חינוך מדעי וטכנולוגי", "aliases_he": ["מדעניות העתיד"]},
@@ -125,7 +125,7 @@ CURATED_V4_CHILD_TOPICS: tuple[dict[str, Any], ...] = (
     {"root_topic_id": "root_transport_safety", "child_label_he": "בטיחות בדרכים", "aliases_he": ["תאונות דרכים", "ועדת בטיחות בדרכים"]},
     {"root_topic_id": "root_transport_safety", "child_label_he": "הסדרי חניה ותנועה", "aliases_he": ["חניה", "חנייה", "תווי חניה", "תווי חנייה", "תמרור", "רמזור"]},
     {"root_topic_id": "root_supports", "child_label_he": "תמיכות", "aliases_he": ["נוהל תמיכות", "ועדת תמיכות", "מלגות", "מלגת מפעל הפיס"]},
-    {"root_topic_id": "root_supports", "child_label_he": "תבחינים", "aliases_he": ["קריטריונים", "תבחיני תמיכה", "שיטת ניקוד"]},
+    {"root_topic_id": "root_supports", "child_label_he": "תבחינים", "aliases_he": ["קריטריונים", "תבחיני תמיכה", "תבחינים לתמיכות", "שיטת ניקוד"]},
     {"root_topic_id": "root_supports", "child_label_he": "תמיכה בספורט", "aliases_he": ["מענקי ספורט", "ניקוד תמיכות ספורט", "תבחיני ספורט", "רשות הספורט"]},
     {"root_topic_id": "root_supports", "child_label_he": "תמיכה בתרבות ופנאי", "aliases_he": ["תמיכות בתחום תרבות פנאי"]},
     {"root_topic_id": "root_supports", "child_label_he": "תמיכה בקליטת עולים", "aliases_he": ["ועדת קליטה"]},
@@ -167,6 +167,57 @@ ROOT_BY_ID = {row["root_topic_id"]: row for row in V4_ROOT_TOPICS}
 ROOT_BY_NORM = {normalize_for_search(row["root_label_he"]): row for row in V4_ROOT_TOPICS}
 PROCEDURAL_ROOT_ONLY_IDS = {"root_agenda_queries"}
 SECONDARY_ROOT_EXCLUDED_IDS = {"root_agenda_queries", "root_mayor_updates", "root_order_proposals", "root_geo", "root_people_roles"}
+TOPIC_METADATA_SCHEMA_VERSION = "topic_node_metadata_v1"
+
+BASE_TOPIC_METADATA_FIELDS: tuple[dict[str, str], ...] = (
+    {"name": "raw_text", "type": "string", "description_he": "הטקסט המקורי של השורה או הקטע שממנו זוהה הנושא."},
+    {"name": "source_quote_he", "type": "string", "description_he": "ציטוט ראייתי קצר מתוך הטקסט המקורי."},
+    {"name": "source_ids", "type": "array[string]", "description_he": "מזהי מקור, עמוד, אזור או בלוק שמאפשרים חזרה למסמך."},
+    {"name": "place_he", "type": "array[string]", "description_he": "מקומות, רחובות, רובעים, אתרים או גושים/חלקות שהוזכרו."},
+    {"name": "time_he", "type": "array[string]", "description_he": "תאריכים, תקופות, שנים או מועדי אירוע שהוזכרו."},
+    {"name": "person_he", "type": "array[string]", "description_he": "אנשים, נבחרי ציבור או בעלי תפקידים שהוזכרו."},
+    {"name": "organization_he", "type": "array[string]", "description_he": "ארגונים, עמותות, חברות, מוסדות או יחידות עירוניות שהוזכרו."},
+    {"name": "amount_he", "type": "array[string]", "description_he": "סכומים, אחוזים, עלויות, הנחות או היקפי תקציב."},
+    {"name": "agenda_carrier_he", "type": "string", "description_he": "סוג נשא סדר היום, למשל שאילתה, הצעה לסדר, אישור או דיון."},
+    {"name": "event_phase_he", "type": "string", "description_he": "שלב האירוע, למשל בקשה, דיון, אישור, דחייה, עדכון או ביצוע."},
+    {"name": "decision_status_he", "type": "string", "description_he": "סטטוס החלטה או תוצאה אם קיימים, בנפרד מתווית הנושא."},
+)
+
+ROOT_TOPIC_METADATA_EXTRA_FIELDS: dict[str, tuple[dict[str, str], ...]] = {
+    "root_supports": (
+        {"name": "beneficiary_he", "type": "array[string]", "description_he": "מקבלי התמיכה או המענק."},
+        {"name": "criteria_he", "type": "array[string]", "description_he": "תבחינים, קריטריונים או שיטת ניקוד."},
+    ),
+    "root_planning_building": (
+        {"name": "facility_he", "type": "array[string]", "description_he": "מבנה, חוף, מתקן, מרכז או מרחב ציבורי רלוונטי."},
+        {"name": "project_phase_he", "type": "string", "description_he": "שלב תכנוני או ביצועי של הפרויקט."},
+    ),
+    "root_education": (
+        {"name": "education_institution_he", "type": "array[string]", "description_he": "בתי ספר, גנים, כיתות או מוסדות חינוך."},
+        {"name": "program_or_award_he", "type": "array[string]", "description_he": "תוכנית חינוכית, פרס או מסגרת לימודית."},
+    ),
+    "root_culture_sport": (
+        {"name": "sport_or_culture_domain_he", "type": "array[string]", "description_he": "ענף ספורט, פעילות פנאי, מוסד תרבות או אירוע תרבות."},
+        {"name": "team_or_participant_he", "type": "array[string]", "description_he": "קבוצה, משתתפים או זכאים שהוזכרו."},
+    ),
+    "root_budget_finance": (
+        {"name": "budget_line_he", "type": "array[string]", "description_he": "סעיף תקציבי, תב״ר, אגרה, היטל או סיווג כספי."},
+    ),
+    "root_agreements": (
+        {"name": "agreement_party_he", "type": "array[string]", "description_he": "צדדים להסכם, להתקשרות או למכרז."},
+        {"name": "agreement_type_he", "type": "string", "description_he": "סוג ההסכם, המכרז, השכירות או רשות השימוש."},
+    ),
+    "root_allocations": (
+        {"name": "parcel_he", "type": "array[string]", "description_he": "גוש, חלקה, מגרש או כתובת של הקצאה/שימוש."},
+        {"name": "use_purpose_he", "type": "string", "description_he": "מטרת השימוש הציבורי או העירוני."},
+    ),
+    "root_transport_safety": (
+        {"name": "traffic_asset_he", "type": "array[string]", "description_he": "כביש, צומת, תחנה, חניה, תמרור או אמצעי בטיחות."},
+    ),
+    "root_security_enforcement": (
+        {"name": "risk_or_incident_he", "type": "array[string]", "description_he": "סיכון, אירוע, איום, עבירה או צורך אכיפתי."},
+    ),
+}
 
 
 @dataclass(slots=True)
@@ -190,6 +241,7 @@ class V4NodeWriteResult:
 def global_topic_tree_payload(*, existing_tree: dict[str, Any] | None = None, attachment_contexts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     children_by_root = _children_by_root_from_tree(existing_tree or {})
     _merge_curated_children(children_by_root)
+    _attach_topic_metadata_schemas(children_by_root)
     roots_by_id = _roots_by_id_from_tree(existing_tree or {})
     return {
         "topic_tree_version": TOPIC_TREE_VERSION,
@@ -200,11 +252,60 @@ def global_topic_tree_payload(*, existing_tree: dict[str, Any] | None = None, at
                 "root_label_he": root["root_label_he"],
                 "keywords": list(root.get("keywords") or []),
                 "profile": roots_by_id.get(root["root_topic_id"], {}).get("profile"),
+                "metadata_schema": topic_metadata_schema(root_topic_id=root["root_topic_id"], label_he=root["root_label_he"], node_level="root"),
+                "labeling_method": "deterministic_curated_topic_tree",
                 "children": children_by_root.get(root["root_topic_id"], []),
             }
             for root in V4_ROOT_TOPICS
         ],
         "attachment_contexts": attachment_contexts or [],
+    }
+
+
+def topic_metadata_schema(*, root_topic_id: str, label_he: str | None = None, node_level: str = "child") -> dict[str, Any]:
+    """Deterministic metadata fields stored with every reusable topic node.
+
+    The schema tells downstream extraction where details belong, so stable topic
+    labels stay reusable and row-specific facts like place, time, costs, and raw
+    text do not get baked into the topic label.
+    """
+
+    root_id = str(root_topic_id or "")
+    fields: list[dict[str, str]] = [dict(row) for row in BASE_TOPIC_METADATA_FIELDS]
+    seen = {row["name"] for row in fields}
+    for row in ROOT_TOPIC_METADATA_EXTRA_FIELDS.get(root_id, ()):  # root-specific but still deterministic
+        if row["name"] in seen:
+            continue
+        fields.append(dict(row))
+        seen.add(row["name"])
+    return {
+        "schema_version": TOPIC_METADATA_SCHEMA_VERSION,
+        "node_level": node_level,
+        "root_topic_id": root_id,
+        "topic_label_he": str(label_he or root_label_for_id(root_id) or "").strip() or None,
+        "labeling_method": "deterministic_curated_topic_tree",
+        "fields": fields,
+    }
+
+
+def compact_topic_metadata_schema(schema: Any, *, max_fields: int = 14) -> dict[str, Any]:
+    if not isinstance(schema, dict):
+        return {}
+    fields = [row for row in schema.get("fields") or [] if isinstance(row, dict)]
+    compact_fields = [
+        {
+            "name": str(row.get("name") or ""),
+            "type": str(row.get("type") or ""),
+            "description_he": str(row.get("description_he") or "")[:120],
+        }
+        for row in fields[: max(0, int(max_fields))]
+        if str(row.get("name") or "").strip()
+    ]
+    return {
+        "schema_version": schema.get("schema_version") or TOPIC_METADATA_SCHEMA_VERSION,
+        "labeling_method": schema.get("labeling_method") or "deterministic_curated_topic_tree",
+        "field_names": [row["name"] for row in compact_fields],
+        "fields": compact_fields,
     }
 
 
@@ -223,7 +324,11 @@ def seed_root_nodes(session: Session, *, source_site_id: int, document_version_i
             support_count=0,
             confidence=1.0,
             document_version_id=document_version_id,
-            metadata_extra={"seeded_root": True},
+            metadata_extra={
+                "seeded_root": True,
+                "labeling_method": "deterministic_curated_topic_tree",
+                "metadata_schema": topic_metadata_schema(root_topic_id=root["root_topic_id"], label_he=root["root_label_he"], node_level="root"),
+            },
             now=now,
         )
         out[root["root_topic_id"]] = node
@@ -257,6 +362,8 @@ def seed_curated_child_nodes(session: Session, *, source_site_id: int, document_
                 "topic_tree_version": TOPIC_TREE_VERSION,
                 "curation_status": "curated_mid_level_seed",
                 "curation_source": "manual_review_20260616",
+                "labeling_method": "deterministic_curated_topic_tree",
+                "metadata_schema": topic_metadata_schema(root_topic_id=root_topic_id, label_he=label, node_level="child"),
                 "summary_he": str(row.get("summary_he") or f"נושא משנה מוניציפלי חוזר בתחום {label}."),
             },
         )
@@ -289,6 +396,8 @@ def current_tree_from_db(session: Session, *, source_site_id: int | None = None,
             "semantic_node_id": int(root.id),
             "support_count": int(root.support_count or 0),
             "status": root.status,
+            "metadata_schema": _metadata_schema_from_node(root, root_topic_id=root_topic_id or "", label_he=root.pref_label_he, node_level="root"),
+            "labeling_method": "deterministic_curated_topic_tree",
             "children": [],
         }
         if include_profiles:
@@ -298,9 +407,12 @@ def current_tree_from_db(session: Session, *, source_site_id: int | None = None,
             child_payload = {
                 "child_topic_id": semantic_node_child_id(child) or child_topic_id(root_topic_id or "root", child.pref_label_he),
                 "child_label_he": child.pref_label_he,
+                "root_topic_id": root_topic_id,
                 "semantic_node_id": int(child.id),
                 "support_count": int(child.support_count or 0),
                 "status": child.status,
+                "metadata_schema": _metadata_schema_from_node(child, root_topic_id=root_topic_id or "", label_he=child.pref_label_he, node_level="child"),
+                "labeling_method": "deterministic_curated_topic_tree",
             }
             if include_profiles:
                 child_payload["profile"] = profiles_by_node_id.get(int(child.id), _generic_topic_profile(label=child.pref_label_he, aliases=[], examples=[]))
@@ -371,6 +483,8 @@ def _generic_topic_profile(*, label: str, aliases: list[str], examples: list[dic
         "positive_examples": examples,
         "negative_examples": [row for row in metadata.get("negative_examples") or [] if isinstance(row, dict)][:5],
         "curation_status": str(metadata.get("curation_status") or "auto_profile"),
+        "labeling_method": str(metadata.get("labeling_method") or "deterministic_curated_topic_tree"),
+        "metadata_schema": metadata.get("metadata_schema") if isinstance(metadata.get("metadata_schema"), dict) else None,
     }
 
 
@@ -468,6 +582,8 @@ def infer_root_topic_id(text: str, *, fallback: str | None = None, allow_procedu
     policy_root = _policy_root_override(normalized)
     if policy_root:
         return policy_root
+    if _notice_board_in_transport_context(normalized):
+        return "root_transport_safety"
     tokens = set(_search_token_variants(normalized))
     best_id = fallback if fallback in ROOT_BY_ID else None
     best_score = 0.0
@@ -485,6 +601,12 @@ def _policy_root_override(normalized: str) -> str | None:
     match = best_topic_policy_match(normalized)
     root_topic_id = str((match or {}).get("root_topic_id") or "")
     return root_topic_id if root_topic_id in ROOT_BY_ID else None
+
+
+def _notice_board_in_transport_context(normalized: str) -> bool:
+    has_notice_board = any(term in normalized for term in ["לוח מודעות", "לוחות מודעות", "מודעות אלקטרוני", "מודעות אלקטרוניים"])
+    has_road_context = any(term in normalized for term in ["צומת", "צמתים", "רחוב", "רחובות", "שדרה", "שדרות", "דרך"])
+    return has_notice_board and has_road_context
 
 
 def _root_keyword_score(*, keyword: str, normalized: str, tokens: set[str]) -> float:
@@ -551,6 +673,10 @@ def resolve_child_topic_assignment(
     aliases_he = list(validation.aliases_he)
     if normalize_for_search(child_label) != normalize_for_search(validation.cleaned_label):
         aliases_he.append(validation.cleaned_label)
+    curated_child_label = curated_child_label_for_alias(root_id=root_id, label=child_label)
+    if curated_child_label and normalize_for_search(curated_child_label) != normalize_for_search(child_label):
+        aliases_he.append(child_label)
+        child_label = curated_child_label
     semantic_root_id = semantic_root_for_child_label(child_label, evidence_text=evidence_text, fallback=root_id)
     procedural_reason = procedural_child_label_reason(child_label, evidence_text=evidence_text)
     if procedural_reason:
@@ -632,7 +758,7 @@ def semantic_root_for_child_label(label: str | None, *, evidence_text: str = "",
         return "root_infrastructure_environment"
     if any(term in normalized for term in ["מל ח", "מל\"ח", "תרגיל חירום", "ועדת חירום", "מוכנות לחירום", "מערך חירום", "פקער", "פיקוד העורף", "יקלר", "יקל\"ר", "מקלטים חכמים", "ביטחון"]):
         return "root_security_enforcement"
-    if any(term in normalized for term in ["בית ספר", "חינוך", "למידה חדשנית", "סמינר מקצועי", "מערכת החינוך"]):
+    if any(term in normalized for term in ["בית ספר", "בתי ספר", "בתי הספר", "ביה ס", "ביה\"ס", "כיתות", "חינוך", "למידה חדשנית", "סמינר מקצועי", "מערכת החינוך"]):
         return "root_education"
     if "ועדת ביקורת" in label_norm or "מבקר" in normalized:
         return "root_administration"
@@ -643,6 +769,22 @@ def semantic_root_for_child_label(label: str | None, *, evidence_text: str = "",
     if any(term in normalized for term in ["האצלת סמכויות", "מורשי חתימה", "מינוי", "מינויים", "גזבר העירייה"]):
         return "root_administration"
     return infer_root_topic_id(" ".join([str(label or ""), str(evidence_text or "")]), fallback=fallback)
+
+
+def curated_child_label_for_alias(*, root_id: str, label: str | None) -> str | None:
+    label_norm = normalize_for_search(label or "")
+    if not label_norm:
+        return None
+    for row in CURATED_V4_CHILD_TOPICS:
+        if str(row.get("root_topic_id") or "") != root_id:
+            continue
+        child_label = str(row.get("child_label_he") or "").strip()
+        if not child_label:
+            continue
+        aliases = [child_label, *[str(value).strip() for value in row.get("aliases_he") or [] if str(value).strip()]]
+        if any(normalize_for_search(alias) == label_norm for alias in aliases):
+            return child_label
+    return None
 
 
 def secondary_topic_roots(*, root_topic_id: str, child_label_he: str | None = None, evidence_text: str = "", max_roots: int = 3) -> list[dict[str, Any]]:
@@ -1240,7 +1382,11 @@ def persist_v4_semantic_links(
         support_count=1,
         confidence=float(chunk.get("topic_assignment_confidence") or 0.8),
         document_version_id=int(artifact.document_version_id),
-        metadata_extra={"root_topic_id": root_topic_id},
+        metadata_extra={
+            "root_topic_id": root_topic_id,
+            "labeling_method": "deterministic_curated_topic_tree",
+            "metadata_schema": topic_metadata_schema(root_topic_id=root_topic_id, label_he=root_label, node_level="root"),
+        },
     )
     child_label = str(chunk.get("child_label_he") or "").strip()
     child_status = status if child_label else "active"
@@ -1258,7 +1404,12 @@ def persist_v4_semantic_links(
             support_count=1,
             confidence=float(chunk.get("topic_assignment_confidence") or 0.7),
             document_version_id=int(artifact.document_version_id),
-            metadata_extra={"root_topic_id": root_topic_id, "topic_tree_version": TOPIC_TREE_VERSION},
+            metadata_extra={
+                "root_topic_id": root_topic_id,
+                "topic_tree_version": TOPIC_TREE_VERSION,
+                "labeling_method": "deterministic_curated_topic_tree",
+                "metadata_schema": topic_metadata_schema(root_topic_id=root_topic_id, label_he=child_label, node_level="child"),
+            },
         )
         for alias in chunk.get("topic_aliases_he") or []:
             upsert_alias(session, semantic_node=child_node, alias_label=str(alias), document_version_id=int(artifact.document_version_id))
@@ -1465,14 +1616,43 @@ def _merge_curated_children(children_by_root: dict[str, list[dict[str, Any]]]) -
                 "aliases_he": aliases,
                 "support_count": 0,
                 "status": "active",
+                "metadata_schema": topic_metadata_schema(root_topic_id=root_topic_id, label_he=label, node_level="child"),
+                "labeling_method": "deterministic_curated_topic_tree",
                 "profile": {
                     "summary_he": str(row.get("summary_he") or f"נושא משנה מוניציפלי חוזר בתחום {label}."),
                     "aliases_he": aliases,
+                    "metadata_schema": topic_metadata_schema(root_topic_id=root_topic_id, label_he=label, node_level="child"),
+                    "labeling_method": "deterministic_curated_topic_tree",
                 },
                 "curation_status": "curated_mid_level_seed",
                 "curation_source": "manual_review_20260616",
             }
         )
+
+
+def _attach_topic_metadata_schemas(children_by_root: dict[str, list[dict[str, Any]]]) -> None:
+    for root_topic_id, children in children_by_root.items():
+        if root_topic_id not in ROOT_BY_ID:
+            continue
+        for child in children:
+            if not isinstance(child, dict):
+                continue
+            label = str(child.get("child_label_he") or child.get("label_he") or "").strip()
+            schema = child.get("metadata_schema") if isinstance(child.get("metadata_schema"), dict) else topic_metadata_schema(root_topic_id=root_topic_id, label_he=label, node_level="child")
+            child["metadata_schema"] = schema
+            child["labeling_method"] = child.get("labeling_method") or "deterministic_curated_topic_tree"
+            profile = child.get("profile") if isinstance(child.get("profile"), dict) else {}
+            profile.setdefault("metadata_schema", schema)
+            profile.setdefault("labeling_method", "deterministic_curated_topic_tree")
+            child["profile"] = profile
+
+
+def _metadata_schema_from_node(node: SemanticNode, *, root_topic_id: str, label_he: str, node_level: str) -> dict[str, Any]:
+    metadata = _loads_dict(node.metadata_json)
+    schema = metadata.get("metadata_schema") if isinstance(metadata.get("metadata_schema"), dict) else None
+    if schema:
+        return schema
+    return topic_metadata_schema(root_topic_id=root_topic_id, label_he=label_he, node_level=node_level)
 
 
 def _roots_by_id_from_tree(tree: dict[str, Any]) -> dict[str, dict[str, Any]]:

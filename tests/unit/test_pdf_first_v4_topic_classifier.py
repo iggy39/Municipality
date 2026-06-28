@@ -3,7 +3,7 @@ from __future__ import annotations
 from municipality.pdf_first_v4_topic_classifier import build_topic_profile_index, find_topic_candidates
 from municipality.pdf_first_v4_topic_policy import clean_protocol_subject_text, topic_policy_matches
 from municipality.chunking import normalize_for_search
-from municipality.pdf_first_v4_topic_tree import CURATED_V4_CHILD_TOPICS, ROOT_BY_ID, clean_topic_label, global_topic_tree_payload, infer_root_topic_id, resolve_child_topic_assignment, secondary_topic_roots, semantic_root_for_child_label
+from municipality.pdf_first_v4_topic_tree import CURATED_V4_CHILD_TOPICS, ROOT_BY_ID, clean_topic_label, compact_topic_metadata_schema, global_topic_tree_payload, infer_root_topic_id, resolve_child_topic_assignment, secondary_topic_roots, semantic_root_for_child_label, topic_metadata_schema
 from municipality.topic_label_quality import canonicalize_topic_label
 
 
@@ -20,6 +20,27 @@ def test_candidate_finder_accepts_policy_match_without_dicta() -> None:
     assert decision["action"] == "choose_existing_topic"
     assert decision["needs_dicta"] is False
     assert decision["root_topic_id"] == "root_guard_services"
+
+
+def test_topic_tree_nodes_expose_deterministic_metadata_schema_with_raw_text() -> None:
+    tree = global_topic_tree_payload()
+    education_root = next(root for root in tree["root_topics"] if root["root_topic_id"] == "root_education")
+    education_fields = {field["name"] for field in education_root["metadata_schema"]["fields"]}
+    education_child = next(child for child in education_root["children"] if child["child_label_he"] == "מוסדות חינוך")
+    child_fields = {field["name"] for field in education_child["metadata_schema"]["fields"]}
+
+    assert education_root["labeling_method"] == "deterministic_curated_topic_tree"
+    assert {"raw_text", "place_he", "time_he"} <= education_fields
+    assert {"raw_text", "education_institution_he", "program_or_award_he"} <= child_fields
+
+
+def test_compact_metadata_schema_keeps_raw_text_for_prompts() -> None:
+    schema = topic_metadata_schema(root_topic_id="root_supports", label_he="תמיכה בספורט", node_level="child")
+    compact = compact_topic_metadata_schema(schema)
+
+    assert compact["labeling_method"] == "deterministic_curated_topic_tree"
+    assert "raw_text" in compact["field_names"]
+    assert "beneficiary_he" in compact["field_names"]
 
 
 def test_candidate_finder_accepts_strong_existing_child() -> None:
@@ -87,6 +108,18 @@ def test_indexed_candidate_finder_retrieves_auditorium_as_culture() -> None:
     assert result["candidates"][0]["root_topic_id"] == "root_culture_sport"
 
 
+def test_street_violence_query_reuses_existing_community_violence_child() -> None:
+    assignment = resolve_child_topic_assignment(
+        root_topic_id="root_security_enforcement",
+        root_label_he="ביטחון ואכיפה",
+        child_label_he="אלימות ופשע ברחובות העיר",
+        evidence_text="שאילתה בנושא אלימות ופשע ברחובות העיר",
+        selected_existing=True,
+    )
+
+    assert assignment["child_label_he"] == "מאבק באלימות קהילתית"
+
+
 def test_policy_routes_municipal_tax_to_finance() -> None:
     matches = topic_policy_matches("ביטול תוספת הארנונה לשנת 2022 לתושבי העיר")
 
@@ -149,17 +182,57 @@ def test_generic_root_keywords_cover_finance_and_notice_board_actions() -> None:
 
 def test_canonicalizes_substantive_fragment_subjects() -> None:
     examples = {
-        "הצעת הגזברות לעדכון בצו הארנונה לשנת2024 הוספת תת סיווג חדש": "עדכון בצו הארנונה הוספת תת סיווג",
+        "הצעת הגזברות לעדכון בצו הארנונה לשנת2024 הוספת תת סיווג חדש": "הוספת תת סיווג בצו הארנונה",
         "הקמת חניון מוניציפלי חכם בסמוך לתחנת רכבת ופארק הייטק": "הקמת חניון מוניציפלי חכם",
-        "שיפוץ מרכז מסחרי רובע ו' ,עדכון תבחינים שנתקבלו במועצה": "שיפוץ מרכז מסחרי ועדכון תבחינים",
-        "סקירה שנתית של מפקד תחנת אשדוד סנ\"צ אילן שושן": "סקירה שנתית של מפקד תחנת משטרה",
+        "שיפוץ מרכז מסחרי רובע ו' ,עדכון תבחינים שנתקבלו במועצה": "שיפוץ מרכז מסחרי",
+        "סקירה שנתית של מפקד תחנת אשדוד סנ\"צ אילן שושן": "סקירה שנתית של מפקד תחנת אשדוד",
         "אישור מתן פטור לבעלי עסקים מאגרת שילוט בשל גל תחלואה": "פטור מאגרת שילוט לבעלי עסקים",
+        "פעילות הקאנטרי,עלויות מנוי \"והנחות לזכאים": "פעילות הקאנטרי",
+        "פרוטוקול מישיבת ועדת בטיחות וגהות עירו נית": "ועדת בטיחות וגהות עירונית",
+        "ייסוד והקמת כיתות אזרחים וותיקים בביה\"ס התיכוניים": "כיתות אזרחים ותיקים",
+        "פרס חינוך עירוני שנתי לחינוך פורץ דרך באשדוד": "פרס חינוך",
+        "שאילתה בנושא שיפוץ חוף הקשתות": "שיפוץ חוף",
+        "הוספת תת הצעת הגזברות לעדכון בצו הארנונה לשנת סיווג חדש": "הוספת תת סיווג בצו הארנונה",
+        "יחידות דיור שיהיו ברובע במסגרת הסכם הגג ועד עכשיו הצטרפו זוגות": "הסכם הגג",
     }
 
     for raw, expected in examples.items():
         canonical, reason = canonicalize_topic_label(raw)
         assert canonical == expected
         assert reason in {"semantic_canonicalized", None}
+
+
+def test_canonicalizer_moves_sport_grant_details_to_evidence_context() -> None:
+    canonical, reason = canonicalize_topic_label(
+        "מענק עליה לשלב ב",
+        root_label_he="תמיכות",
+        evidence_text="קבוצת כדורסל בנות אשדוד עברו לשלב ב באליפות אירופה ועל פי התבחין יש מענק",
+    )
+
+    assert canonical == "מענקי ספורט"
+    assert reason == "semantic_canonicalized"
+
+
+def test_policy_routes_semantic_essence_subjects_to_expected_roots() -> None:
+    assert topic_policy_matches("פרס חינוך עירוני שנתי לחינוך פורץ דרך", limit=1)[0]["root_topic_id"] == "root_education"
+    assert topic_policy_matches("קבוצת כדורסל בנות אשדוד מענק עליה לשלב ב", limit=1)[0]["root_topic_id"] == "root_supports"
+    assert topic_policy_matches("שיפוץ חוף הקשתות", limit=1)[0]["root_topic_id"] == "root_planning_building"
+    assert topic_policy_matches("אלימות ופשע ברחובות העיר", limit=1)[0]["root_topic_id"] == "root_security_enforcement"
+    assert topic_policy_matches("יחידות דיור במסגרת הסכם הגג", limit=1)[0]["root_topic_id"] == "root_planning_building"
+    assert infer_root_topic_id("פעילות הקאנטרי", allow_procedural_default=False) == "root_culture_sport"
+    assert infer_root_topic_id("אלימות ופשע ברחובות העיר", allow_procedural_default=False) == "root_security_enforcement"
+    assert infer_root_topic_id("יחידות דיור במסגרת הסכם הגג", allow_procedural_default=False) == "root_planning_building"
+
+
+def test_support_root_canonicalizes_criteria_synonyms_to_support_criteria() -> None:
+    canonical, reason = canonicalize_topic_label(
+        "תבחינים|קריטריונים",
+        root_label_he="תמיכות",
+        evidence_text="מבקשת לבחון את התבחינים מחדש, לאור מצב הקבוצות והקריטריונים",
+    )
+
+    assert canonical == "תבחינים לתמיכות"
+    assert reason == "semantic_canonicalized"
 
 
 def test_section_only_label_is_cleaned_consistently() -> None:
@@ -169,6 +242,16 @@ def test_section_only_label_is_cleaned_consistently() -> None:
     assert reason == "procedural_or_dialogue_label"
     assert clean_topic_label("סעיף5") is None
     assert clean_protocol_subject_text("סעיף5") == ""
+
+
+def test_canonicalizer_repairs_ocr_digit_quote_tail_from_evidence() -> None:
+    canonical, reason = canonicalize_topic_label(
+        "כיכר רמון בעיר ודרך מנחם",
+        evidence_text='שאילתה בנושא "כיכר רמון בעיר ודרך מנחם5 "בגין',
+    )
+
+    assert canonical == "כיכר רמון בעיר ודרך מנחם בגין"
+    assert reason is None
 
 
 def test_infer_root_can_disable_procedural_default() -> None:

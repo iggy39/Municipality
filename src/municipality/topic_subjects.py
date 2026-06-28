@@ -142,6 +142,10 @@ ACTION_ONTOLOGY_V3 = (
         "description_en": "A request for discussion, approval, information, authorization, or action before a municipal body.",
     },
     {
+        "label_he": "בקשה לאישור",
+        "description_en": "A request, agenda item, contract, allocation, appointment, or similar matter brought for approval; the approval/rejection itself belongs in outcome.",
+    },
+    {
         "label_he": "הסתייגות",
         "description_en": "A formal objection, reservation, or proposed objection/amendment to a proposal, budget item, agenda item, appointment, contract, or other municipal matter; not itself a final decision outcome.",
     },
@@ -191,15 +195,28 @@ ACTION_ONTOLOGY_V3 = (
     },
 )
 ACTION_ONTOLOGY_LABELS_V3 = tuple(row["label_he"] for row in ACTION_ONTOLOGY_V3)
-FORMAL_DECISION_ACTION_LABELS_V3 = {"אישור", "דחייה"}
+FORMAL_DECISION_ACTION_LABELS_V3 = {"אישור", "דחייה", "בקשה לאישור"}
 
 TOPIC_SUBJECT_V3_SEMANTIC_EXAMPLES = (
+    {
+        "case_he": "בקשה לאישור עם תוצאה מאשרת",
+        "source_quote_he": "לאשר הסכם רשות להקצאת מבנה להפעלת גן ילדים ברחוב הרצל 10. ההצעה התקבלה פה אחד",
+        "expected": {
+            "action_type_he": "בקשה לאישור",
+            "subject_he": "הקצאת מבנה להפעלת גן ילדים",
+            "predicted_topic_he": "הקצאת מבנה",
+            "outcome_type": "approved",
+            "outcome_evidence_classification": "actual_result",
+        },
+        "why_he": "לאשר הוא הפעולה המבוקשת סביב הנושא, ההצעה התקבלה היא התוצאה, והכתובת נשמרת במטא-דאטה. הנושא החזוי הרחב הוא הקצאת המבנה ולא שימוש הקצה הספציפי.",
+    },
     {
         "case_he": "הצעה לסדר עם הסרה מסדר היום",
         "source_quote_he": "ההצעה לסדר- תו חניה לתושבים הגרים בסמוך למרכזים מסחריים יורדת מסדר היום",
         "expected": {
             "action_type_he": "הצעה לסדר יום",
-            "matter_he": "תו חניה לתושבים הגרים בסמוך למרכזים מסחריים",
+            "subject_he": "תו חניה לתושבים הגרים בסמוך למרכזים מסחריים",
+            "predicted_topic_he": "תווי חניה לתושבים",
             "outcome_type": "removed",
             "outcome_evidence_classification": "actual_result",
         },
@@ -210,7 +227,8 @@ TOPIC_SUBJECT_V3_SEMANTIC_EXAMPLES = (
         "source_quote_he": "אנחנו מציעים להעביר את הדיון הזה לוועדת החינוך. אפשר להעביר את ההחלטה הזו פה אחד.",
         "expected": {
             "action_type_he": "בקשה",
-            "matter_he": "העברת הדיון לוועדת החינוך",
+            "subject_he": "העברת הדיון לוועדת החינוך",
+            "predicted_topic_he": "העברה לוועדה",
             "outcome_type": "none",
             "outcome_evidence_classification": "proposal_or_intent",
         },
@@ -221,12 +239,35 @@ TOPIC_SUBJECT_V3_SEMANTIC_EXAMPLES = (
         "source_quote_he": "ההצעה עוברת לדיון בוועדת שמות",
         "expected": {
             "action_type_he": "הפניה לוועדה",
-            "matter_he": "העניין שמועבר לוועדה כפי שהוא כתוב בשורה",
+            "subject_he": "העניין שמועבר לוועדה כפי שהוא כתוב בשורה",
+            "predicted_topic_he": "העברה לוועדה",
             "outcome_type": "referred",
             "outcome_evidence_classification": "actual_result",
         },
         "why_he": "עוברת לדיון בוועדה הוא ניסוח תוצאה בפועל, לא רק הצעה.",
     },
+)
+
+TOPIC_SUBJECT_V3_SEMANTIC_FIELD_REQUIREMENTS = (
+    "Return subject_he, predicted_topic_he, and category_he for every event row.",
+    "subject_he is the clean semantic subject: the municipal thing being requested, discussed, answered, allocated, appointed, changed, repaired, enforced, or otherwise handled. It replaces legacy matter_he for model-facing output.",
+    "Do not copy a full agenda headline, full raw sentence, source quote, legal preamble, vote/result wording, or procedure carrier into subject_he. Keep subject_he as a short reusable phrase, usually matching subject_display_he.",
+    "Do not put street names, addresses, blocks, parcels, lot numbers, plan numbers, association/company numbers, quoted entity names, municipality names, person names, dates, years, vote counts, or other exact identifiers in subject_he; preserve those details only in matter_identifiers, geography/time metadata, source evidence, and provenance.",
+    "subject_he may include an entity/place only when the entity/place itself is the service subject, but still omit numbers, addresses, and quote marks.",
+    "action_type_he describes the action or procedural carrier around the subject, while outcome describes what was finally decided or reported. Do not collapse action and outcome into the same label.",
+    "When a matter is brought for approval, use action_type_he=בקשה לאישור and put the final result in outcome, for example outcome_type=approved with outcome_label_he=אישור.",
+    "predicted_topic_he is a short resident-facing generalized topic, usually 2-4 Hebrew words. It is not the upstream source topic, not a document title, not the full raw sentence, and not a general location phrase.",
+    "When the source is about municipal handling, repair, allocation, prevention, enforcement, or service delivery, predicted_topic_he should include that resident-facing action theme instead of only a bare domain noun.",
+    "When the source is about a municipal property/land/building transaction such as leasing, allocating, selling, buying, granting use rights, or waiving rights, predicted_topic_he should use the broader transaction plus asset object, for example השכרת מבנה, הקצאת מקרקעין, מכירת נכס, or ויתור על זכות חכירה. Do not use the narrow downstream use, operator, tenant, or activity as predicted_topic_he unless that is the only substantive municipal service topic.",
+    "category_he is a broad municipal service area or domain, not a document type, not a protocol title, and not the exact agenda wording.",
+    "Do not put dates, years, municipality names, vote counts, unanimity wording, page numbers, protocol numbers, or procedural carrier text in predicted_topic_he.",
+    "Do not put generic location modifiers such as בעיר, ברחבי העיר, or בשכונה in predicted_topic_he unless the place itself is the topic.",
+    "Do not put person names in predicted_topic_he unless the person is the actual topic; keep names in metadata/evidence when identity-critical.",
+    "Do not put street, parcel, lot, block, address, association number, or company number details in predicted_topic_he unless that place/entity itself is the topic; preserve those details in matter_identifiers, evidence, and metadata.",
+    "category_he should be an ordinary municipal service domain, not an event-story label or incident description unless that is the actual municipal domain.",
+    "Do not copy conversational clauses, questions, explanations, or fragments beginning with words such as לגבי, בעניין, כדי, אם, or אולי into category_he. If the row only gives a committee name, use the broad domain from the committee name rather than the full sentence fragment.",
+    "Keep outcome_summary_he to the core result only. Do not include vote details such as פה אחד, בעד/נגד/נמנעים counts, or procedural noise unless that detail is the outcome itself.",
+    "If you also return legacy matter_he, it must copy subject_he; subject_he is canonical for the report.",
 )
 
 CONDITION_SCOPE_CUES = (
@@ -612,10 +653,13 @@ DOMAIN_NOUN_ROOT_CUES = (
 STRONG_APPROVAL_ACTION_CUES = (
     "מאשרים",
     "הוחלט לאשר",
+    "החליטה לאשר",
+    "המועצה החליטה לאשר",
     "פה אחד",
     "ברוב קולות",
     "המועצה מאשרת",
     "המועצה אישרה",
+    "מ א ו ש ר",
 )
 
 APPROVAL_DECISION_QUOTE_CUES = (
@@ -631,8 +675,11 @@ APPROVAL_DECISION_QUOTE_CUES = (
     "מאשרת את החלטת",
     "מאשר את החלטת",
     "הוחלט לאשר",
+    "החליטה לאשר",
+    "המועצה החליטה לאשר",
     "ההצעה התקבלה",
     "התקבלה",
+    "מ א ו ש ר",
 )
 
 REJECTION_DECISION_CUES = (
@@ -1710,11 +1757,11 @@ class MockTopicSubjectClient:
     ) -> dict[str, Any]:
         repaired = dict(event_payload)
         if compact_text(repaired.get("action_type_he")) in {"אישור", "דחייה"}:
-            repaired["action_type_he"] = "בקשה"
+            repaired["action_type_he"] = "בקשה לאישור"
             repaired["action_type_confidence"] = min(clamp_float(repaired.get("action_type_confidence"), default=0.8), 0.88)
             repaired["outcome_is_decision"] = False
             repaired["outcome"] = None
-            repaired["event_key_he"] = f"בקשה: {compact_text(repaired.get('matter_he'))}"[:220]
+            repaired["event_key_he"] = f"בקשה לאישור: {topic_subject_v3_subject_text(repaired)}"[:220]
             repaired["rationale_he"] = "mock formal decision repair"
         repaired["repair_reason"] = ";".join(validation_failures)
         return repaired
@@ -1736,6 +1783,10 @@ class MockTopicSubjectV3Client:
             "normalized_event_summary_he": text[:220],
             "procedural_carrier_he": None,
             "municipal_action_description_he": text[:180],
+            "subject_candidate_he": compact_text(context.target_artifact.topic_label_he) or text[:120],
+            "subject_display_candidate_he": compact_text(context.target_artifact.topic_label_he) or text[:120],
+            "predicted_topic_candidate_he": compact_text(context.target_artifact.topic_label_he) or text[:80],
+            "category_candidate_he": "כללי",
             "matter_candidate_he": compact_text(context.target_artifact.topic_label_he) or text[:120],
             "outcome_he": None,
             "supporting_quote_he": text[:180],
@@ -1786,7 +1837,7 @@ class MockTopicSubjectV3Client:
             "confidence": confidence if outcome_is_decision else 0.0,
             "limitations": ["mock"],
         }
-        matter = compact_text(normalized_event.get("matter_candidate_he") or normalized_event.get("subject_matter_candidate_he")) or text[:120]
+        matter = compact_text(normalized_event.get("subject_candidate_he") or normalized_event.get("matter_candidate_he") or normalized_event.get("subject_matter_candidate_he")) or text[:120]
         return {
             "context_id": context.context_id,
             "target_artifact_id": context.target_artifact.artifact_id,
@@ -1796,6 +1847,10 @@ class MockTopicSubjectV3Client:
             "action_subtype_he": "",
             "other_action_type_he": "פעולה לא מסווגת" if root == "אחר" else None,
             "action_type_confidence": confidence,
+            "subject_he": matter,
+            "subject_display_he": compact_text(normalized_event.get("subject_display_candidate_he") or normalized_event.get("matter_display_candidate_he") or matter),
+            "predicted_topic_he": compact_text(normalized_event.get("predicted_topic_candidate_he") or matter),
+            "category_he": compact_text(normalized_event.get("category_candidate_he") or "כללי"),
             "matter_he": matter,
             "action_details_he": text[:300],
             "action_quote_he": text[:180],
@@ -1829,7 +1884,10 @@ class MockTopicSubjectV3Client:
         judge_prediction = {
             "action_type_he": extraction_payload.get("action_type_he") or extraction_payload.get("action_root_label_he"),
             "action_subtype_he": extraction_payload.get("action_subtype_he") or extraction_payload.get("action_child_label_he"),
-            "matter_he": extraction_payload.get("matter_he") or extraction_payload.get("subject_matter_he"),
+            "subject_he": extraction_payload.get("subject_he") or extraction_payload.get("matter_he") or extraction_payload.get("subject_matter_he"),
+            "predicted_topic_he": extraction_payload.get("predicted_topic_he"),
+            "category_he": extraction_payload.get("category_he"),
+            "matter_he": extraction_payload.get("subject_he") or extraction_payload.get("matter_he") or extraction_payload.get("subject_matter_he"),
             "outcome_type": ((extraction_payload.get("outcome") or {}).get("outcome_type") if isinstance(extraction_payload.get("outcome"), dict) else None) or ("decision" if extraction_payload.get("is_decision") else "none"),
             "outcome_label_he": ((extraction_payload.get("outcome") or {}).get("outcome_label_he") if isinstance(extraction_payload.get("outcome"), dict) else None),
             "outcome_quote_he": ((extraction_payload.get("outcome") or {}).get("outcome_quote_he") if isinstance(extraction_payload.get("outcome"), dict) else None),
@@ -1896,7 +1954,8 @@ class MockTopicSubjectV3Client:
             "entailment_status": "entailed",
             "field_assessments": {
                 "action_type_he": {"status": "entailed", "source_quote_he": event_payload.get("action_quote_he")},
-                "matter_he": {"status": "entailed", "source_quote_he": event_payload.get("matter_he")},
+                "subject_he": {"status": "entailed", "source_quote_he": topic_subject_v3_subject_text(event_payload)},
+                "matter_he": {"status": "entailed", "source_quote_he": topic_subject_v3_subject_text(event_payload)},
                 "outcome": {
                     "status": outcome_status,
                     "source_quote_he": outcome_quote or None,
@@ -2689,12 +2748,17 @@ def topic_subject_v3_normalize_matter_identifier_item(
         label = topic_subject_v3_identifier_label_for_type(identifier_type)
     if not identifier_type and label:
         identifier_type = topic_subject_v3_identifier_type_for_label(label)
+    if identifier_type == "street_address":
+        value = topic_subject_v3_clean_street_identifier_value(value)[:160]
+        raw_text = topic_subject_v3_clean_street_identifier_value(raw_text)[:220]
     if not value and not raw_text:
         return None
     if source == "model" and not topic_subject_v3_identifier_supported_by_text(value=value, raw_text=raw_text, support_text=support_text):
         return None
     canonical = compact_text(item.get("canonical_he"))
-    if not canonical:
+    if identifier_type == "street_address":
+        canonical = compact_text(" ".join(part for part in (label, value) if part)) or raw_text
+    elif not canonical:
         canonical = compact_text(" ".join(part for part in (label, value) if part)) or raw_text
     return {
         "type": identifier_type or "other",
@@ -2812,12 +2876,15 @@ def topic_subject_v3_clean_identifier_value(value: str) -> str:
 
 
 def topic_subject_v3_clean_street_identifier_value(value: str) -> str:
-    text = re.split(r"\s+(?=לעמותת|לעמותה|עמותה|גוש|חלקה|מגרש|בתמורה|לצורך|עבור)", compact_text(value), maxsplit=1)[0]
+    text = re.split(r"\s+(?=לעמותת|לעמותה|עמותה|גוש|חלקה|מגרש|בתמורה|לצורך|עבור|הזוכה|מכרז|לחודש|בתוספת|וזאת|וביתן|בביתן)|₪", compact_text(value), maxsplit=1)[0]
+    text = re.sub(r"\s*\d{1,4}\s*/\s*\d{2,4}.*$", "", text)
     return topic_subject_v3_clean_identifier_value(text)
 
 
 def topic_subject_v3_clean_entity_identifier_value(value: str) -> str:
-    text = re.split(r"\s*(?:עמותה\s*רשומה|ע\s*\.?\s*ר\s*\.?|ח\s*\.?\s*פ\s*\.?|מספר|\d{5,})", compact_text(value), maxsplit=1)[0]
+    text = compact_text(value)
+    text = re.split(r"\s*(?:[-–]|עמותה\s*רשומה|ע\s*\.?\s*ר\s*\.?|ח\s*\.?\s*פ\s*\.?|מספר|\d{5,})", text, maxsplit=1)[0]
+    text = re.split(r"\s+(?=הסדרת|הקצאה|הפעלת|לצורך|עבור|בתמורה|בגוש|גוש|חלקה|מגרש|ברחוב|רחוב)", text, maxsplit=1)[0]
     return topic_subject_v3_clean_identifier_value(text)
 
 
@@ -2861,15 +2928,340 @@ def topic_subject_v3_dedupe_matter_identifiers(identifiers: list[dict[str, str]]
     return deduped
 
 
+def topic_subject_v3_clean_semantic_subject(text: Any, *, identifiers: list[dict[str, str]] | None = None) -> str:
+    subject = compact_text(text)[:700]
+    if not subject:
+        return ""
+    cleaned = subject
+    cleaned = re.sub(r"^[\s\d.)(:;\-–]+", "", cleaned)
+    cleaned = re.sub(r"[\"“”„׳']", "", cleaned)
+    cleaned = re.sub(r"^\s*(?:לאשר|אישור|בקשה\s+לאישור|בקשת\s+אישור)\s+", "", cleaned)
+    cleaned = re.sub(r"^\s*הסכם\s+רשות\s+בין\s+.+?\s+לבין\s+.+?(?:-|–|:)", "", cleaned)
+    cleaned = re.sub(r"\bבין\s+עיריית\s+[^-–,:;.]+?\s+לבין\s+[^-–,:;.]+?(?:-|–|:)", " ", cleaned)
+    cleaned = re.sub(r"^\s*הסכם\s+רשות\s+ל(?=\S)", "", cleaned)
+    cleaned = re.sub(r"^\s*הסכם\s+רשות\s+", "", cleaned)
+    cleaned = re.sub(r"^\s*(?:השכרת|הקצאת|שכירת|מכירת|רכישת)\s+מבנה\s+למטרת\s+", "", cleaned)
+    cleaned = re.sub(r"^\s*מבנה\s+למטרת\s+", "", cleaned)
+    cleaned = re.sub(r"^\s*ל(?=(?:הקצאת|הפעלת|מינוי|רכישת|תיקון|עדכון|הקמת|שדרוג|ביצוע|מתן|העברת|הארכת|חידוש|אישור))", "", cleaned)
+    cleaned = re.sub(r"^\s*הסדרת\s+הקצאה\s+לצורך", "הקצאה לצורך", cleaned)
+    cleaned = re.sub(r"\s+בראשות\s+[^,.;()\n]{1,100}", " ", cleaned)
+    cleaned = re.sub(r"\s+(?:עיריית|עירייה|המועצה)\s+[^,.;()\n]{1,100}", " ", cleaned)
+    cleaned = re.sub(r"\s*,?\s*(?:ו)?כמפורט\s+ב(?:סעיף|סעיפים).*$", " ", cleaned)
+    cleaned = topic_subject_v3_remove_identifier_text_from_subject(cleaned, identifiers or [])
+    cleaned = topic_subject_v3_remove_location_text_from_subject(cleaned)
+    cleaned = re.sub(r"\s*(?:ל|עבור|לטובת)?(?:עמותת|חברת|חברה|תאגיד)\s+[^,.;()\n]{1,100}", " ", cleaned)
+    cleaned = re.sub(r"\b(?:ב)?גוש\s*[0-9A-Za-z\u0590-\u05FF/\-]+(?:\s*(?:ו)?ח\s*\"?\s*ח\s*[0-9A-Za-z\u0590-\u05FF/\-]+)?", " ", cleaned)
+    cleaned = re.sub(r"\b(?:ו)?ח\s*\"?\s*ח\s*[0-9A-Za-z\u0590-\u05FF/\-]+", " ", cleaned)
+    cleaned = re.sub(r"\b(?:חלקה|חלקות|מגרש|מגרשים)\s*[0-9A-Za-z\u0590-\u05FF/\-]+", " ", cleaned)
+    cleaned = re.sub(r"\b(?:עמותה\s*רשומה|ע\s*\.?\s*ר\s*\.?|ח\s*\.?\s*פ\s*\.?|חברה\s*מספר)\s*\d{5,12}", " ", cleaned)
+    cleaned = re.sub(r"(?<![\u0590-\u05FFA-Za-z])\d[\d/\-]*(?![\u0590-\u05FFA-Za-z])", " ", cleaned)
+    cleaned = re.sub(r"\s*(?:הידוע(?:ה|ים)?(?:\s+כ)?|מספר|מס|מס'|לשנת|לשנה|בשנת|שנת)\s*$", "", cleaned)
+    cleaned = compact_text(cleaned).strip(" ,.;:–-()[]{}").strip()
+    cleaned = re.sub(r"\s*,\s*[\u0590-\u05FF]{2,20}\s*$", "", cleaned).strip()
+    return (cleaned or subject)[:500]
+
+
+def topic_subject_v3_grounded_predicted_topic(*, predicted_topic: str, subject: str, source_text: str) -> str:
+    property_topic = topic_subject_v3_property_transaction_topic(source_text=source_text, subject=subject)
+    if property_topic:
+        return property_topic
+    topic = compact_text(predicted_topic)[:220]
+    if not topic:
+        return topic_subject_v3_clean_predicted_topic(topic_subject_v3_topic_from_subject(subject))
+    topic_tokens = topic_subject_v3_meaningful_tokens(topic)
+    support_tokens = topic_subject_v3_meaningful_tokens(" ".join([subject, source_text]))
+    if topic_tokens and support_tokens and topic_tokens.isdisjoint(support_tokens):
+        return topic_subject_v3_clean_predicted_topic(topic_subject_v3_topic_from_subject(subject))
+    return topic_subject_v3_clean_predicted_topic(topic)
+
+
+def topic_subject_v3_clean_predicted_topic(text: str) -> str:
+    topic = topic_subject_v3_clean_semantic_subject(text)
+    topic = re.sub(r"^\s*(?:בנושא|בעניין|לעניין|לגבי)\s+", "", topic)
+    return compact_text(topic).strip(" ,.;:–-()[]{}").strip()[:220]
+
+
+def topic_subject_v3_topic_from_subject(subject: str) -> str:
+    topic = compact_text(subject)
+    topic = re.sub(r"^\s*(?:השכרת|הקצאת|שכירת|מכירת|רכישת)\s+מבנה\s+ל(?:מטרת|צורך)\s+", "", topic)
+    topic = re.sub(r"^\s*(?:השכרת|הקצאת|שכירת|מכירת|רכישת)\s+מבנה\s+ל(?=(?:הפעלת|ניהול|הקמת))", "", topic)
+    topic = re.sub(r"^\s*מבנה\s+ל(?:מטרת|צורך)\s+", "", topic)
+    topic = re.sub(r"^\s*(?:הקצאת|השכרת|שכירת|מכירת|רכישת)\s+", "", topic)
+    topic = re.sub(r"^\s*(?:ניהול\s+ו)?הפעלת\s+", "", topic)
+    return compact_text(topic).strip(" ,.;:–-()[]{}").strip()[:220]
+
+
+def topic_subject_v3_property_transaction_topic(*, source_text: str, subject: str) -> str:
+    text = compact_text(" ".join(part for part in (source_text, subject) if compact_text(part)))
+    if not text:
+        return ""
+    action_object = r"(?P<object>מבנה|מבנים|נכס|נכסים|מקרקעין|קרקע|מגרש|מגרשים|חלק(?:ה|ות)|שטח|שטחים|זכו(?:ת|יות)(?:\s+חכירה)?)"
+    patterns = (
+        (r"(?:להשכרת|השכרת|להשכיר|השכיר|שכירת)\s+" + action_object, "השכרת"),
+        (r"(?:להקצאת|הקצאת|הסדרת\s+הקצאה|להקצות|הקצה)\s+" + action_object, "הקצאת"),
+        (r"(?:למכירת|מכירת|למכור|מכרה?)\s+" + action_object, "מכירת"),
+        (r"(?:לרכישת|רכישת|לרכוש|רכשה?)\s+" + action_object, "רכישת"),
+        (r"(?:להחכרת|החכרת|לחכירת|חכירת)\s+" + action_object, "חכירת"),
+        (r"(?:ויתור\s+על|לוותר\s+על)\s+(?:חלק\s+מ)?" + action_object, "ויתור על"),
+    )
+    for pattern, action_label in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        object_label = topic_subject_v3_canonical_property_object(match.group("object"))
+        if not object_label:
+            continue
+        return compact_text(f"{action_label} {object_label}")[:220]
+    return ""
+
+
+def topic_subject_v3_canonical_property_object(value: str) -> str:
+    normalized = normalize_for_search(value)
+    if not normalized:
+        return ""
+    if "זכות" in normalized or "זכיות" in normalized or "זכויות" in normalized:
+        return "זכות חכירה" if "חכירה" in normalized else "זכות"
+    if "מקרקעין" in normalized:
+        return "מקרקעין"
+    if "מבנה" in normalized or "מבנים" in normalized:
+        return "מבנה"
+    if "נכס" in normalized or "נכסים" in normalized:
+        return "נכס"
+    if "קרקע" in normalized:
+        return "קרקע"
+    if "מגרש" in normalized or "מגרשים" in normalized:
+        return "מגרש"
+    if "חלקה" in normalized or "חלקות" in normalized:
+        return "חלקה"
+    if "שטח" in normalized or "שטחים" in normalized:
+        return "שטח"
+    return compact_text(value)
+
+
+def topic_subject_v3_meaningful_tokens(value: str) -> set[str]:
+    stopwords = {
+        "של",
+        "את",
+        "על",
+        "עם",
+        "לפי",
+        "מול",
+        "בין",
+        "לבין",
+        "למטרת",
+        "לצורך",
+        "ניהול",
+        "הפעלת",
+        "הפעלת",
+        "מבנה",
+        "עיריית",
+        "עירייה",
+        "המועצה",
+    }
+    normalized = normalize_for_search(value)
+    return {token for token in re.findall(r"[\u0590-\u05FF]{3,}", normalized) if token not in stopwords}
+
+
+def topic_subject_v3_category_fallback(category: str, *, source_topic_label: str, subject: str = "") -> str:
+    current = compact_text(category)[:160]
+    if current not in {"", "אחר", "כללי"} and topic_subject_v3_category_label_is_plausible(current):
+        return current
+    for candidate in (compact_text(source_topic_label)[:160], topic_subject_v3_category_from_subject(subject)):
+        if topic_subject_v3_category_label_is_plausible(candidate):
+            return candidate
+    return "אחר" if current else ""
+
+
+def topic_subject_v3_category_label_is_plausible(category: str) -> bool:
+    candidate = compact_text(category)
+    if not candidate or candidate in {"אחר", "כללי"}:
+        return False
+    if len(candidate) > 45 or re.search(r"\d", candidate):
+        return False
+    if any(mark in candidate for mark in (".", ":", "?", "!", ",", ";")):
+        return False
+    if len(candidate.split()) > 5:
+        return False
+    candidate_norm = normalize_for_search(candidate)
+    first_word = candidate_norm.split()[0] if candidate_norm.split() else ""
+    if first_word in {"לגבי", "בנושא", "בעניין", "לעניין", "כדי", "אם", "אולי", "האם", "צריך"}:
+        return False
+    if text_has_any(candidate_norm, ("אם צריך", "אולי לא", "כדי ש", "מה קורה")):
+        return False
+    return True
+
+
+def topic_subject_v3_category_from_subject(subject: str) -> str:
+    text = compact_text(subject)
+    match = re.search(r"(?:ב|ל)?וועדת\s+(?P<domain>[^,.;()\n]{2,60})", text)
+    if not match:
+        match = re.search(r"(?:ב|ל)?ועדת\s+(?P<domain>[^,.;()\n]{2,60})", text)
+    if not match:
+        return ""
+    domain = re.split(r"\s+(?:בראשות|בנושא|בעניין|לעניין|של)\s+", compact_text(match.group("domain")), maxsplit=1)[0]
+    domain = compact_text(domain).strip(" ,.;:–-()[]{}")
+    domain = re.sub(r"^ה(?=[\u0590-\u05FF]{3,}$)", "", domain)
+    return domain[:45] if topic_subject_v3_category_label_is_plausible(domain) else ""
+
+
+def topic_subject_v3_normalize_decision_outcome_core_fields(*, outcome: dict[str, Any], outcome_is_decision: bool, evidence_text: str) -> dict[str, Any]:
+    if not outcome_is_decision:
+        return outcome
+    repaired = dict(outcome)
+    outcome_type = compact_text(repaired.get("outcome_type"))
+    evidence_norm = normalize_for_search(
+        " ".join(
+            part
+            for part in (
+                outcome_type,
+                repaired.get("outcome_label_he"),
+                repaired.get("outcome_summary_he"),
+                repaired.get("outcome_quote_he"),
+                evidence_text,
+            )
+            if compact_text(part)
+        )
+    )
+    inferred_type = ""
+    if topic_subject_v3_text_has_any_result_cue(evidence_norm, REJECTION_DECISION_CUES):
+        inferred_type = "rejected"
+    elif topic_subject_v3_text_has_any_result_cue(evidence_norm, AGENDA_REMOVAL_CUES):
+        inferred_type = "removed"
+    elif topic_subject_v3_text_has_any_result_cue(evidence_norm, COMMITTEE_REFERRAL_RESULT_CUES):
+        inferred_type = "referred"
+    elif text_has_any(evidence_norm, APPROVAL_DECISION_QUOTE_CUES + STRONG_APPROVAL_ACTION_CUES + APPROVAL_VERB_CUES):
+        inferred_type = "approved"
+    elif outcome_type in {"", "decision", "unknown"} and text_has_any(evidence_norm, DECISION_ACTION_CUES):
+        inferred_type = "approved"
+    if inferred_type:
+        outcome_type = inferred_type
+        repaired["outcome_type"] = inferred_type
+    label = topic_subject_v3_canonical_outcome_label(outcome_type)
+    if label:
+        current_label = compact_text(repaired.get("outcome_label_he"))
+        if outcome_type == "approved" or not current_label:
+            repaired["outcome_label_he"] = label
+            current_label = label
+        repaired["outcome_label_norm"] = normalize_for_search(current_label)[:500]
+        summary = compact_text(repaired.get("outcome_summary_he"))
+        if outcome_type == "approved" or not summary or topic_subject_v3_outcome_summary_is_noisy(summary):
+            repaired["outcome_summary_he"] = current_label
+    return repaired
+
+
+def topic_subject_v3_canonical_outcome_label(outcome_type: str) -> str:
+    return {
+        "approved": "אישור",
+        "rejected": "דחייה",
+        "removed": "הסרה מסדר היום",
+        "referred": "הפניה לוועדה",
+        "deferred": "דחייה למועד אחר",
+        "reported": "דיווח",
+    }.get(compact_text(outcome_type), "")
+
+
+def topic_subject_v3_outcome_summary_is_noisy(summary: str) -> bool:
+    text = compact_text(summary)
+    if len(text) > 80:
+        return True
+    text_norm = normalize_for_search(text)
+    return text_has_any(
+        text_norm,
+        (
+            "פה אחד",
+            "בעד",
+            "נגד",
+            "נמנע",
+            "נמנעים",
+            "הצבעה",
+            "חברי מועצה",
+            "החלטה",
+            "מ א ו ש ר",
+            "מאושר",
+        ),
+    )
+
+
+def topic_subject_v3_remove_identifier_text_from_subject(text: str, identifiers: list[dict[str, str]]) -> str:
+    cleaned = text
+    removable_types = {"lot", "block", "parcel", "plan", "street_address", "registered_association_number", "company_number"}
+    for item in identifiers:
+        if not isinstance(item, dict) or compact_text(item.get("type")) not in removable_types:
+            continue
+        candidates = unique_strings(
+            [
+                compact_text(item.get("raw_text_he")),
+                compact_text(item.get("canonical_he")),
+                compact_text(item.get("value_he")),
+            ]
+        )
+        for candidate in candidates:
+            if candidate:
+                cleaned = cleaned.replace(candidate, " ")
+    return cleaned
+
+
+def topic_subject_v3_remove_location_text_from_subject(text: str) -> str:
+    cleaned = text
+    cleaned = re.sub(r"\s*,?\s*(?:ב)?(?:רחוב|רח'|רח)\s+[^,.;()\n]{1,90}", " ", cleaned)
+    cleaned = re.sub(r"\s*,?\s*(?:ב)?רובע\s+[\u0590-\u05FFA-Za-z0-9/\-]+", " ", cleaned)
+    cleaned = re.sub(r"\s*,?\s*(?:ב)?שכונת\s+[^,.;()\n]{1,80}", " ", cleaned)
+    cleaned = re.sub(r"\s*,?\s*(?:בעיר|ביישוב|במועצה(?:\s+המקומית)?|בעיריית)\s+[^,.;()\n]{1,80}", " ", cleaned)
+    return cleaned
+
+
 def topic_subject_v3_matter_display_he(raw_display: Any, *, matter: str, identifiers: list[dict[str, str]]) -> str:
-    display = compact_text(raw_display)[:300]
+    display = topic_subject_v3_clean_semantic_subject(raw_display, identifiers=identifiers)[:300]
     if display:
         return display
     return topic_subject_v3_derive_matter_display_he(matter=matter, identifiers=identifiers)
 
 
+def topic_subject_v3_subject_text(payload: dict[str, Any]) -> str:
+    return compact_text(payload.get("subject_he") or payload.get("matter_he") or payload.get("subject_matter_he"))
+
+
+def topic_subject_v3_predicted_topic_text(payload: dict[str, Any]) -> str:
+    return compact_text(
+        payload.get("predicted_topic_he")
+        or payload.get("resident_topic_he")
+        or payload.get("topic_he")
+        or payload.get("matter_display_he")
+        or payload.get("subject_display_he")
+        or topic_subject_v3_subject_text(payload)
+    )
+
+
+def topic_subject_v3_category_text(payload: dict[str, Any]) -> str:
+    return compact_text(payload.get("category_he") or payload.get("category_label_he") or payload.get("municipal_category_he"))
+
+
+def topic_subject_v3_promote_legacy_subject_aliases(payload: dict[str, Any]) -> dict[str, Any]:
+    promoted = dict(payload)
+    if "matter_he" in promoted and "subject_he" not in promoted:
+        promoted["subject_he"] = promoted.get("matter_he")
+    if "matter_display_he" in promoted and "subject_display_he" not in promoted:
+        promoted["subject_display_he"] = promoted.get("matter_display_he")
+    if "subject_he" in promoted and "matter_he" not in promoted:
+        promoted["matter_he"] = promoted.get("subject_he")
+    if "subject_display_he" in promoted and "matter_display_he" not in promoted:
+        promoted["matter_display_he"] = promoted.get("subject_display_he")
+    return promoted
+
+
+def topic_subject_v3_promote_repaired_subject_aliases(payload: dict[str, Any], *, original_payload: dict[str, Any]) -> dict[str, Any]:
+    promoted = topic_subject_v3_promote_legacy_subject_aliases(payload)
+    repaired_matter = compact_text(promoted.get("matter_he"))
+    original_matter = compact_text(original_payload.get("matter_he"))
+    original_subject = topic_subject_v3_subject_text(original_payload)
+    repaired_subject = compact_text(promoted.get("subject_he"))
+    if repaired_matter and repaired_matter != original_matter and (not repaired_subject or repaired_subject == original_subject):
+        promoted["subject_he"] = repaired_matter
+    return promoted
+
+
 def topic_subject_v3_derive_matter_display_he(*, matter: str, identifiers: list[dict[str, str]]) -> str:
-    text = compact_text(matter)
+    text = topic_subject_v3_clean_semantic_subject(matter, identifiers=identifiers)
     if not text:
         return ""
     removable_types = {"lot", "block", "parcel", "registered_association_number", "company_number", "plan"}
@@ -2930,15 +3322,20 @@ def topic_subject_v3_event_metadata(event_payload: dict[str, Any], fallback_text
 
 
 def topic_subject_v3_subject_metadata(event_payload: dict[str, Any], fallback_text: str, artifact: TopicDecisionArtifact | None = None) -> dict[str, Any]:
+    subject = topic_subject_v3_subject_text(event_payload)
     text = compact_text(
-        event_payload.get("matter_he")
+        subject
         or event_payload.get("subject_summary_he")
         or event_payload.get("what_text_is_about_he")
         or fallback_text
     )
     metadata = topic_subject_v3_text_metadata(text=text, scope="subject")
-    metadata["matter_he"] = compact_text(event_payload.get("matter_he"))
-    metadata["matter_display_he"] = compact_text(event_payload.get("matter_display_he"))
+    metadata["subject_he"] = subject
+    metadata["subject_display_he"] = compact_text(event_payload.get("subject_display_he") or event_payload.get("matter_display_he"))
+    metadata["predicted_topic_he"] = topic_subject_v3_predicted_topic_text(event_payload)
+    metadata["category_he"] = topic_subject_v3_category_text(event_payload)
+    metadata["matter_he"] = subject
+    metadata["matter_display_he"] = metadata["subject_display_he"]
     metadata["matter_identifiers"] = event_payload.get("matter_identifiers") if isinstance(event_payload.get("matter_identifiers"), list) else []
     metadata["primary_time"] = topic_subject_v3_primary_time_for_text(text=text, source_scope="subject", artifact=artifact, prefer_relative=True)
     return metadata
@@ -3169,14 +3566,14 @@ def topic_subject_v3_source_context(*, context: TopicSubjectV3EventContext, max_
         "instructions": [
             "Use the target row as the row being judged.",
             "First inspect target_row.text_spans; a long target row may contain background spans followed by a later action or outcome span.",
-            "When text_spans come from upstream, treat their roles and offsets as structure hints only; final action, matter, and outcome must still be grounded in raw_text quotes.",
+            "When text_spans come from upstream, treat their roles and offsets as structure hints only; final action, subject, and outcome must still be grounded in raw_text quotes.",
             "Use structural_role and structure_metadata only as generic context hints, never as final action labels or evidence of a decision outcome.",
             "Use upstream_subject_hint as a strong non-authoritative hint for the row headline/subject. It can help select the relevant matter and span in long mixed rows.",
             "Do not treat upstream_subject_hint as source evidence. It cannot prove that an event exists, that an action occurred, or that a decision outcome exists.",
             "If upstream_subject_hint conflicts with raw_text evidence, trust raw_text and explain the conflict in rationale_he.",
             "upstream_summary_he is a summary only; do not use it as source evidence or quote support.",
             "Classify spans by role before deciding whether the target row participates in an event.",
-            "Separate evidence roles explicitly: subject-bearing text can identify matter, action-bearing text identifies the municipal act, phase-bearing text identifies lifecycle status, and outcome-bearing text identifies formal results.",
+            "Separate evidence roles explicitly: subject-bearing text can identify subject, action-bearing text identifies the municipal act, phase-bearing text identifies lifecycle status, and outcome-bearing text identifies formal results.",
             "If a later span carries the municipal action, anchor the event to that span while preserving the full row as provenance.",
             "Use nearby rows only to recover bounded event context and row relationships.",
             "Do not create a separate event from neighbor text when the target row is only a fragment, metadata, vote row, or duplicate reference.",
@@ -3191,6 +3588,7 @@ def topic_subject_v3_normalization_payload(*, context: TopicSubjectV3EventContex
         "pipeline_version": PROVENANCE_V3,
         "requirements": [
             "Return strict JSON only.",
+            *TOPIC_SUBJECT_V3_SEMANTIC_FIELD_REQUIREMENTS,
             "Normalize the target row and nearby context into one candidate municipal event before action extraction.",
             "target_artifact_id must equal source_context.target_artifact_id. Never replace the target with a nearby row; if a nearby row contains a later decision, keep it as nearby context and classify the target row's role separately.",
             "Use target_row.text_spans to separate structural, background, action-bearing, outcome-bearing, and supporting parts of long mixed rows.",
@@ -3209,15 +3607,15 @@ def topic_subject_v3_normalization_payload(*, context: TopicSubjectV3EventContex
             "Do not choose a controlled action ontology label in this stage.",
             "Decide whether the target row itself participates in a municipal event, or is only metadata, duplicate reference, evidence fragment, vote/result metadata, supporting phase, or insufficient context.",
             "When nearby rows describe the same event lifecycle, identify the best action anchor row and classify the other rows as supporting rather than independent events.",
-            "Separate agenda/procedure carrier from the concrete matter.",
-            "If the text says הצעה לסדר or הצעה לסדר יום followed by a concrete topic, keep the carrier/procedure separate from matter_candidate_he; the concrete topic is the matter.",
-            "If the matter contains exact land/address/entity identifiers, keep them available as matter_identifiers and use matter_display_candidate_he only for a cleaner display label.",
+            "Separate agenda/procedure carrier from the concrete subject.",
+            "If the text says הצעה לסדר or הצעה לסדר יום followed by a concrete topic, keep the carrier/procedure separate from subject_candidate_he; the concrete topic is the subject.",
+            "If the subject contains exact land/address/entity identifiers, keep them available as matter_identifiers and use subject_display_candidate_he only for a cleaner display label.",
             "If one span says הצעה לסדר/הצעה לסדר יום and another span says יורדת מסדר היום, the proposal span is the action_candidate and the removal span is the outcome_candidate; do not make the removal span the only primary_action_span.",
             "For agenda proposal rows with a later result, primary_action_span_ids must point to the proposal/request carrier span, while primary_outcome_span_ids must point to the result span.",
             "Classify outcome evidence semantically: actual_result means a completed procedural result; proposal_or_intent means asks/proposes/suggests/can transfer; ambiguous_agreement means agreement wording without a clear completed result; not_outcome means no result evidence.",
             "Do not mark outcome_he=referred from modal or proposal wording such as מציעים להעביר or אפשר להעביר unless the same supplied text directly says the matter actually passed/was transferred to a committee.",
             "Keep שאילתה and מענה לשאילתה distinct when the evidence supports that distinction.",
-            "Use nearby rows only to recover bounded subject words, decision/result context, and row roles.",
+            "Use nearby rows only to recover bounded subject words, predicted topic/category context, decision/result context, and row roles.",
             "Do not invent municipality-specific rules, labels, or facts.",
         ],
         "schema": {
@@ -3229,6 +3627,10 @@ def topic_subject_v3_normalization_payload(*, context: TopicSubjectV3EventContex
             "normalized_event_summary_he": "string|null",
             "procedural_carrier_he": "string|null",
             "municipal_action_description_he": "string|null",
+            "subject_candidate_he": "concise action-scoped subject|null",
+            "subject_display_candidate_he": "clean concise display label for UI/reporting|null",
+            "predicted_topic_candidate_he": "short resident-facing generalized topic|null",
+            "category_candidate_he": "broad municipal service area/domain|null",
             "matter_candidate_he": "string|null",
             "matter_display_candidate_he": "string|null",
             "matter_identifiers": ["structured identifier objects when relevant"],
@@ -3279,12 +3681,13 @@ def topic_subject_v3_extraction_payload(
         "pipeline_version": PROVENANCE_V3,
         "requirements": [
             "Return strict JSON only.",
+            *TOPIC_SUBJECT_V3_SEMANTIC_FIELD_REQUIREMENTS,
             "Use normalized_event as the primary source and source_context only to verify evidence.",
             "Prefer normalized_event.primary_action_span_ids and action_focus_quote_he when present; they identify the action-bearing span inside a long mixed row.",
             "If selected spans contradict the whole-row summary, trust the exact selected spans and source quotes.",
             "Return one primary event for the target row, or is_event=false when the target row is not part of a standalone action/matter event.",
             "Choose action_type_he only by copying an exact label from allowed_actions.",
-            "Before choosing action_type_he, compare candidate readings by evidence role: subject/matter evidence, action evidence, phase evidence, and decision evidence. The subject hint may support matter only; it must not choose the action.",
+            "Before choosing action_type_he, compare candidate readings by evidence role: subject evidence, action evidence, phase evidence, and decision evidence. The subject hint may support subject only; it must not choose the action.",
             "Use דיון when the target row mainly discusses or debates a matter and no more specific allowed action is directly supported by the action-bearing evidence.",
             "If action-bearing evidence states or summarizes a concrete desired municipal change/action and no more specific allowed action is supported, use action_type_he=בקשה, event_phase=open_request, and outcome_is_decision=false.",
             "Do not reject בקשה solely because it lacks formal motion, vote, decision, or formulaic request wording; those are required only for formal decision outcomes, not for open request events.",
@@ -3293,35 +3696,36 @@ def topic_subject_v3_extraction_payload(
             "If no controlled label fits with high confidence, set action_type_he to אחר and explain why.",
             "Always return action_type_confidence as a number. Do not omit it when action_type_he is controlled.",
             "Use action_subtype_he only for a reusable subtype; leave it empty when redundant.",
-            "Extract action_type and matter_he as the event identity. Do not create a separate formal/effected object field.",
-            "matter_he must be the concrete thing acted on, requested, asked about, or answered, including affected participation/person/object and identity-critical identifiers when needed to distinguish events.",
-            "Do not strip lot/block/parcel/address/entity/registration identifiers from matter_he when they distinguish one legal, land, address, or entity event from another.",
-            "Use matter_display_he for the cleaner human-facing label; it may omit identity identifiers that are separately preserved in matter_identifiers.",
+            "Extract action_type_he and subject_he as the event identity. Do not create a separate formal/effected object field.",
+            "subject_he must be the clean semantic thing acted on, requested, asked about, or answered, without addresses, numbers, quoted entity names, source quotes, or location details.",
+            "Always strip lot/block/parcel/address/entity/registration identifiers from subject_he and preserve them separately in matter_identifiers, geography/time metadata, source evidence, and provenance.",
+            "Use subject_display_he for the same clean human-facing label; it must not reintroduce identifiers that are separately preserved in matter_identifiers.",
             "Use matter_identifiers for structured exact identifiers copied from the source, such as מגרש, גוש, חלקה, תכנית, street/address, entity name, association number, or company number.",
-            "matter_he must preserve the action-scoped matter from the source: include the stated change, condition, assignment, status, or object being acted on when that wording is needed to understand what the event does.",
-            "Do not reduce matter_he to only a broad topic noun, affected object, domain, or agenda carrier when the source states a narrower actionable matter.",
-            "When the source contains an explicit action/request/proposal statement plus later advocacy, criticism, or stance text, anchor action_type_he and matter_he on the explicit action/request/proposal statement.",
-            "Use upstream_subject_hint to disambiguate matter_he when the target row contains multiple nearby matters, but do not copy it blindly when raw_text does not support it.",
+            "subject_he must preserve the reusable action-scoped subject from the source: include the stated change, condition, assignment, status, or object being acted on when that wording is needed to understand what the event does, but not exact identifiers or locations.",
+            "Do not reduce subject_he to only a broad topic noun, affected object, domain, or agenda carrier when the source states a narrower actionable subject.",
+            "When the source contains an explicit action/request/proposal statement plus later advocacy, criticism, or stance text, anchor action_type_he and subject_he on the explicit action/request/proposal statement.",
+            "Use upstream_subject_hint to disambiguate subject_he when the target row contains multiple nearby subjects, but do not copy it blindly when raw_text does not support it.",
             "Do not use upstream_subject_hint as evidence for action_type_he, event existence, or decision outcome.",
             "When more than one plausible event reading exists, return event_candidates and select the candidate whose action evidence best represents the current municipal action, not just the title/subject carrier.",
             "For long mixed rows, include a candidate for each concrete action-bearing span. Prefer a directly stated directive/current action such as ניתנה הנחייה over weaker proposal/recommendation wording such as מוצע when both are present and neither is selected by explicit target metadata.",
-            "For event_candidates, keep matter evidence, action evidence, phase evidence, and decision evidence separate so deterministic validation can select the grounded current-action candidate.",
+            "For event_candidates, keep subject evidence, action evidence, phase evidence, and decision evidence separate so deterministic validation can select the grounded current-action candidate.",
             "Do not choose an action label from a quote that only mentions the subject. action_quote_he must express the selected municipal act, not only the topic.",
             "Keep שאילתה and מענה לשאילתה distinct.",
             "If the current row states that an answer/response to an inquiry was read, given, presented, or attached, choose action_type_he=מענה לשאילתה, not שאילתה, even when the row title identifies the original inquiry topic.",
-            "When raw text contains both an initiating item/title and later response/answer/handling evidence for that item, choose the response/answer/handling action label when available; the title only supports matter, not the current lifecycle action.",
-            "Use הסתייגות when the source explicitly presents an objection/reservation/amendment to a municipal matter, including objection to a budget item, TBR, agenda item, appointment, contract, or proposal.",
+            "When raw text contains both an initiating item/title and later response/answer/handling evidence for that item, choose the response/answer/handling action label when available; the title only supports subject, not the current lifecycle action.",
+            "Use הסתייגות when the source explicitly presents an objection/reservation/amendment to a municipal subject, including objection to a budget item, TBR, agenda item, appointment, contract, or proposal.",
             "Do not collapse explicit הסתייגות into בקשה; a request-like remedy inside an objection is part of the objection matter.",
             "Use דחייה only for a formal/procedural rejection by a municipal body. If the source only contains opposition or a request not to approve, choose the best non-decision action label and keep outcome_is_decision=false.",
             "Use התקשרות for agreement/contract/right-of-use/service-engagement rows when the source describes the engagement but does not directly say the municipal body approved it.",
-            "Use outcome to describe result/status separately from action_type. For example action_type=בקשה with outcome_type=none, or action_type=אישור with outcome_type=approved.",
+            "Use בקשה לאישור for agreement/contract/allocation/appointment/budget/protocol rows brought for approval. If a final approval appears, keep action_type_he=בקשה לאישור and put the final result only in outcome.",
+            "Use outcome to describe result/status separately from action_type. For example action_type=בקשה with outcome_type=none, or action_type=בקשה לאישור with outcome_type=approved and outcome_label_he=אישור.",
             "Set outcome_is_decision=true only when supplied raw text contains an actual outcome such as approval, rejection, referral, removal, or another binding/procedural decision.",
             "Classify outcome evidence semantically before setting outcome_is_decision: actual_result can support an outcome; proposal_or_intent, ambiguous_agreement, and not_outcome must keep outcome_type=none unless another exact quote states the actual result.",
             "Before finalizing action/outcome, build lifecycle_evidence from exact source quotes. Separate request_or_intent, vote_tally, and formal_result evidence even when they appear in the same row.",
             "If outcome_is_decision=true, outcome.outcome_evidence_classification must be actual_result and lifecycle_evidence must include the formal_result quote that supports it.",
             "If the only available decision-related quote is request_or_intent or vote_tally without semantic final-result wording, keep outcome_is_decision=false and explain the limitation.",
             "Do not treat מציעים להעביר, מבקשים להעביר, אפשר להעביר, or similar modal/proposal wording as outcome_type=referred by itself; use בקשה with outcome_type=none unless the text directly says the matter was transferred or decided for transfer.",
-            "For agenda proposals, do not let הצעה לסדר or הצעה לסדר יום replace the concrete matter_he; copy the topic after the carrier as matter_he when supported.",
+            "For agenda proposals, do not let הצעה לסדר or הצעה לסדר יום replace the concrete subject_he; copy the topic after the carrier as subject_he when supported.",
             "When a row contains both הצעה לסדר יום and יורדת מסדר היום, keep action_type_he=הצעה לסדר יום when that is the action evidence, and put the removal only in outcome.outcome_type=removed.",
             "If normalized_event incorrectly marks only the removal/result span as primary_action_span_ids while procedural_carrier_he contains הצעה לסדר/הצעה לסדר יום, override that span-role mistake: choose action_type_he=הצעה לסדר יום and use the removal quote only as outcome evidence.",
             "If outcome_is_decision=true, outcome.outcome_quote_he must be an exact short quote from a supplied raw_text row.",
@@ -3336,6 +3740,11 @@ def topic_subject_v3_extraction_payload(
             "action_subtype_he": "string|null",
             "other_action_type_he": "string|null",
             "action_type_confidence": 0.0,
+            "subject_he": "concise action-scoped subject|null",
+            "subject_display_he": "clean concise display label for UI/reporting|null",
+            "predicted_topic_he": "short resident-facing generalized topic|null",
+            "category_he": "broad municipal service area/domain|null",
+            "category_id": "stable generic category id/slug|null",
             "matter_he": "string|null",
             "matter_display_he": "clean concise display label for UI/reporting|null",
             "matter_identifiers": [
@@ -3382,7 +3791,7 @@ def topic_subject_v3_extraction_payload(
                 }
             ],
             "evidence_roles": {
-                "subject_evidence_quote_he": "exact quote supporting matter_he|null",
+                "subject_evidence_quote_he": "exact quote supporting subject_he|null",
                 "action_evidence_quote_he": "exact quote expressing the selected action_type_he|null",
                 "phase_evidence_quote_he": "exact quote supporting event_phase/lifecycle|null",
                 "decision_evidence_quote_he": "exact quote supporting formal decision outcome|null",
@@ -3395,6 +3804,9 @@ def topic_subject_v3_extraction_payload(
                     "is_current_action": "boolean",
                     "is_title_only": "boolean",
                     "action_type_he": "one exact label from allowed_actions|null",
+                    "subject_he": "string|null",
+                    "predicted_topic_he": "string|null",
+                    "category_he": "string|null",
                     "matter_he": "string|null",
                     "matter_display_he": "string|null",
                     "matter_identifiers": ["structured identifier objects when relevant"],
@@ -3431,13 +3843,14 @@ def topic_subject_v3_non_event_reconsideration_payload(
         "pipeline_version": PROVENANCE_V3,
         "requirements": [
             "Return strict JSON only.",
-            "This is not the judge stage. Reconsider only because the extraction marked is_event=false while also returning grounded action/matter evidence.",
+            *TOPIC_SUBJECT_V3_SEMANTIC_FIELD_REQUIREMENTS,
+            "This is not the judge stage. Reconsider only because the extraction marked is_event=false while also returning grounded action/subject evidence.",
             "Use only supplied raw_text quotes as evidence. Do not use summaries as quote support.",
-            "Use upstream_subject_hint only to disambiguate matter; it cannot prove event existence or action type.",
+            "Use upstream_subject_hint only to disambiguate subject; it cannot prove event existence or action type.",
             "If the grounded quote expresses a concrete requested, proposed, desired, answered, reported, objected-to, or procedurally handled municipal action, return is_event=true with one exact allowed action label.",
             "If the quote is only subject mention, background, opinion, criticism, or comparison without a concrete municipal action/change/procedural step, keep is_event=false.",
             "Keep outcome_is_decision=false unless the raw text directly states a formal decision outcome.",
-            "Preserve identity-critical identifiers in matter_he, and put cleaner UI text in matter_display_he plus structured identifiers in matter_identifiers.",
+            "Preserve identity-critical identifiers in subject_he, and put cleaner UI text in subject_display_he plus structured identifiers in matter_identifiers.",
             "Treat proposal/modal wording such as מציעים להעביר or אפשר להעביר as an event action only, not as outcome_type=referred.",
             "Do not invent a label. If no controlled label is high-confidence, use action_type_he=אחר with other_action_type_he.",
             "Always include action_type_confidence when is_event=true.",
@@ -3450,6 +3863,10 @@ def topic_subject_v3_non_event_reconsideration_payload(
             "action_subtype_he": "string|null",
             "other_action_type_he": "string|null",
             "action_type_confidence": 0.0,
+            "subject_he": "concise action-scoped subject|null",
+            "subject_display_he": "clean concise display label for UI/reporting|null",
+            "predicted_topic_he": "short resident-facing generalized topic|null",
+            "category_he": "broad municipal service area/domain|null",
             "matter_he": "string|null",
             "matter_display_he": "clean concise display label for UI/reporting|null",
             "matter_identifiers": ["structured identifier objects when relevant"],
@@ -3498,17 +3915,18 @@ def topic_subject_v3_judge_payload(
         "pipeline_version": PROVENANCE_V3,
         "requirements": [
             "Return strict JSON only.",
+            *TOPIC_SUBJECT_V3_SEMANTIC_FIELD_REQUIREMENTS,
             "Produce judge_prediction as your independent best extraction as if you were the extraction model.",
             "Then compare judge_prediction to extraction_payload and explain differences.",
             "Judge semantic prediction separately from event identity. If the target row is only a request/background/supporting phase for an accepted nearby decision, mark event_identity_status accordingly.",
             "Accept אחר when the model was not highly confident in a controlled action label; that is a conservative valid outcome, not a failure by itself.",
-            "For judge_prediction.matter_he, preserve the action-scoped matter from the source rather than only the broad object/topic, including identity-critical identifiers when needed.",
-            "For judge_prediction, use matter_display_he for concise display and matter_identifiers for exact structured identifiers; do not require matter_he to be display-clean.",
+            "For judge_prediction.subject_he, preserve the action-scoped subject from the source rather than only the broad object/topic, including identity-critical identifiers when needed.",
+            "For judge_prediction, use subject_display_he for concise display and matter_identifiers for exact structured identifiers; do not require subject_he to be display-clean.",
             "When the source contains an explicit action/request/proposal statement plus later advocacy, criticism, or stance text, judge the extraction against the explicit action/request/proposal statement.",
             "A concrete requested/proposed/desired municipal action can be an open request event even without formal motion, vote, decision, or formulaic request wording; keep outcome_type=none unless a formal result is stated.",
             "For judge_prediction, classify outcome evidence first: actual_result can support an outcome; proposal_or_intent, ambiguous_agreement, and not_outcome cannot support approval, rejection, referral, removal, or deferral.",
             "Do not judge מציעים להעביר, מבקשים להעביר, אפשר להעביר, or similar wording as outcome_type=referred unless another exact quote states the matter actually passed/was transferred to a committee.",
-            "If the source has הצעה לסדר or הצעה לסדר יום plus a concrete topic, treat the carrier as action/procedure and preserve the concrete topic as matter_he.",
+            "If the source has הצעה לסדר or הצעה לסדר יום plus a concrete topic, treat the carrier as action/procedure and preserve the concrete topic as subject_he.",
             "If הצעה לסדר יום is removed from the agenda, judge removal as outcome_type=removed; do not require replacing action_type_he with הסרה מסדר היום when הצעה לסדר יום is the grounded action.",
             "If the current row states that an answer/response to an inquiry was read, given, presented, or attached, judge the action as מענה לשאילתה, not שאילתה, even when the row title identifies the original inquiry topic.",
             "When the source explicitly presents הסתייגות, judge it as הסתייגות unless there is direct current-event evidence of a formal decision outcome.",
@@ -3524,6 +3942,10 @@ def topic_subject_v3_judge_payload(
                 "action_type_he": "one exact label from allowed_actions|null",
                 "action_subtype_he": "string|null",
                 "other_action_type_he": "string|null",
+                "subject_he": "string|null",
+                "subject_display_he": "string|null",
+                "predicted_topic_he": "string|null",
+                "category_he": "string|null",
                 "matter_he": "string|null",
                 "matter_display_he": "string|null",
                 "matter_identifiers": ["structured identifier objects when relevant"],
@@ -3571,7 +3993,7 @@ def topic_subject_v3_quote_repair_payload(
         "requirements": [
             "Return strict JSON only.",
             "Repair only exact quotes by copying text from supplied raw_text rows.",
-            "Do not change action, matter, outcome meaning, or confidence.",
+            "Do not change action, subject, outcome meaning, or confidence.",
             "Use null when no exact quote supports the field.",
         ],
         "schema": {
@@ -3596,8 +4018,9 @@ def topic_subject_v3_evidence_entailment_payload(
         "pipeline_version": PROVENANCE_V3,
         "requirements": [
             "Return strict JSON only.",
-            "Judge whether action_type_he, matter_he, and outcome are directly entailed by the supplied raw_text rows and normalized_event.",
-            "Treat exact quotes as evidence locations only; a grounded quote does not by itself prove the model's action, matter, or outcome interpretation.",
+            *TOPIC_SUBJECT_V3_SEMANTIC_FIELD_REQUIREMENTS,
+            "Judge whether action_type_he, subject_he, predicted_topic_he, and outcome are semantically supported by the supplied raw_text rows and normalized_event.",
+            "Treat exact quotes as evidence locations only; a grounded quote does not by itself prove the model's action, subject, topic, or outcome interpretation.",
             "Keep every source_quote_he short: copy the smallest exact supporting span, preferably under 220 characters, never a full paragraph or full row.",
             "Keep each rationale_he to one concise sentence.",
             "Do not infer an approval, rejection, referral, removal, deferral, or other outcome unless a supplied row directly states that outcome.",
@@ -3605,18 +4028,19 @@ def topic_subject_v3_evidence_entailment_payload(
             "Use event_payload.lifecycle_evidence as the model's semantic ledger, but verify it against source_context. If it misses a relevant request_or_intent, vote_tally, or formal_result quote, repair it.",
             "For outcome.status=entailed, require outcome_evidence_classification=actual_result and a lifecycle_evidence formal_result entry that quotes the actual result. A vote_tally alone is not enough unless the model explains it as actual_result in the same ledger entry.",
             "Do not treat מציעים להעביר, מבקשים להעביר, אפשר להעביר, or similar modal/proposal wording as entailing outcome_type=referred unless another exact quote states actual transfer/decision to transfer.",
-            "If a source says הצעה לסדר יום about a concrete matter and also says it is removed, action_type_he can remain הצעה לסדר יום while outcome_type=removed.",
-            "For matter_he, check whether it preserves the action-scoped matter from the source. If it drops a stated change, condition, assignment, status, or object needed to understand what is being acted on, mark matter_he not_entailed or repair it.",
-            "Use upstream_subject_hint as a strong non-authoritative disambiguation hint for matter_he, especially when several nearby matters appear in one row.",
+            "If a source says הצעה לסדר יום about a concrete subject and also says it is removed, action_type_he can remain הצעה לסדר יום while outcome_type=removed.",
+            "For subject_he, check whether it preserves the action-scoped subject from the source. If it drops a stated change, condition, assignment, status, or object needed to understand what is being acted on, mark subject_he not_entailed or repair it.",
+            "For predicted_topic_he, check whether it is supported as a generalized resident-facing topic and not over-specific source/title/procedure text.",
+            "Use upstream_subject_hint as a strong non-authoritative disambiguation hint for subject_he, especially when several nearby subjects appear in one row.",
             "Do not use upstream_subject_hint as source evidence for event existence, action type, or decision outcome; every accepted claim still needs raw_text support.",
             "Evaluate subject, action, phase, and outcome evidence separately. A matter-supporting quote cannot entail action_type_he unless it also expresses the selected municipal act.",
             "When only discussion/debate is supported by action evidence, repair the action to דיון if no more specific allowed action is directly supported.",
-            "When the source contains an explicit action/request/proposal statement plus later advocacy, criticism, or stance text, use the explicit action/request/proposal statement for matter repair.",
+            "When the source contains an explicit action/request/proposal statement plus later advocacy, criticism, or stance text, use the explicit action/request/proposal statement for subject repair.",
             "If the source explicitly presents הסתייגות, repair generic בקשה/דיווח/המלצה/אחר or unsupported דחייה/אישור to הסתייגות when no current formal decision outcome is directly stated.",
             "If action_type_he is דחייה but the source does not state a formal/procedural rejection by a municipal body, mark action_type_he not_entailed or repair it to the best-supported non-decision action.",
-            "If agreement/contract/right-of-use text supports a municipal engagement but not an approval, repair unsupported action_type_he=אישור to התקשרות or אחר instead of inventing an approval outcome.",
+            "If agreement/contract/right-of-use/allocation text is brought for approval and final approval evidence exists, repair action_type_he=אישור to בקשה לאישור and keep the final approval only in outcome. If final approval evidence is missing, repair unsupported action_type_he=אישור to התקשרות or אחר instead of inventing an approval outcome.",
             "When repairing action_type_he, choose only an exact label from allowed_actions; use אחר with other_action_type_he when no controlled label is sufficiently supported.",
-            "When any field is over-inferred, set repair_required=true and return repaired_event with the best-supported action, matter, and outcome.",
+            "When any field is over-inferred, set repair_required=true and return repaired_event with the best-supported action, subject, and outcome.",
             "If the supplied evidence supports no standalone municipal action/matter event for the target row, return repaired_event.is_event=false with a target_row_role explaining why.",
             "Do not introduce municipality-specific rules or facts not present in source_context.",
         ],
@@ -3626,6 +4050,16 @@ def topic_subject_v3_evidence_entailment_payload(
             "entailment_status": "entailed|partially_entailed|not_entailed|uncertain",
             "field_assessments": {
                 "action_type_he": {
+                    "status": "entailed|not_entailed|uncertain",
+                    "source_quote_he": "short exact quote from supplied raw_text, preferably under 220 chars|null",
+                    "rationale_he": "string",
+                },
+                "subject_he": {
+                    "status": "entailed|not_entailed|uncertain",
+                    "source_quote_he": "short exact quote from supplied raw_text, preferably under 220 chars|null",
+                    "rationale_he": "string",
+                },
+                "predicted_topic_he": {
                     "status": "entailed|not_entailed|uncertain",
                     "source_quote_he": "short exact quote from supplied raw_text, preferably under 220 chars|null",
                     "rationale_he": "string",
@@ -3671,18 +4105,19 @@ def topic_subject_v3_formal_decision_evidence_repair_payload(
         "validation_failures": validation_failures,
         "requirements": [
             "Return strict JSON only.",
+            *TOPIC_SUBJECT_V3_SEMANTIC_FIELD_REQUIREMENTS,
             "Repair the event only by making a semantic lifecycle judgement from supplied raw_text. Do not use keyword matching; explain which quote is request_or_intent, vote_tally, or formal_result.",
             "A formal decision requires semantic actual-result evidence: a supplied quote that states a completed/binding/procedural result. Return it as lifecycle_evidence phase=formal_result and outcome.outcome_evidence_classification=actual_result.",
             "Text saying a speaker asks, demands, objects, proposes, or says לא לאשר / לדרוש שינוי is not by itself a formal decision outcome.",
             "Text saying מציעים להעביר, מבקשים להעביר, אפשר להעביר, or similar modal/proposal wording is not by itself outcome_type=referred.",
             "A vote tally can support the result narrative, but if it does not itself semantically state the final result, keep it as lifecycle_evidence phase=vote_tally and use a separate formal_result quote for outcome.outcome_quote_he.",
-            "When source text contains both request_or_intent and formal_result for the same matter, keep both in lifecycle_evidence; choose action/outcome according to the final lifecycle phase only when the formal_result quote is semantically clear.",
+            "When source text contains both request_or_intent and formal_result for the same subject, keep both in lifecycle_evidence; choose action/outcome according to the final lifecycle phase only when the formal_result quote is semantically clear.",
             "If an agenda proposal is removed, preserve the proposal action when supported and put the removal in outcome_type=removed instead of forcing action_type_he=הסרה מסדר היום.",
             "If formal decision evidence is missing, choose the best-supported non-decision action from allowed_actions and set outcome_is_decision=false with outcome_type=none.",
             "If the source explicitly presents הסתייגות, prefer action_type_he=הסתייגות over generic בקשה when no current formal decision outcome is directly stated.",
-            "When the source contains an explicit action/request/proposal statement plus later advocacy, criticism, or stance text, anchor action_type_he and matter_he on the explicit action/request/proposal statement.",
-            "matter_he must preserve the action-scoped matter: the stated change, condition, assignment, status, or object being acted on, not only the broad topic noun.",
-            "Use upstream_subject_hint as a strong non-authoritative disambiguation hint for matter_he, but never as decision evidence.",
+            "When the source contains an explicit action/request/proposal statement plus later advocacy, criticism, or stance text, anchor action_type_he and subject_he on the explicit action/request/proposal statement.",
+            "subject_he must preserve the action-scoped subject: the stated change, condition, assignment, status, or object being acted on, not only the broad topic noun.",
+            "Use upstream_subject_hint as a strong non-authoritative disambiguation hint for subject_he, but never as decision evidence.",
             "Use non_authoritative_topic_hint only as a search hint for source wording when normalization failed; never use it as evidence and never copy it unless supported by raw_text.",
             "Do not invent municipality-specific rules or facts not present in source_context.",
         ],
@@ -3695,6 +4130,10 @@ def topic_subject_v3_formal_decision_evidence_repair_payload(
             "action_subtype_he": "string|null",
             "other_action_type_he": "string|null",
             "action_type_confidence": 0.0,
+            "subject_he": "concise action-scoped subject|null",
+            "subject_display_he": "clean concise display label for UI/reporting|null",
+            "predicted_topic_he": "short resident-facing generalized topic|null",
+            "category_he": "broad municipal service area/domain|null",
             "matter_he": "string|null",
             "action_details_he": "string|null",
             "action_quote_he": "exact quote from supplied raw_text|null",
@@ -3751,8 +4190,8 @@ def topic_subject_v3_formal_result_quote_selection_payload(
             "If copying the exact Hebrew/OCR quote is hard, set best_candidate_segment_id correctly and set best_formal_result_quote_he to the full text_he of that candidate segment.",
             "Do not use summaries, upstream_subject_hint, current_event labels, or previous selector output as evidence; use candidate_source_segments text only.",
             "Separate lifecycle phases: request_or_intent is a request/proposal, vote_tally is vote counting or vote metadata, formal_result is the final completed result/decision, background is context.",
-            "If the current outcome quote is only vote_tally and another supplied quote directly states the final completed result for the same matter, return selection_status=replace_current and choose the direct formal_result quote.",
-            "If a later source segment states that the municipal body decided, approved, rejected, referred, removed, deferred, or otherwise finalized the current matter, prefer that segment over a vote count or speaker instruction.",
+            "If the current outcome quote is only vote_tally and another supplied quote directly states the final completed result for the same subject, return selection_status=replace_current and choose the direct formal_result quote.",
+            "If a later source segment states that the municipal body decided, approved, rejected, referred, removed, deferred, or otherwise finalized the current subject, prefer that segment over a vote count or speaker instruction.",
             "If the vote_tally quote itself is genuinely the clearest final-result evidence and no more direct formal_result quote exists, return selection_status=keep_current and current_quote_role=formal_result with a concise reason.",
             "If no supplied quote clearly states a formal result for the current event, return selection_status=needs_review, best_formal_result_quote_he=null, and explain the uncertainty.",
             "best_formal_result_quote_he must be the smallest exact quote that still carries the final-result meaning. Quotes longer than 360 characters are invalid; do not return a full row or combined vote+decision paragraph.",
@@ -3791,6 +4230,9 @@ def topic_subject_v3_formal_result_selection_normalized_hint(normalized_event: d
         "target_artifact_id": compact_text(normalized_event.get("target_artifact_id")),
         "target_row_role": compact_text(normalized_event.get("target_row_role")),
         "event_status": compact_text(normalized_event.get("event_status")),
+        "subject_candidate_he": compact_text(normalized_event.get("subject_candidate_he") or normalized_event.get("matter_candidate_he")),
+        "predicted_topic_candidate_he": compact_text(normalized_event.get("predicted_topic_candidate_he")),
+        "category_candidate_he": compact_text(normalized_event.get("category_candidate_he")),
         "matter_candidate_he": compact_text(normalized_event.get("matter_candidate_he")),
         "outcome_he": compact_text(normalized_event.get("outcome_he")),
     }
@@ -3803,7 +4245,10 @@ def topic_subject_v3_formal_result_selection_event_summary(event_payload: dict[s
         "context_id": compact_text(event_payload.get("context_id")),
         "target_artifact_id": compact_text(event_payload.get("target_artifact_id")),
         "action_type_he": compact_text(event_payload.get("action_type_he")),
-        "matter_he": compact_text(event_payload.get("matter_he")),
+        "subject_he": topic_subject_v3_subject_text(event_payload),
+        "predicted_topic_he": topic_subject_v3_predicted_topic_text(event_payload),
+        "category_he": topic_subject_v3_category_text(event_payload),
+        "matter_he": topic_subject_v3_subject_text(event_payload),
         "event_status": compact_text(event_payload.get("event_status")),
         "outcome_type": compact_text(outcome.get("outcome_type")),
         "outcome_label_he": compact_text(outcome.get("outcome_label_he")),
@@ -4085,6 +4530,10 @@ def topic_subject_v3_fallback_normalized_event(*, context: TopicSubjectV3EventCo
         "normalized_event_summary_he": target_text[:220],
         "procedural_carrier_he": "",
         "municipal_action_description_he": "",
+        "subject_candidate_he": "",
+        "subject_display_candidate_he": "",
+        "predicted_topic_candidate_he": "",
+        "category_candidate_he": "",
         "matter_candidate_he": "",
         "matter_display_candidate_he": "",
         "matter_identifiers": [],
@@ -4131,19 +4580,26 @@ def topic_subject_v3_normalize_context_event_payload(payload: dict[str, Any], *,
         if outcome_he != outcome_he_raw:
             warnings.append(f"outcome_he_normalized:{outcome_he_raw}->{outcome_he}")
         normalized["outcome_he"] = outcome_he
-    matter_candidate = compact_text(normalized.get("matter_candidate_he"))
+    raw_subject_candidate = compact_text(normalized.get("subject_candidate_he") or normalized.get("matter_candidate_he"))
+    normalized["predicted_topic_candidate_he"] = compact_text(normalized.get("predicted_topic_candidate_he"))[:220]
+    normalized["category_candidate_he"] = compact_text(normalized.get("category_candidate_he"))[:160]
     source_text = context.target_artifact.real_text if context is not None else ""
     matter_identifiers = topic_subject_v3_matter_identifiers(
         normalized.get("matter_identifiers"),
-        matter=matter_candidate,
+        matter=raw_subject_candidate,
         source_text=source_text,
     )
+    subject_candidate = topic_subject_v3_clean_semantic_subject(raw_subject_candidate, identifiers=matter_identifiers)
+    normalized["subject_candidate_he"] = subject_candidate
+    normalized["matter_candidate_he"] = subject_candidate
     normalized["matter_identifiers"] = matter_identifiers
-    normalized["matter_display_candidate_he"] = topic_subject_v3_matter_display_he(
-        normalized.get("matter_display_candidate_he"),
-        matter=matter_candidate,
+    subject_display_candidate = topic_subject_v3_matter_display_he(
+        normalized.get("subject_display_candidate_he") or normalized.get("matter_display_candidate_he"),
+        matter=subject_candidate,
         identifiers=matter_identifiers,
     )
+    normalized["subject_display_candidate_he"] = subject_display_candidate
+    normalized["matter_display_candidate_he"] = subject_display_candidate
     normalized["lifecycle_evidence"] = topic_subject_v3_normalize_lifecycle_evidence(
         normalized.get("lifecycle_evidence"),
         context=context,
@@ -4209,11 +4665,11 @@ def topic_subject_v3_normalize_outcome_he_value(value: str) -> str:
     if outcome in TOPIC_SUBJECT_V3_OUTCOME_VALUES:
         return outcome
     outcome_norm = normalize_for_search(outcome)
-    if text_has_any(outcome_norm, AGENDA_REMOVAL_CUES):
+    if topic_subject_v3_text_has_any_result_cue(outcome_norm, AGENDA_REMOVAL_CUES):
         return "removed"
-    if text_has_any(outcome_norm, COMMITTEE_REFERRAL_RESULT_CUES):
+    if topic_subject_v3_text_has_any_result_cue(outcome_norm, COMMITTEE_REFERRAL_RESULT_CUES):
         return "referred"
-    if text_has_any(outcome_norm, REJECTION_DECISION_CUES):
+    if topic_subject_v3_text_has_any_result_cue(outcome_norm, REJECTION_DECISION_CUES):
         return "rejected"
     if text_has_any(outcome_norm, APPROVAL_DECISION_QUOTE_CUES + STRONG_APPROVAL_ACTION_CUES + APPROVAL_VERB_CUES + ("אושרה", "אושר", "אישרה", "אישר")):
         return "approved"
@@ -4256,6 +4712,8 @@ def topic_subject_v3_normalize_lifecycle_evidence(value: Any, *, context: TopicS
         quote_grounded = None
         if quote and context is not None:
             quote_grounded = topic_subject_v3_quote_supported(context=context, quote=quote)
+            if quote_grounded and not artifact_id:
+                artifact_id = topic_subject_v3_quote_artifact_id(context=context, quote=quote)
         normalized_item = {
             "phase": phase or "other",
             "quote_he": quote,
@@ -4355,6 +4813,14 @@ def topic_subject_v3_remove_unentailed_insufficient_context_event(
             "action_subtype_norm": "",
             "other_action_type_he": "",
             "other_action_type_norm": "",
+            "subject_he": "",
+            "subject_norm": "",
+            "subject_display_he": "",
+            "predicted_topic_he": "",
+            "predicted_topic_norm": "",
+            "category_he": "",
+            "category_norm": "",
+            "category_id": "",
             "matter_he": "",
             "matter_norm": "",
             "matter_display_he": "",
@@ -4386,6 +4852,111 @@ def topic_subject_v3_remove_unentailed_insufficient_context_event(
     return repaired
 
 
+def topic_subject_v3_target_quote_supported(*, context: TopicSubjectV3EventContext, quote: str) -> bool:
+    return quote_supported_by_text(quote=quote, text=context.target_artifact.real_text)
+
+
+def topic_subject_v3_target_has_event_anchor(
+    *,
+    context: TopicSubjectV3EventContext,
+    normalized_event: dict[str, Any],
+    event_payload: dict[str, Any],
+) -> bool:
+    outcome = event_payload.get("outcome") if isinstance(event_payload.get("outcome"), dict) else {}
+    quotes = [
+        event_payload.get("action_quote_he"),
+        event_payload.get("action_focus_quote_he"),
+        normalized_event.get("action_focus_quote_he"),
+        outcome.get("outcome_quote_he"),
+    ]
+    return any(
+        quote and topic_subject_v3_target_quote_supported(context=context, quote=topic_subject_v3_evidence_quote_text(quote))
+        for quote in quotes
+    )
+
+
+def topic_subject_v3_remove_nearby_only_target_event(
+    *,
+    context: TopicSubjectV3EventContext,
+    normalized_event: dict[str, Any],
+    event_payload: dict[str, Any],
+) -> dict[str, Any]:
+    if not bool(event_payload.get("is_event")):
+        return event_payload
+    normalized_role = compact_text(normalized_event.get("target_row_role"))
+    target_structural_role = topic_subject_v3_structural_role(context.target_artifact)
+    weak_target_role = normalized_role in {
+        "insufficient_context",
+        "document_fragment",
+        "structural_metadata",
+        "duplicate_reference",
+        "vote_metadata",
+        "dependent_detail",
+    }
+    weak_structural_role = target_structural_role in {"continuation", "metadata", "fragment"}
+    if not weak_target_role and not weak_structural_role:
+        return event_payload
+    if topic_subject_v3_target_has_event_anchor(
+        context=context,
+        normalized_event=normalized_event,
+        event_payload=event_payload,
+    ):
+        return event_payload
+
+    role = normalized_role or "insufficient_context"
+    repaired = dict(event_payload)
+    repaired.update(
+        {
+            "is_event": False,
+            "action_type_he": "",
+            "action_type_norm": "",
+            "action_type_status": "non_event",
+            "action_subtype_he": "",
+            "action_subtype_norm": "",
+            "other_action_type_he": "",
+            "other_action_type_norm": "",
+            "subject_he": "",
+            "subject_norm": "",
+            "subject_display_he": "",
+            "predicted_topic_he": "",
+            "predicted_topic_norm": "",
+            "category_he": "",
+            "category_norm": "",
+            "category_id": "",
+            "matter_he": "",
+            "matter_norm": "",
+            "matter_display_he": "",
+            "matter_identifiers": [],
+            "outcome_is_decision": False,
+            "outcome": None,
+            "event_phase": "not_part_of_event",
+            "event_status": "not_event",
+            "target_row_role": role,
+            "confidence": 0.0,
+            "lifecycle_evidence": [],
+            "action_quote_he": "",
+            "action_focus_quote_he": "",
+            "primary_action_span_ids": [],
+            "primary_outcome_span_ids": [],
+        }
+    )
+    evidence_metadata = dict(repaired.get("v3_evidence_entailment") or {})
+    evidence_metadata["event_removed_by_evidence"] = True
+    evidence_metadata["event_removed_reason"] = "nearby_only_event_anchor_for_weak_target_row"
+    evidence_metadata["target_structural_role"] = target_structural_role
+    repaired["v3_evidence_entailment"] = evidence_metadata
+    existing_repairs = repaired.get("semantic_repairs") if isinstance(repaired.get("semantic_repairs"), list) else []
+    repaired["semantic_repairs"] = unique_strings([*existing_repairs, "removed_nearby_only_target_event"])
+    repaired["row_roles"] = [
+        {
+            "artifact_id": context.target_artifact.artifact_id,
+            "row_role": role,
+            "role_reason_he": "target row has no action/result evidence; extracted event is anchored only in nearby context",
+        }
+    ]
+    return repaired
+
+
 def topic_subject_v3_apply_normalized_event_defaults(
     *,
     extraction_payload: dict[str, Any],
@@ -4395,7 +4966,7 @@ def topic_subject_v3_apply_normalized_event_defaults(
     if not isinstance(extraction_payload, dict) or extraction_payload.get("is_event") is not None:
         return extraction_payload
     action_type = compact_text(extraction_payload.get("action_type_he") or extraction_payload.get("action_root_label_he"))
-    matter = compact_text(extraction_payload.get("matter_he") or extraction_payload.get("subject_matter_he"))
+    matter = compact_text(extraction_payload.get("subject_he") or extraction_payload.get("matter_he") or extraction_payload.get("subject_matter_he"))
     action_quote = topic_subject_v3_evidence_quote_text(
         extraction_payload.get("action_quote_he")
         or extraction_payload.get("action_focus_quote_he")
@@ -4556,6 +5127,15 @@ def process_topic_subject_v3_context(
                     normalized_event=normalized_event,
                     event_payload=event_payload,
                     assessment_payload=evidence_assessment,
+                ),
+                context=context,
+                action_confidence_threshold=config.action_confidence_threshold,
+            )
+            event_payload = normalize_topic_subject_v3_event_payload(
+                payload=topic_subject_v3_remove_nearby_only_target_event(
+                    context=context,
+                    normalized_event=normalized_event,
+                    event_payload=event_payload,
                 ),
                 context=context,
                 action_confidence_threshold=config.action_confidence_threshold,
@@ -4722,7 +5302,7 @@ def topic_subject_v3_select_event_candidate_payload(*, payload: dict[str, Any], 
         if not isinstance(candidate, dict) or parse_bool(candidate.get("is_event")) is False:
             continue
         action_type = compact_text(candidate.get("action_type_he"))
-        matter = compact_text(candidate.get("matter_he"))
+        matter = compact_text(candidate.get("subject_he") or candidate.get("matter_he"))
         action_quote = topic_subject_v3_evidence_quote_text(candidate.get("action_quote_he") or candidate.get("action_evidence_quote_he"))
         phase_quote = topic_subject_v3_evidence_quote_text(candidate.get("phase_quote_he"))
         combined_action_quote = compact_text(" ".join(part for part in (action_quote, phase_quote) if part))
@@ -4754,6 +5334,11 @@ def topic_subject_v3_select_event_candidate_payload(*, payload: dict[str, Any], 
         "action_subtype_he",
         "other_action_type_he",
         "action_type_confidence",
+        "subject_he",
+        "subject_display_he",
+        "predicted_topic_he",
+        "category_he",
+        "category_id",
         "matter_he",
         "matter_display_he",
         "matter_identifiers",
@@ -4829,7 +5414,12 @@ def normalize_topic_subject_v3_event_payload(
         action_status = previous_action_status
 
     action_subtype = compact_text(raw.get("action_subtype_he") or raw.get("action_child_label_he"))
-    matter = compact_text(raw.get("matter_he") or raw.get("subject_matter_he"))
+    raw_subject = compact_text(raw.get("subject_he") or raw.get("matter_he") or raw.get("subject_matter_he"))
+    subject = raw_subject
+    matter = raw_subject
+    predicted_topic = compact_text(raw.get("predicted_topic_he") or raw.get("resident_topic_he") or raw.get("topic_he") or raw.get("predicted_topic_candidate_he"))[:220]
+    category = compact_text(raw.get("category_he") or raw.get("category_label_he") or raw.get("municipal_category_he") or raw.get("category_candidate_he"))[:160]
+    category_id = compact_text(raw.get("category_id") or raw.get("category_key") or raw.get("municipal_category_id"))[:160]
     target_norm = normalize_for_search(context.target_artifact.real_text)
     raw_action_quote = topic_subject_v3_evidence_quote_text(raw.get("action_quote_he") or raw.get("action_evidence_quote_he"))[:700]
     semantic_repair_reasons: list[str] = []
@@ -4929,13 +5519,18 @@ def normalize_topic_subject_v3_event_payload(
         "confidence": clamp_float(outcome_raw.get("confidence") if outcome_raw.get("confidence") is not None else decision_raw.get("confidence"), default=0.0),
         "limitations": [compact_text(item) for item in outcome_raw.get("limitations") or decision_raw.get("limitations") or [] if compact_text(item)],
     }
+    outcome = topic_subject_v3_normalize_decision_outcome_core_fields(
+        outcome=outcome,
+        outcome_is_decision=outcome_is_decision,
+        evidence_text=" ".join(part for part in (raw_decision_quote, context.target_artifact.real_text) if compact_text(part)),
+    )
     formal_decision_norm = normalize_for_search(" ".join(part for part in (raw_decision_quote, outcome["outcome_quote_he"], context.target_artifact.real_text) if compact_text(part)))
     if (
         is_event
         and outcome_is_decision
         and outcome["outcome_type"] == "removed"
         and text_has_any(target_norm, AGENDA_PROPOSAL_CUES)
-        and text_has_any(formal_decision_norm, AGENDA_REMOVAL_CUES)
+        and topic_subject_v3_text_has_any_result_cue(formal_decision_norm, AGENDA_REMOVAL_CUES)
     ):
         proposal_quote = exact_source_quote_around_cue(raw_text=context.target_artifact.real_text, cues=AGENDA_PROPOSAL_CUES, max_words=24)
         action_type = "הצעה לסדר יום"
@@ -4949,7 +5544,7 @@ def normalize_topic_subject_v3_event_payload(
         is_event
         and outcome_is_decision
         and outcome["outcome_type"] == "removed"
-        and text_has_any(formal_decision_norm, AGENDA_REMOVAL_CUES)
+        and topic_subject_v3_text_has_any_result_cue(formal_decision_norm, AGENDA_REMOVAL_CUES)
         and action_type in {"", "אחר", "בקשה", "דיון", "אישור", "דחייה"}
     ):
         action_type = "הסרה מסדר היום"
@@ -4961,7 +5556,7 @@ def normalize_topic_subject_v3_event_payload(
         is_event
         and outcome_is_decision
         and outcome["outcome_type"] == "referred"
-        and text_has_any(formal_decision_norm, COMMITTEE_REFERRAL_RESULT_CUES)
+        and topic_subject_v3_text_has_any_result_cue(formal_decision_norm, COMMITTEE_REFERRAL_RESULT_CUES)
     ):
         action_type = "הפניה לוועדה"
         other_action = ""
@@ -4970,16 +5565,21 @@ def normalize_topic_subject_v3_event_payload(
         semantic_repair_reasons.append("repaired_referral_from_formal_outcome_evidence")
     if (
         is_event
-        and action_type in {"אחר", "בקשה", "דיון", "התקשרות"}
+        and action_type in {"אחר", "בקשה", "בקשה לאישור", "דיון", "התקשרות", "אישור"}
         and outcome_is_decision
         and outcome["outcome_type"] in {"approved", "decision"}
         and text_has_any(formal_decision_norm, FORMAL_DECISION_MARKER_CUES + STRONG_APPROVAL_ACTION_CUES + APPROVAL_DECISION_QUOTE_CUES + APPROVAL_VERB_CUES)
     ):
-        action_type = "אישור"
+        action_type = "בקשה לאישור"
         other_action = ""
         action_confidence = max(action_confidence, float(action_confidence_threshold))
-        action_status = "repaired_approval_from_formal_decision_outcome"
-        semantic_repair_reasons.append("repaired_approval_from_formal_decision_outcome")
+        action_status = "repaired_approval_request_action_from_formal_decision_outcome"
+        semantic_repair_reasons.append("repaired_approval_request_action_from_formal_decision_outcome")
+    if is_event and action_type == "אישור" and not outcome_is_decision:
+        action_type = "בקשה לאישור"
+        other_action = ""
+        action_status = "repaired_approval_request_action_without_decision_outcome"
+        semantic_repair_reasons.append("repaired_approval_request_action_without_decision_outcome")
     has_meaningful_non_decision_outcome = any(value for key, value in outcome.items() if key not in {"limitations", "outcome_type", "confidence"}) or outcome["outcome_type"] not in {"", "none"}
     if force_non_decision_reason:
         outcome = {}
@@ -5011,16 +5611,27 @@ def normalize_topic_subject_v3_event_payload(
                 "reason_he": compact_text(item.get("reason_he") or item.get("role_reason_he") or item.get("reason"))[:300],
             }
         )
+    subject_source_for_cleaning = matter or raw_subject
     matter_identifiers = topic_subject_v3_matter_identifiers(
         raw.get("matter_identifiers"),
-        matter=matter,
+        matter=subject_source_for_cleaning,
         source_text=context.target_artifact.real_text,
     )
-    matter_display = topic_subject_v3_matter_display_he(
-        raw.get("matter_display_he") or raw.get("matter_display_candidate_he"),
+    subject = topic_subject_v3_clean_semantic_subject(subject_source_for_cleaning, identifiers=matter_identifiers)
+    matter = subject
+    subject_display = topic_subject_v3_matter_display_he(
+        raw.get("subject_display_he") or raw.get("matter_display_he") or raw.get("subject_display_candidate_he") or raw.get("matter_display_candidate_he"),
         matter=matter,
         identifiers=matter_identifiers,
     )
+    if not predicted_topic:
+        predicted_topic = topic_subject_v3_topic_from_subject(subject_display or subject)
+    predicted_topic = topic_subject_v3_grounded_predicted_topic(
+        predicted_topic=predicted_topic,
+        subject=subject_display or subject,
+        source_text=context.target_artifact.real_text,
+    )
+    category = topic_subject_v3_category_fallback(category, source_topic_label=context.target_artifact.topic_label_he, subject=subject_display or subject)
     normalized = {
         "context_id": compact_text(raw.get("context_id")) or context.context_id,
         "target_artifact_id": compact_text(raw.get("target_artifact_id")) or context.target_artifact.artifact_id,
@@ -5034,9 +5645,17 @@ def normalize_topic_subject_v3_event_payload(
         "other_action_type_norm": normalize_for_search(other_action)[:500] if other_action else "",
         "action_type_confidence": action_confidence,
         "action_type_status": action_status,
+        "subject_he": subject[:500],
+        "subject_norm": normalize_for_search(subject)[:500] if subject else "",
+        "subject_display_he": subject_display,
+        "predicted_topic_he": predicted_topic,
+        "predicted_topic_norm": normalize_for_search(predicted_topic)[:500] if predicted_topic else "",
+        "category_he": category,
+        "category_norm": normalize_for_search(category)[:500] if category else "",
+        "category_id": category_id,
         "matter_he": matter[:500],
         "matter_norm": normalize_for_search(matter)[:500] if matter else "",
-        "matter_display_he": matter_display,
+        "matter_display_he": subject_display,
         "matter_identifiers": matter_identifiers,
         "lifecycle_evidence": lifecycle_evidence,
         "action_details_he": compact_text(raw.get("action_details_he"))[:1000],
@@ -5088,7 +5707,7 @@ def topic_subject_v3_event_phase(*, context: TopicSubjectV3EventContext, is_even
         return "response_given"
     if action == "הסתייגות":
         return "objection_submitted"
-    if action == "בקשה":
+    if action in {"בקשה", "בקשה לאישור"}:
         return "open_request"
     if action == "דיווח":
         return "report_presented"
@@ -5123,9 +5742,10 @@ def repair_topic_subject_v3_request_outcome_payload(*, context: TopicSubjectV3Ev
         repaired["outcome_is_decision"] = False
         repaired["outcome"] = repaired_outcome
         metadata["repair_reason"] = "outcome_quote_is_request_for_approval_not_actual_outcome"
-        if compact_text(repaired.get("action_type_he")) == "אישור":
-            repaired["action_type_he"] = "בקשה"
-            repaired["action_type_norm"] = normalize_for_search("בקשה")[:500]
+        if compact_text(repaired.get("action_type_he")) in {"אישור", "בקשה", "בקשה לאישור"}:
+            repaired_action_type = "בקשה" if text_has_any(normalize_for_search(context.target_artifact.real_text), COMMITTEE_REFERRAL_PROPOSAL_CUES) else "בקשה לאישור"
+            repaired["action_type_he"] = repaired_action_type
+            repaired["action_type_norm"] = normalize_for_search(repaired_action_type)[:500]
             repaired["action_type_status"] = "repaired_request_phase_from_approval_quote"
         target_action_quote = exact_source_quote_around_cue(
             raw_text=context.target_artifact.real_text,
@@ -5147,7 +5767,7 @@ def topic_subject_v3_outcome_quote_classification(quote: str) -> str:
         return "unknown"
     if topic_subject_v3_has_referral_proposal_without_result(quote_norm):
         return "proposal_or_intent"
-    if text_has_any(quote_norm, APPROVAL_DECISION_QUOTE_CUES + AGENDA_REMOVAL_CUES + COMMITTEE_REFERRAL_RESULT_CUES):
+    if text_has_any(quote_norm, APPROVAL_DECISION_QUOTE_CUES) or topic_subject_v3_text_has_any_result_cue(quote_norm, AGENDA_REMOVAL_CUES + COMMITTEE_REFERRAL_RESULT_CUES):
         return "actual_outcome"
     if text_has_any(quote_norm, REQUEST_ACTION_CUES):
         return "request_for_outcome"
@@ -5234,7 +5854,7 @@ def topic_subject_v3_quote_artifact_id(*, context: TopicSubjectV3EventContext, q
 def topic_subject_v3_non_event_reconsideration_needed(*, context: TopicSubjectV3EventContext, event_payload: dict[str, Any]) -> bool:
     if bool(event_payload.get("is_event")):
         return False
-    if not compact_text(event_payload.get("matter_he")):
+    if not topic_subject_v3_subject_text(event_payload):
         return False
     quote = topic_subject_v3_evidence_quote_text(event_payload.get("action_quote_he") or event_payload.get("action_focus_quote_he"))
     if not quote:
@@ -5263,7 +5883,7 @@ def topic_subject_v3_repair_non_event_lifecycle_locally(*, context: TopicSubject
         return event_payload
     if not quote:
         return event_payload
-    matter = compact_text(event_payload.get("matter_he")) or topic_subject_v3_supported_topic_hint_matter(context)
+    matter = topic_subject_v3_subject_text(event_payload) or topic_subject_v3_supported_topic_hint_matter(context)
     if action_type == "הסתייגות":
         matter = topic_subject_v3_preferred_objection_matter(context=context, current_matter=matter)
     if not matter:
@@ -5274,6 +5894,7 @@ def topic_subject_v3_repair_non_event_lifecycle_locally(*, context: TopicSubject
             "is_event": True,
             "action_type_he": action_type,
             "action_type_confidence": max(clamp_float(event_payload.get("action_type_confidence"), default=0.0), 0.88),
+            "subject_he": matter,
             "matter_he": matter,
             "action_quote_he": quote[:700],
             "action_focus_quote_he": quote[:700],
@@ -5312,7 +5933,10 @@ def merge_topic_subject_v3_non_event_reconsideration(*, event_payload: dict[str,
         merged = dict(event_payload)
         merged["v3_non_event_reconsideration"] = metadata
         return merged
-    repaired = dict(repair_payload.get("event") if isinstance(repair_payload.get("event"), dict) else repair_payload)
+    repaired = topic_subject_v3_promote_repaired_subject_aliases(
+        dict(repair_payload.get("event") if isinstance(repair_payload.get("event"), dict) else repair_payload),
+        original_payload=event_payload,
+    )
     repaired.setdefault("context_id", event_payload.get("context_id"))
     repaired.setdefault("target_artifact_id", event_payload.get("target_artifact_id"))
     repaired.setdefault("target_row_role", event_payload.get("target_row_role") or "action_anchor")
@@ -5374,9 +5998,12 @@ def topic_subject_v3_repair_same_row_decision_outcome_locally(*, context: TopicS
         "outcome_label_he": evidence["outcome_label_he"],
         "outcome_summary_he": evidence["outcome_label_he"],
         "outcome_quote_he": quote,
+        "outcome_evidence_classification": "actual_result",
         "confidence": evidence.get("confidence", 0.92),
         "limitations": [],
     }
+    if compact_text(repaired.get("target_row_role")) in {"", "insufficient_context", "document_fragment", "structural_metadata", "vote_metadata"}:
+        repaired["target_row_role"] = "action_anchor"
     repaired["event_status"] = {
         "approved": "approved",
         "rejected": "rejected",
@@ -5431,6 +6058,7 @@ def topic_subject_v3_repair_linked_decision_outcome_locally(*, context: TopicSub
         "outcome_label_he": evidence["outcome_label_he"],
         "outcome_summary_he": evidence["outcome_label_he"],
         "outcome_quote_he": evidence["quote_he"],
+        "outcome_evidence_classification": "actual_result",
         "confidence": evidence["confidence"],
         "limitations": [],
     }
@@ -5460,7 +6088,7 @@ def topic_subject_v3_best_linked_decision_outcome(*, context: TopicSubjectV3Even
             part
             for part in (
                 context.target_artifact.real_text,
-                event_payload.get("matter_he"),
+                topic_subject_v3_subject_text(event_payload),
                 event_payload.get("action_details_he"),
                 event_payload.get("action_quote_he"),
             )
@@ -5510,17 +6138,30 @@ def topic_subject_v3_best_linked_decision_outcome(*, context: TopicSubjectV3Even
 
 def topic_subject_v3_decision_outcome_from_text(text: str) -> dict[str, Any] | None:
     text_norm = normalize_for_search(corrected_hebrew_text(text))
-    if text_has_any(text_norm, REJECTION_DECISION_CUES):
+    if topic_subject_v3_text_has_any_result_cue(text_norm, REJECTION_DECISION_CUES):
         return {"outcome_type": "rejected", "outcome_label_he": "דחייה", "cues": REJECTION_DECISION_CUES}
-    if text_has_any(text_norm, AGENDA_REMOVAL_CUES):
+    if topic_subject_v3_text_has_any_result_cue(text_norm, AGENDA_REMOVAL_CUES):
         return {"outcome_type": "removed", "outcome_label_he": "הסרה מסדר היום", "cues": AGENDA_REMOVAL_CUES}
-    if text_has_any(text_norm, COMMITTEE_REFERRAL_RESULT_CUES):
+    if topic_subject_v3_text_has_any_result_cue(text_norm, COMMITTEE_REFERRAL_RESULT_CUES):
         return {"outcome_type": "referred", "outcome_label_he": "הפניה לוועדה", "cues": COMMITTEE_REFERRAL_RESULT_CUES}
     if topic_subject_v3_has_referral_proposal_without_result(text_norm):
         return None
     if text_has_any(text_norm, APPROVAL_DECISION_QUOTE_CUES + STRONG_APPROVAL_ACTION_CUES):
         return {"outcome_type": "approved", "outcome_label_he": "אישור", "cues": APPROVAL_DECISION_QUOTE_CUES + STRONG_APPROVAL_ACTION_CUES}
     return None
+
+
+def topic_subject_v3_text_has_any_result_cue(text_norm: str, cues: tuple[str, ...]) -> bool:
+    if text_has_any(text_norm, cues):
+        return True
+    compact_no_space = re.sub(r"\s+", "", normalize_for_search(text_norm))
+    for cue in cues:
+        cue_norm = normalize_for_search(cue)
+        if len(cue_norm.split()) < 2:
+            continue
+        if re.sub(r"\s+", "", cue_norm) in compact_no_space:
+            return True
+    return False
 
 
 def topic_subject_v3_has_referral_proposal_without_result(text_norm: str) -> bool:
@@ -5587,7 +6228,7 @@ def topic_subject_v3_best_local_evidence_quote(*, context: TopicSubjectV3EventCo
     if not candidates:
         return ""
     selected = max(candidates, key=lambda item: (item[0], item[1]))[2]
-    matter = compact_text(event_payload.get("matter_he"))
+    matter = topic_subject_v3_subject_text(event_payload)
     if matter:
         return topic_subject_v3_quote_window_around_hint(text=selected, hint=matter)
     return selected
@@ -5602,7 +6243,7 @@ def topic_subject_v3_local_quote_query(*, event_payload: dict[str, Any], kind: s
                 outcome.get("outcome_label_he"),
                 outcome.get("outcome_summary_he"),
                 outcome.get("outcome_quote_he"),
-                event_payload.get("matter_he"),
+                topic_subject_v3_subject_text(event_payload),
             )
             if compact_text(part)
         )
@@ -5611,7 +6252,7 @@ def topic_subject_v3_local_quote_query(*, event_payload: dict[str, Any], kind: s
         for part in (
             event_payload.get("action_type_he"),
             event_payload.get("other_action_type_he"),
-            event_payload.get("matter_he"),
+            topic_subject_v3_subject_text(event_payload),
             event_payload.get("action_details_he"),
             event_payload.get("action_focus_quote_he"),
             event_payload.get("action_quote_he"),
@@ -5668,6 +6309,7 @@ def merge_topic_subject_v3_quote_repair_error(*, event_payload: dict[str, Any], 
 def merge_topic_subject_v3_formal_decision_repair(*, event_payload: dict[str, Any], repair_payload: dict[str, Any]) -> dict[str, Any]:
     merged = dict(event_payload)
     repaired_event = repair_payload.get("event") if isinstance(repair_payload.get("event"), dict) else repair_payload
+    repaired_event = topic_subject_v3_promote_repaired_subject_aliases(dict(repaired_event), original_payload=event_payload)
     merged.update({key: value for key, value in repaired_event.items() if key != "raw_payload"})
     metadata = dict(merged.get("v3_formal_decision_repair") or {})
     metadata.update({key: value for key, value in repair_payload.items() if key != "raw_payload"})
@@ -5692,7 +6334,7 @@ def topic_subject_v3_conservative_non_decision_repair(*, context: TopicSubjectV3
     else:
         action_type = "בקשה" if text_has_any(text_norm, NON_DECISION_REQUEST_OR_OBJECTION_CUES) else "אחר"
     matter_hint = topic_subject_v3_supported_topic_hint_matter(context)
-    matter = matter_hint or compact_text(event_payload.get("matter_he"))
+    matter = matter_hint or topic_subject_v3_subject_text(event_payload)
     action_quote = topic_subject_v3_best_supported_hint_quote(context=context, hint=matter_hint) or compact_text(event_payload.get("action_quote_he"))
     repaired = dict(event_payload)
     repaired.update(
@@ -5700,6 +6342,7 @@ def topic_subject_v3_conservative_non_decision_repair(*, context: TopicSubjectV3
             "action_type_he": action_type,
             "action_type_confidence": 0.86 if action_type in {"בקשה", "הסתייגות"} else 0.7,
             "other_action_type_he": "" if action_type in {"בקשה", "הסתייגות"} else "פעולה לא פורמלית ללא החלטה",
+            "subject_he": matter,
             "matter_he": matter,
             "action_quote_he": action_quote,
             "action_focus_quote_he": action_quote,
@@ -5841,6 +6484,7 @@ def merge_topic_subject_v3_evidence_assessment(*, context: TopicSubjectV3EventCo
     repair_applied = parse_bool(assessment_payload.get("repair_required")) and repaired_event is not None
     merged = dict(event_payload)
     if repair_applied:
+        repaired_event = topic_subject_v3_promote_repaired_subject_aliases(repaired_event, original_payload=event_payload)
         merged.update(repaired_event)
     outcome_status = topic_subject_v3_evidence_field_status(assessment_payload=assessment_payload, field_name="outcome")
     field_assessments = assessment_payload.get("field_assessments") if isinstance(assessment_payload.get("field_assessments"), dict) else {}
@@ -5917,7 +6561,7 @@ def merge_topic_subject_v3_evidence_assessment(*, context: TopicSubjectV3EventCo
 def merge_topic_subject_v3_formal_result_quote_selection(*, context: TopicSubjectV3EventContext, event_payload: dict[str, Any], selection_payload: dict[str, Any]) -> dict[str, Any]:
     merged = dict(event_payload)
     metadata = dict(merged.get("v3_formal_result_quote_selection") or {})
-    metadata.update({key: value for key, value in selection_payload.items() if key != "raw_payload"})
+    metadata.update({key: value for key, value in selection_payload.items() if key not in {"", "raw_payload"}})
     metadata["selection_applied"] = False
     if selection_payload.get("error_code"):
         metadata["selection_invalid"] = True
@@ -6070,7 +6714,7 @@ def topic_subject_v3_normalize_evidence_assessment(assessment_payload: dict[str,
     raw_entailment_status = normalized.get("entailment_status")
     field_assessments = dict(normalized.get("field_assessments") if isinstance(normalized.get("field_assessments"), dict) else {})
     if isinstance(raw_entailment_status, dict):
-        for field_name in ("action_type_he", "matter_he", "outcome"):
+        for field_name in ("action_type_he", "subject_he", "matter_he", "predicted_topic_he", "outcome"):
             raw_field = raw_entailment_status.get(field_name)
             if field_name not in field_assessments and isinstance(raw_field, dict):
                 field_assessments[field_name] = raw_field
@@ -6087,7 +6731,13 @@ def topic_subject_v3_normalize_evidence_assessment(assessment_payload: dict[str,
         if status:
             warnings.append(f"invalid_entailment_status:{status}")
         normalized["entailment_status"] = "uncertain"
-    for field_name in ("action_type_he", "matter_he", "outcome"):
+    if "subject_he" in field_assessments and "matter_he" not in field_assessments:
+        field_assessments["matter_he"] = field_assessments["subject_he"]
+        warnings.append("field_assessment_aliased:subject_he->matter_he")
+    if "matter_he" in field_assessments and "subject_he" not in field_assessments:
+        field_assessments["subject_he"] = field_assessments["matter_he"]
+        warnings.append("field_assessment_aliased:matter_he->subject_he")
+    for field_name in ("action_type_he", "subject_he", "matter_he", "predicted_topic_he", "outcome"):
         top_level_field = normalized.get(field_name)
         if field_name not in field_assessments and isinstance(top_level_field, dict):
             field_assessments[field_name] = top_level_field
@@ -6141,6 +6791,10 @@ def topic_subject_v3_aggregate_evidence_status(field_assessments: dict[str, Any]
 def topic_subject_v3_evidence_field_status(*, assessment_payload: dict[str, Any], field_name: str) -> str:
     field_assessments = assessment_payload.get("field_assessments") if isinstance(assessment_payload.get("field_assessments"), dict) else {}
     field_payload = field_assessments.get(field_name) if isinstance(field_assessments.get(field_name), dict) else {}
+    if not field_payload and field_name == "matter_he":
+        field_payload = field_assessments.get("subject_he") if isinstance(field_assessments.get("subject_he"), dict) else {}
+    if not field_payload and field_name == "subject_he":
+        field_payload = field_assessments.get("matter_he") if isinstance(field_assessments.get("matter_he"), dict) else {}
     return compact_text(field_payload.get("status"))
 
 
@@ -6185,7 +6839,7 @@ def validate_topic_subject_v3_event_payload(*, context: TopicSubjectV3EventConte
     action_type = compact_text(event_payload.get("action_type_he"))
     if not compact_text(event_payload.get("action_type_he")):
         failures.append("missing_action_type")
-    if not compact_text(event_payload.get("matter_he")):
+    if not topic_subject_v3_subject_text(event_payload):
         failures.append("missing_matter")
     decision_action_failure = topic_subject_v3_decision_action_without_outcome_reason(action_type=action_type, outcome_is_decision=bool(event_payload.get("outcome_is_decision")))
     if decision_action_failure:
@@ -6203,7 +6857,7 @@ def topic_subject_v3_decision_action_without_outcome_reason(*, action_type: str,
     action = compact_text(action_type)
     if outcome_is_decision or action not in FORMAL_DECISION_ACTION_LABELS_V3:
         return ""
-    if action == "אישור":
+    if action in {"אישור", "בקשה לאישור"}:
         # Hebrew agenda rows often use "אישור" for a requested approval or
         # attached approval document. A formal approved outcome is validated
         # separately when outcome_is_decision=true.
@@ -6325,7 +6979,7 @@ def topic_subject_v3_event_group_key(*, context: TopicSubjectV3EventContext, eve
         event_payload.get("action_type_he"),
         event_payload.get("other_action_type_he"),
         event_payload.get("action_subtype_he"),
-        event_payload.get("matter_he"),
+        topic_subject_v3_subject_text(event_payload),
         event_payload.get("subject_summary_he"),
     ]
     if bool(event_payload.get("outcome_is_decision")):
@@ -6352,7 +7006,7 @@ def topic_subject_v3_row_quality_from_payloads(
 ) -> TopicSubjectV3RowQualityData:
     target = context.target_artifact
     row_quality = judge_payload.get("row_quality") if isinstance(judge_payload.get("row_quality"), dict) else {}
-    outcome_summary = topic_subject_v3_outcome_summary(event_payload)
+    outcome_summary = topic_subject_v3_outcome_report_he(event_payload)
     is_event = bool(event_payload.get("is_event"))
     quality_status, raw_quality_status = topic_subject_v3_normalize_quality_status(row_quality.get("quality_status"), validation_status=validation_status, is_event=is_event)
     judge_status = compact_text(judge_payload.get("judge_status")) or validation_status
@@ -6378,6 +7032,9 @@ def topic_subject_v3_row_quality_from_payloads(
         "upstream_subject_hint_policy": "strong_context_hint_only_not_source_evidence",
         "upstream_subject_hint": topic_subject_v3_upstream_subject_hint(target),
         "source_topic_label_he": target.topic_label_he,
+        "predicted_topic_he": topic_subject_v3_predicted_topic_text(event_payload),
+        "category_he": topic_subject_v3_category_text(event_payload),
+        "subject_he": topic_subject_v3_subject_text(event_payload),
         "event_identity_status": compact_text(judge_payload.get("event_identity_status")) or compact_text(event_payload.get("event_identity_status")) or "unknown",
         "raw_event_role_by_judge": raw_event_role,
         "schema_warnings": [str(item) for item in event_payload.get("schema_warnings") or [] if str(item).strip()],
@@ -6398,7 +7055,7 @@ def topic_subject_v3_row_quality_from_payloads(
         action_type_by_dicta=compact_text(event_payload.get("action_type_he")),
         action_subtype_by_dicta=compact_text(event_payload.get("action_subtype_he")),
         other_action_type_by_dicta=compact_text(event_payload.get("other_action_type_he")),
-        matter_by_dicta=compact_text(event_payload.get("matter_he")),
+        matter_by_dicta=topic_subject_v3_subject_text(event_payload),
         action_details_by_dicta=compact_text(event_payload.get("action_details_he")),
         outcome_by_dicta=outcome_summary,
         model_prediction=event_payload,
@@ -6426,10 +7083,30 @@ def topic_subject_v3_outcome_summary(event_payload: dict[str, Any]) -> str:
     )
 
 
+def topic_subject_v3_outcome_report_he(event_payload: dict[str, Any]) -> str:
+    if not bool(event_payload.get("outcome_is_decision")):
+        return ""
+    outcome = event_payload.get("outcome") if isinstance(event_payload.get("outcome"), dict) else {}
+    label = compact_text(outcome.get("outcome_label_he"))
+    if label:
+        return label
+    outcome_type = compact_text(outcome.get("outcome_type"))
+    fallback_labels = {
+        "approved": "אושר",
+        "rejected": "נדחה",
+        "referred": "הועבר לוועדה",
+        "removed": "הוסר מסדר היום",
+        "deferred": "נדחה למועד אחר",
+        "reported": "דווח",
+        "decision": "התקבלה החלטה",
+    }
+    return fallback_labels.get(outcome_type, compact_text(outcome.get("outcome_summary_he")))
+
+
 def topic_subject_v3_decision_outcome_display(event_payload: dict[str, Any]) -> str:
     if not bool(event_payload.get("outcome_is_decision")):
         return "none"
-    summary = topic_subject_v3_outcome_summary(event_payload)
+    summary = topic_subject_v3_outcome_report_he(event_payload) or topic_subject_v3_outcome_summary(event_payload)
     if summary:
         return shorten(summary, 180)
     outcome = event_payload.get("outcome") if isinstance(event_payload.get("outcome"), dict) else {}
@@ -6443,6 +7120,9 @@ def topic_subject_v3_judge_prediction(judge_payload: dict[str, Any]) -> dict[str
             "is_event",
             "action_type_he",
             "action_root_label_he",
+            "subject_he",
+            "predicted_topic_he",
+            "category_he",
             "matter_he",
             "subject_matter_he",
             "outcome_type",
@@ -6453,15 +7133,19 @@ def topic_subject_v3_judge_prediction(judge_payload: dict[str, Any]) -> dict[str
             return {}
         prediction = judge_payload
     action_type = compact_text(prediction.get("action_type_he") or prediction.get("action_root_label_he"))
-    matter = compact_text(prediction.get("matter_he") or prediction.get("subject_matter_he"))
+    matter = compact_text(prediction.get("subject_he") or prediction.get("matter_he") or prediction.get("subject_matter_he"))
     raw_is_event = prediction.get("is_event")
     return {
         "is_event": parse_bool(raw_is_event) if raw_is_event is not None else bool(action_type or matter),
         "action_type_he": action_type,
         "action_subtype_he": compact_text(prediction.get("action_subtype_he") or prediction.get("action_child_label_he")),
         "other_action_type_he": compact_text(prediction.get("other_action_type_he") or prediction.get("other_action_label_he")),
+        "subject_he": matter,
+        "subject_display_he": compact_text(prediction.get("subject_display_he") or prediction.get("matter_display_he")),
+        "predicted_topic_he": compact_text(prediction.get("predicted_topic_he")),
+        "category_he": compact_text(prediction.get("category_he")),
         "matter_he": matter,
-        "matter_display_he": compact_text(prediction.get("matter_display_he")),
+        "matter_display_he": compact_text(prediction.get("matter_display_he") or prediction.get("subject_display_he")),
         "matter_identifiers": prediction.get("matter_identifiers") if isinstance(prediction.get("matter_identifiers"), list) else [],
         "outcome_type": compact_text(prediction.get("outcome_type")),
         "outcome_label_he": compact_text(prediction.get("outcome_label_he") or prediction.get("decision_label_he")),
@@ -6653,24 +7337,26 @@ def topic_subject_v3_anchor_selection_reason(event: TopicSubjectV3EventResult) -
 
 def topic_subject_v3_target_text_has_explicit_decision_evidence(text: str) -> bool:
     text_norm = normalize_for_search(corrected_hebrew_text(text))
-    return text_has_any(text_norm, APPROVAL_DECISION_QUOTE_CUES + AGENDA_REMOVAL_CUES + COMMITTEE_REFERRAL_RESULT_CUES)
+    return text_has_any(text_norm, APPROVAL_DECISION_QUOTE_CUES) or topic_subject_v3_text_has_any_result_cue(text_norm, AGENDA_REMOVAL_CUES + COMMITTEE_REFERRAL_RESULT_CUES)
 
 
 def topic_subject_v3_apply_canonical_matter(*, primary: TopicSubjectV3EventResult, group_events: list[TopicSubjectV3EventResult]) -> dict[str, Any]:
     payload = dict(primary.event_payload)
     candidates = [
         {
-            "matter_he": compact_text(event.event_payload.get("matter_he")),
+            "matter_he": topic_subject_v3_subject_text(event.event_payload),
             "artifact_id": event.context.target_artifact.artifact_id,
             "score": topic_subject_v3_matter_candidate_score(event),
         }
         for event in group_events
-        if compact_text(event.event_payload.get("matter_he"))
+        if topic_subject_v3_subject_text(event.event_payload)
     ]
     if not candidates:
         return payload
     best = max(candidates, key=lambda item: (float(item["score"]), len(topic_subject_v3_identity_tokens(str(item["matter_he"])))) )
     matter = compact_text(best.get("matter_he"))
+    payload["subject_he"] = matter[:500]
+    payload["subject_norm"] = normalize_for_search(matter)[:500] if matter else ""
     payload["matter_he"] = matter[:500]
     payload["matter_norm"] = normalize_for_search(matter)[:500] if matter else ""
     matter_identifiers = topic_subject_v3_matter_identifiers(
@@ -6679,18 +7365,21 @@ def topic_subject_v3_apply_canonical_matter(*, primary: TopicSubjectV3EventResul
         source_text=topic_subject_v3_full_event_text(primary),
     )
     payload["matter_identifiers"] = matter_identifiers
-    payload["matter_display_he"] = topic_subject_v3_matter_display_he(
-        payload.get("matter_display_he"),
+    subject_display = topic_subject_v3_matter_display_he(
+        payload.get("subject_display_he") or payload.get("matter_display_he"),
         matter=matter,
         identifiers=matter_identifiers,
     )
+    payload["subject_display_he"] = subject_display
+    payload["matter_display_he"] = subject_display
     payload["canonical_matter_source_artifact_id"] = compact_text(best.get("artifact_id"))
+    payload["canonical_subject_source_artifact_id"] = compact_text(best.get("artifact_id"))
     payload["canonical_matter_candidates"] = candidates
     return payload
 
 
 def topic_subject_v3_matter_candidate_score(event: TopicSubjectV3EventResult) -> float:
-    matter = compact_text(event.event_payload.get("matter_he"))
+    matter = topic_subject_v3_subject_text(event.event_payload)
     score = float(len(topic_subject_v3_identity_tokens(matter))) * 0.1
     if topic_subject_v3_target_text_has_explicit_decision_evidence(event.context.target_artifact.real_text):
         score += 1.0
@@ -6719,8 +7408,8 @@ def topic_subject_v3_events_represent_same_event(*, left: TopicSubjectV3EventRes
     if topic_subject_v3_request_phase_matches_decision(left=left, right=right):
         return True
     matter_similarity = topic_subject_v3_text_similarity(
-        compact_text(left.event_payload.get("matter_he") or left.event_payload.get("event_key_he")),
-        compact_text(right.event_payload.get("matter_he") or right.event_payload.get("event_key_he")),
+        compact_text(topic_subject_v3_subject_text(left.event_payload) or left.event_payload.get("event_key_he")),
+        compact_text(topic_subject_v3_subject_text(right.event_payload) or right.event_payload.get("event_key_he")),
     )
     if matter_similarity >= 0.55 and topic_subject_v3_actions_compatible(left.event_payload, right.event_payload):
         return True
@@ -6748,7 +7437,7 @@ def topic_subject_v3_request_phase_matches_decision(*, left: TopicSubjectV3Event
         if decision_event.context.target_artifact.artifact_id in request_context_ids:
             return True
         matter_to_decision_context = topic_subject_v3_text_similarity(
-            compact_text(request_event.event_payload.get("matter_he")),
+            topic_subject_v3_subject_text(request_event.event_payload),
             topic_subject_v3_full_event_text(decision_event),
         )
         if matter_to_decision_context >= 0.25:
@@ -6783,8 +7472,8 @@ def topic_subject_v3_actions_compatible(left_payload: dict[str, Any], right_payl
 
 
 def topic_subject_v3_shared_evidence_similarity(*, left: TopicSubjectV3EventResult, right: TopicSubjectV3EventResult) -> float:
-    left_text = " ".join([compact_text(left.event_payload.get("matter_he")), left.context.target_artifact.real_text, topic_subject_v3_decision_quote(left.event_payload)])
-    right_text = " ".join([compact_text(right.event_payload.get("matter_he")), right.context.target_artifact.real_text, topic_subject_v3_decision_quote(right.event_payload)])
+    left_text = " ".join([topic_subject_v3_subject_text(left.event_payload), left.context.target_artifact.real_text, topic_subject_v3_decision_quote(left.event_payload)])
+    right_text = " ".join([topic_subject_v3_subject_text(right.event_payload), right.context.target_artifact.real_text, topic_subject_v3_decision_quote(right.event_payload)])
     return topic_subject_v3_text_similarity(left_text, right_text)
 
 
@@ -6979,9 +7668,9 @@ def persist_topic_subject_v3_result(
             other_action_type_norm=string_or_none(payload.get("other_action_type_norm")),
             action_type_confidence=float(payload.get("action_type_confidence") or 0.0),
             action_type_status=str(payload.get("action_type_status") or "unknown"),
-            matter_he=str(payload.get("matter_he") or ""),
-            matter_norm=str(payload.get("matter_norm") or ""),
-            matter_display_he=string_or_none(payload.get("matter_display_he")),
+            matter_he=topic_subject_v3_subject_text(payload),
+            matter_norm=normalize_for_search(topic_subject_v3_subject_text(payload))[:500] if topic_subject_v3_subject_text(payload) else "",
+            matter_display_he=string_or_none(payload.get("subject_display_he") or payload.get("matter_display_he")),
             matter_identifiers_json=json.dumps(payload.get("matter_identifiers") if isinstance(payload.get("matter_identifiers"), list) else [], ensure_ascii=False),
             action_details_he=string_or_none(payload.get("action_details_he")),
             action_quote_he=string_or_none(payload.get("action_quote_he")),
@@ -7012,6 +7701,11 @@ def persist_topic_subject_v3_result(
                     "full_source_text_he": topic_subject_v3_full_event_text(event),
                     "event_source_rows": topic_subject_v3_event_source_rows(event),
                     "model_event_key_he": compact_text(payload.get("event_key_he")),
+                    "subject_he": topic_subject_v3_subject_text(payload),
+                    "subject_display_he": compact_text(payload.get("subject_display_he") or payload.get("matter_display_he")),
+                    "predicted_topic_he": topic_subject_v3_predicted_topic_text(payload),
+                    "category_he": topic_subject_v3_category_text(payload),
+                    "category_id": compact_text(payload.get("category_id")),
                     "canonical_event_group_key": topic_subject_v3_event_group_key(context=event.context, event_payload=payload),
                 },
                 ensure_ascii=False,
@@ -7177,6 +7871,10 @@ def topic_subject_v3_research_records(result: TopicSubjectV3ResearchResult) -> l
                 "source_ordinal": row_payload.get("source_ordinal"),
                 "page_span": row_payload.get("page_span"),
                 "source_provenance": row_payload.get("source_provenance"),
+                "predicted_topic_he": row_payload.get("predicted_topic_he"),
+                "category_he": row_payload.get("category_he"),
+                "category_id": row_payload.get("category_id"),
+                "subject_he": row_payload.get("subject_he"),
                 "quality_status": row_payload.get("quality_status"),
                 "row_role": row_payload.get("row_role"),
                 "event_role": row_payload.get("event_role"),
@@ -7197,6 +7895,11 @@ def topic_subject_v3_event_to_dict(event: TopicSubjectV3EventResult) -> dict[str
         "event_id": event.event_id,
         "event_index": event.event_index,
         "artifact_id": event.context.target_artifact.artifact_id,
+        "predicted_topic_he": topic_subject_v3_predicted_topic_text(event.event_payload),
+        "category_he": topic_subject_v3_category_text(event.event_payload),
+        "category_id": compact_text(event.event_payload.get("category_id")),
+        "subject_he": topic_subject_v3_subject_text(event.event_payload),
+        "subject_display_he": compact_text(event.event_payload.get("subject_display_he") or event.event_payload.get("matter_display_he")),
         "source_provenance": topic_subject_v3_source_paths(event.context.target_artifact),
         "raw_date_mentions": topic_subject_v3_raw_date_mentions(event.context.target_artifact.real_text),
         "raw_geography_mentions": topic_subject_v3_geography_mentions(event.context.target_artifact.real_text),
@@ -7228,6 +7931,11 @@ def topic_subject_v3_row_quality_to_dict(row: TopicSubjectV3RowQualityData) -> d
         "source_document_version_id": row.artifact.source_document_version_id,
         "source_ordinal": row.artifact.source_ordinal,
         "page_span": {"start": row.artifact.start_page, "end": row.artifact.end_page},
+        "predicted_topic_he": topic_subject_v3_predicted_topic_text(row.model_prediction),
+        "category_he": topic_subject_v3_category_text(row.model_prediction),
+        "category_id": compact_text(row.model_prediction.get("category_id")),
+        "subject_he": topic_subject_v3_subject_text(row.model_prediction),
+        "subject_display_he": compact_text(row.model_prediction.get("subject_display_he") or row.model_prediction.get("matter_display_he")),
         "raw_date_mentions": topic_subject_v3_raw_date_mentions(row.artifact.real_text),
         "raw_geography_mentions": topic_subject_v3_geography_mentions(row.artifact.real_text),
         "primary_time": topic_subject_v3_primary_time(event_payload=row.model_prediction, artifact=row.artifact),
@@ -7243,11 +7951,16 @@ def topic_subject_v3_row_quality_to_dict(row: TopicSubjectV3RowQualityData) -> d
         "event_role": row.event_role,
         "topic_relevance": row.topic_relevance,
         "model_prediction": {
+            "predicted_topic_he": topic_subject_v3_predicted_topic_text(row.model_prediction),
+            "category_he": topic_subject_v3_category_text(row.model_prediction),
+            "category_id": compact_text(row.model_prediction.get("category_id")),
             "action_type_he": row.action_type_by_dicta,
             "action_subtype_he": row.action_subtype_by_dicta,
             "other_action_type_he": row.other_action_type_by_dicta,
+            "subject_he": topic_subject_v3_subject_text(row.model_prediction) or row.matter_by_dicta,
+            "subject_display_he": compact_text(row.model_prediction.get("subject_display_he") or row.model_prediction.get("matter_display_he")),
             "matter_he": row.matter_by_dicta,
-            "matter_display_he": compact_text(row.model_prediction.get("matter_display_he")),
+            "matter_display_he": compact_text(row.model_prediction.get("subject_display_he") or row.model_prediction.get("matter_display_he")),
             "matter_identifiers": row.model_prediction.get("matter_identifiers") if isinstance(row.model_prediction.get("matter_identifiers"), list) else [],
             "action_details_he": row.action_details_by_dicta,
             "action_focus_quote_he": compact_text(row.model_prediction.get("action_focus_quote_he")),
@@ -7282,8 +7995,8 @@ def topic_subject_v3_quality_report_markdown(rows: list[TopicSubjectV3RowQuality
     if not problem_rows:
         return "\n".join([*lines, "No problematic or low-confidence rows found.", ""]) + "\n"
     lines.extend([
-        "| Source/Text | Action | Matter | Decision Outcome | Event Phase | Evidence Quote | Model Judge | Reason | Status |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| Source/Text | Predicted topic | Category | Action | Outcome | Time | Place/entity | Subject | Event Phase | Evidence Quote | Model Judge | Reason | Status |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ])
     for row in problem_rows[:80]:
         lines.append(
@@ -7291,9 +8004,13 @@ def topic_subject_v3_quality_report_markdown(rows: list[TopicSubjectV3RowQuality
             + " | ".join(
                 [
                     escape_table(shorten(row.artifact.real_text, 180)),
+                    escape_table(shorten(topic_subject_v3_predicted_topic_display(row), 120)),
+                    escape_table(shorten(topic_subject_v3_category_display(row), 100)),
                     escape_table(topic_subject_v3_action_display(row)),
-                    escape_table(shorten(topic_subject_v3_matter_display(row), 160)),
                     escape_table(topic_subject_v3_decision_outcome_display(row.model_prediction)),
+                    escape_table(shorten(topic_subject_v3_time_display(row), 100)),
+                    escape_table(shorten(topic_subject_v3_place_entity_display(row), 140)),
+                    escape_table(shorten(topic_subject_v3_matter_display(row), 160)),
                     escape_table(topic_subject_v3_event_phase_display(row)),
                     escape_table(shorten(topic_subject_v3_evidence_quote_display(row), 160)),
                     escape_table(shorten(topic_subject_v3_judge_prediction_label(row), 180)),
@@ -7312,8 +8029,8 @@ def topic_subject_v3_all_rows_report_markdown(rows: list[TopicSubjectV3RowQualit
         "",
         "Shows every benchmarked/source row so accepted events and non-events can both be judged.",
         "",
-        "| # | Source/Text | Row Role | Event Role | Action | Matter | Decision Outcome | Event Phase | Evidence Quote | Model Judge | Reason | Status |",
-        "|---:|---|---|---|---|---|---|---|---|---|---|---|",
+        "| # | Source/Text | Row Role | Event Role | Predicted topic | Category | Action | Outcome | Time | Place/entity | Subject | Event Phase | Evidence Quote | Model Judge | Reason | Status |",
+        "|---:|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for index, row in enumerate(rows, start=1):
         lines.append(
@@ -7324,9 +8041,13 @@ def topic_subject_v3_all_rows_report_markdown(rows: list[TopicSubjectV3RowQualit
                     escape_table(shorten(row.artifact.real_text, 240)),
                     escape_table(row.row_role),
                     escape_table(row.event_role),
+                    escape_table(shorten(topic_subject_v3_predicted_topic_display(row), 140)),
+                    escape_table(shorten(topic_subject_v3_category_display(row), 100)),
                     escape_table(topic_subject_v3_action_display(row)),
-                    escape_table(shorten(topic_subject_v3_matter_display(row), 180)),
                     escape_table(topic_subject_v3_decision_outcome_display(row.model_prediction)),
+                    escape_table(shorten(topic_subject_v3_time_display(row), 100)),
+                    escape_table(shorten(topic_subject_v3_place_entity_display(row), 140)),
+                    escape_table(shorten(topic_subject_v3_matter_display(row), 180)),
                     escape_table(topic_subject_v3_event_phase_display(row)),
                     escape_table(shorten(topic_subject_v3_evidence_quote_display(row), 180)),
                     escape_table(shorten(topic_subject_v3_judge_prediction_label(row), 220)),
@@ -7369,7 +8090,47 @@ def topic_subject_v3_action_display(row: TopicSubjectV3RowQualityData) -> str:
 
 
 def topic_subject_v3_matter_display(row: TopicSubjectV3RowQualityData) -> str:
-    return compact_text(row.model_prediction.get("matter_display_he")) or row.matter_by_dicta
+    return compact_text(row.model_prediction.get("subject_display_he") or row.model_prediction.get("matter_display_he")) or topic_subject_v3_subject_text(row.model_prediction) or row.matter_by_dicta
+
+
+def topic_subject_v3_predicted_topic_display(row: TopicSubjectV3RowQualityData) -> str:
+    return topic_subject_v3_predicted_topic_text(row.model_prediction) or "none"
+
+
+def topic_subject_v3_category_display(row: TopicSubjectV3RowQualityData) -> str:
+    return topic_subject_v3_category_text(row.model_prediction) or "none"
+
+
+def topic_subject_v3_time_display(row: TopicSubjectV3RowQualityData) -> str:
+    primary_time = topic_subject_v3_primary_time(event_payload=row.model_prediction, artifact=row.artifact)
+    if isinstance(primary_time, dict):
+        raw_text = compact_text(primary_time.get("raw_text"))
+        start = compact_text(primary_time.get("start"))
+        if start and raw_text and raw_text != start:
+            return compact_text(f"{start} ({raw_text})")
+        if start:
+            return start
+        if raw_text:
+            return raw_text
+    date_mentions = topic_subject_v3_raw_date_mentions(row.artifact.real_text)
+    if date_mentions:
+        return compact_text(date_mentions[0].get("raw_text"))
+    time_mentions = topic_subject_v3_text_time_mentions(text=row.artifact.real_text, source_scope="general_text")
+    if time_mentions:
+        return compact_text(time_mentions[0].get("raw_text"))
+    return "none"
+
+
+def topic_subject_v3_place_entity_display(row: TopicSubjectV3RowQualityData) -> str:
+    identifiers = row.model_prediction.get("matter_identifiers") if isinstance(row.model_prediction.get("matter_identifiers"), list) else []
+    identifier_texts = [
+        compact_text(item.get("canonical_he") or item.get("raw_text_he"))
+        for item in identifiers
+        if isinstance(item, dict) and compact_text(item.get("canonical_he") or item.get("raw_text_he"))
+    ]
+    geography_texts = [compact_text(item.get("raw_text")) for item in topic_subject_v3_geography_mentions(row.artifact.real_text) if compact_text(item.get("raw_text"))]
+    value = " ; ".join(unique_strings([*identifier_texts, *geography_texts])[:4])
+    return value or "none"
 
 
 def topic_subject_v3_event_phase_display(row: TopicSubjectV3RowQualityData) -> str:
@@ -7387,11 +8148,13 @@ def topic_subject_v3_evidence_quote_display(row: TopicSubjectV3RowQualityData) -
 
 def topic_subject_v3_model_prediction_label(row: TopicSubjectV3RowQualityData) -> str:
     action = topic_subject_v3_action_display(row)
-    matter_text = topic_subject_v3_matter_display(row)
-    matter = f"על {matter_text}" if matter_text else ""
-    outcome = f"Decision Outcome: {topic_subject_v3_decision_outcome_display(row.model_prediction)}"
+    predicted_topic = topic_subject_v3_predicted_topic_display(row)
+    subject_text = topic_subject_v3_matter_display(row)
+    subject = f"על {subject_text}" if subject_text else ""
+    topic = f"Predicted topic: {predicted_topic}" if predicted_topic and predicted_topic != "none" else ""
+    outcome = f"Outcome: {topic_subject_v3_decision_outcome_display(row.model_prediction)}"
     phase = f"Event Phase: {topic_subject_v3_event_phase_display(row)}"
-    return compact_text(f"{action} {matter} | {outcome} | {phase}")
+    return compact_text(f"{action} {subject} | {topic} | {outcome} | {phase}")
 
 
 def topic_subject_v3_judge_prediction_label(row: TopicSubjectV3RowQualityData) -> str:
@@ -7403,9 +8166,11 @@ def topic_subject_v3_judge_prediction_label(row: TopicSubjectV3RowQualityData) -
     subtype = compact_text(prediction.get("action_subtype_he"))
     if subtype:
         action = f"{action} / {subtype}" if action else subtype
-    matter = compact_text(prediction.get("matter_display_he") or prediction.get("matter_he"))
+    matter = compact_text(prediction.get("subject_display_he") or prediction.get("matter_display_he") or prediction.get("subject_he") or prediction.get("matter_he"))
+    predicted_topic = compact_text(prediction.get("predicted_topic_he"))
     outcome = compact_text(prediction.get("outcome_label_he") or prediction.get("outcome_type")) or "none"
-    return compact_text(f"{action} על {matter} | Decision Outcome: {outcome}") or row.ground_truth_he
+    topic = f" | Predicted topic: {predicted_topic}" if predicted_topic else ""
+    return compact_text(f"{action} על {matter}{topic} | Outcome: {outcome}") or row.ground_truth_he
 
 
 def run_topic_subject_research(
@@ -7986,7 +8751,9 @@ def is_reference_only_text(text: str) -> bool:
 def is_attachment_reference_only_text(text_norm: str) -> bool:
     if len(text_norm) > 140:
         return False
-    if text_has_any(text_norm, REQUEST_ONLY_CUES + DECISION_ACTION_CUES + STRONG_APPROVAL_ACTION_CUES):
+    if text_has_any(text_norm, REQUEST_ONLY_CUES + DECISION_ACTION_CUES + STRONG_APPROVAL_ACTION_CUES + UPDATE_ACTION_CUES + RECOMMENDATION_ACTION_CUES + EXECUTION_ACTION_CUES + DIRECTIVE_ACTION_CUES):
+        return False
+    if re.search(r"\b(?:הצעת|בקשת|תיקון|הוספת|הקמת|שדרוג|מינוי|הקצאה|הסכם|מכרז)\b", text_norm):
         return False
     compact_no_space = re.sub(r"\s+", "", text_norm)
     has_attachment_ref = any(token in compact_no_space for token in ("מצל", "מצ\"ל", "מצ׳ל"))
@@ -8549,7 +9316,11 @@ def exact_source_quote_around_cue(*, raw_text: str, cues: tuple[str, ...], max_w
         if not match:
             continue
         tail = text[match.start() :]
-        return compact_text(" ".join(tail.split()[:max_words]))[:300]
+        quote = compact_text(" ".join(tail.split()[:max_words]))[:300]
+        quote = re.split(r"\s+:(?:מר|גב'|גב׳|ד\"ר|עו\"ד|ראש\s+העיר|מנכ\"ל)\b", quote, maxsplit=1)[0]
+        quote = re.split(r"\s+\.(?:אני\s+נועל|תודה\s+רבה|לילה\s+טוב)\b", quote, maxsplit=1)[0]
+        quote = re.sub(r"\s+(?:מספר|מס|מס')\s*$", "", compact_text(quote)).strip(" ,.;:–-")
+        return quote
     return ""
 
 

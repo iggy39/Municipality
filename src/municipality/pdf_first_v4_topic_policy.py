@@ -42,6 +42,13 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         required_any=(("מבנה יביל", "מבני ציבור", "מבנה ציבור", "מתנ\"סים", "מתנסים", "שיפוץ חזיתות", "חזיתות"),),
     ),
     TopicPolicy(
+        policy_id="public_site_renovation_planning",
+        root_topic_id="root_planning_building",
+        description_he="שיפוץ, שדרוג או פיתוח של אתר ציבורי מסווגים לתכנון ובנייה.",
+        priority=106,
+        required_any=(("שיפוץ", "שדרוג", "פיתוח"), ("חוף", "חופי", "חופים", "פארק", "מתקן ציבורי", "אתר ציבורי")),
+    ),
+    TopicPolicy(
         policy_id="procurement_or_tender_action",
         root_topic_id="root_agreements",
         description_he="כאשר פעולת האג'נדה היא מכרז, ביטול מכרז, התקשרות, הרשאה או פטור ממכרז, מסווגים לפי פעולת ההתקשרות גם אם מוזכר תחום שירות כמו חינוך.",
@@ -173,8 +180,15 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         root_topic_id="root_education",
         description_he="מוסדות חינוך, בתי ספר, גנים ותוכניות בבתי ספר מסווגים לחינוך, אלא אם פעולת האג'נדה היא מכרז/התקשרות.",
         priority=96,
-        required_any=(("מוסדות חינוך", "בית ספר", "בתי ספר", "בתי הספר", "גנים", "חרמות בבתי הספר", "תלמידים"),),
+        required_any=(("מוסדות חינוך", "בית ספר", "בתי ספר", "בתי הספר", "ביה\"ס", "ביה ס", "כיתות", "גנים", "חרמות בבתי הספר", "תלמידים"),),
         negative_terms=("ביטול מכרז", "מכרז פומבי", "התקשרות", "פטור ממכרז"),
+    ),
+    TopicPolicy(
+        policy_id="education_award_subject",
+        root_topic_id="root_education",
+        description_he="פרסי חינוך ותוכניות הוקרה חינוכיות מסווגים לחינוך.",
+        priority=113,
+        required_any=(("פרס חינוך", "פרסי חינוך", "חינוך פורץ דרך"),),
     ),
     TopicPolicy(
         policy_id="parent_payments_education",
@@ -196,6 +210,13 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         description_he="כאשר ייעוד מקרקעין מתואר במפורש להפעלת כיתת גן/גן ילדים, תחום השירות הדומיננטי הוא חינוך.",
         priority=113,
         required_any=(("ייעוד המקרקעין", "ייעוד מקרקעין", "מקרקעין"), ("כיתת גן", "גן ילדים", "גני ילדים")),
+    ),
+    TopicPolicy(
+        policy_id="roof_agreement_planning",
+        root_topic_id="root_planning_building",
+        description_he="הסכם הגג ונתוני יחידות דיור במסגרתו מסווגים לתכנון ובנייה; מספרי יחידות, זכאים והגרלות הם מטאדאטה.",
+        priority=114,
+        required_any=(("הסכם הגג",),),
     ),
     TopicPolicy(
         policy_id="science_program_education",
@@ -312,6 +333,14 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         priority=95,
         required_any=(("אלימות במשפחה",),),
         negative_terms=("משטרה", "אכיפה", "מעצר", "כתב אישום", "סיור", "פיקוח"),
+    ),
+    TopicPolicy(
+        policy_id="public_violence_crime_security",
+        root_topic_id="root_security_enforcement",
+        description_he="אלימות, פשע או פשיעה במרחב הציבורי מסווגים לביטחון ואכיפה; מילים כמו רחוב/רחובות הן הקשר מקום ולא תחבורה.",
+        priority=114,
+        required_any=(("אלימות", "פשע", "פשיעה"), ("רחוב", "רחובות", "רחובות העיר", "מרחב ציבורי", "בעיר", "קהילתי", "קהילתית")),
+        negative_terms=("אלימות במשפחה",),
     ),
     TopicPolicy(
         policy_id="homelessness_welfare_subject",
@@ -541,6 +570,20 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         description_he="קבוצות ספורט, ליגות, אליפויות, גביעים וענפי ספורט מסווגים לתרבות וספורט.",
         priority=92,
         required_any=(("ספורט", "כדורגל", "כדוריד", "כדורסל", "ליגה", "אליפות", "גביע", "קבוצת ספורט", "ספורטאי"),),
+    ),
+    TopicPolicy(
+        policy_id="sports_grant_support",
+        root_topic_id="root_supports",
+        description_he="מענקים או תמיכות לקבוצות וענפי ספורט מסווגים כתמיכות, כאשר הספורט הוא תחום השירות.",
+        priority=115,
+        required_any=(("מענק", "מענקי", "מענקים", "תמיכה", "תמיכות"), ("ספורט", "כדורסל", "כדורגל", "כדוריד", "ליגה", "אליפות", "גביע", "קבוצת ספורט")),
+    ),
+    TopicPolicy(
+        policy_id="recreation_facility_activity",
+        root_topic_id="root_culture_sport",
+        description_he="פעילות, מנויים והנחות במתקני פנאי וספורט מסווגים לתרבות וספורט.",
+        priority=105,
+        required_any=(("קאנטרי", "בריכה", "מרכז ספורט", "מתקן ספורט"), ("פעילות", "מנוי", "מנויים", "הנחות", "עלויות")),
     ),
     TopicPolicy(
         policy_id="youth_sports_club_alternative_culture",

@@ -16,6 +16,24 @@ def _load_step4_module():
 step4 = _load_step4_module()
 
 
+def test_candidate_child_prompt_includes_deterministic_metadata_schema() -> None:
+    tree = step4.global_topic_tree_payload(existing_tree=None, attachment_contexts=[])
+    candidate = step4._existing_child_candidate_by_label(
+        topic_tree=tree,
+        root_topic_id="root_supports",
+        label="תמיכה בספורט",
+        evidence_quote="מענקי ספורט לקבוצת כדורסל",
+        confidence_hint=0.94,
+    )
+
+    prompt_choice = step4._candidate_child_choices_for_prompt([candidate])[0]
+
+    assert prompt_choice["label_he"] == "תמיכה בספורט"
+    assert prompt_choice["metadata_schema"]["labeling_method"] == "deterministic_curated_topic_tree"
+    assert "raw_text" in prompt_choice["metadata_schema"]["field_names"]
+    assert "beneficiary_he" in prompt_choice["metadata_schema"]["field_names"]
+
+
 def test_pure_agenda_section_heading_is_container() -> None:
     assert step4._looks_like_container_heading("סעיף1 :\u202b :הנושאים לדיון\u202b שאילתות") is True
     assert step4._looks_like_container_heading("הנושאים לדיון :שאילתות") is True
@@ -34,6 +52,75 @@ def test_noisy_query_carrier_extracts_semantic_subject() -> None:
 
     assert contract["is_topic_bearing"] is True
     assert "העמדת לוח מודעות" in contract["topic_subject_he"]
+
+
+def test_orphaned_quoted_title_extracts_local_semantic_subject() -> None:
+    item = {
+        "unit_raw_text": "22 ) - .מצ\"ל 11 \".\"פרס חינוך עירוני שנתי לחינוך פורץ דרך באשדוד- דיון עפ\"י בקשת עו\"ד טובול- ( 29.5.",
+        "raw_text": "22 ) - .מצ\"ל 11 \".\"פרס חינוך עירוני שנתי לחינוך פורץ דרך באשדוד- דיון עפ\"י בקשת עו\"ד טובול- ( 29.5.",
+        "topic_headline_he": "זרימת מי ביוב בחוף יא",
+        "topic_identification_context": "זרימת מי ביוב בחוף יא",
+    }
+
+    subject = step4._best_explicit_topic_subject(item)
+    proposal = step4._topic_proposal_from_text(
+        row={"root_topic_id": "root_infrastructure_environment"},
+        item={**item, "root_topic_candidates": [], "document_context": {"packet_role": "protocol"}},
+        text=subject or "",
+        evidence_text=item["unit_raw_text"],
+        source="weak_carrier_span",
+        base_score=86,
+    )
+
+    assert subject == "פרס חינוך עירוני שנתי לחינוך פורץ דרך באשדוד"
+    assert proposal is not None
+    assert proposal["root_topic_id"] == "root_education"
+    assert proposal["subject_he"] == "פרס חינוך"
+
+
+def test_orphaned_quoted_title_ignores_ocr_apostrophe_word_split() -> None:
+    item = {
+        "unit_raw_text": "22.פרוטוקול מישיבת ועדת בטיחות וגהות עירו 'נית מס1/22 מיום27.10.22 – )(דבדה– .מצ\"ל",
+        "raw_text": "22.פרוטוקול מישיבת ועדת בטיחות וגהות עירו 'נית מס1/22 מיום27.10.22 – )(דבדה– .מצ\"ל",
+        "topic_headline_he": "פרוטוקול מישיבת ועדת בטיחות וגהות עירו נית מס 22 מיום.10.22",
+        "topic_identification_context": "פרוטוקול מישיבת ועדת בטיחות וגהות עירו נית מס 22 מיום.10.22",
+    }
+
+    assert step4._best_explicit_topic_subject(item) is None
+    assert step4._local_committee_protocol_subject(item) == "ועדת בטיחות וגהות עירו נית מס 22 מיום"
+
+
+def test_pure_mayor_update_heading_is_internal_non_topic() -> None:
+    row = {
+        "packet_role": "protocol",
+        "row_type": "topic_item",
+        "topic_node_status": "active",
+        "is_topic_bearing": True,
+        "root_topic_id": "root_mayor_updates",
+        "topic_subject_he": "עדכוני ראש העיר",
+        "topic_headline_he": "עדכוני ראש העיר",
+        "topic_identification_context": "עדכוני ראש העיר",
+    }
+
+    assert step4._looks_like_container_heading("14 ..עדכוני ראש העיר") is True
+    assert step4._post_assignment_non_topic_reason(row) == "internal_update_heading"
+
+
+def test_noisy_pure_mayor_update_heading_is_internal_non_topic() -> None:
+    row = {
+        "packet_role": "protocol",
+        "row_type": "container",
+        "structural_role": "outline_item",
+        "topic_node_status": "active",
+        "is_topic_bearing": True,
+        "root_topic_id": "root_hr_labor",
+        "topic_subject_he": "עדכוני ראש העיר סעיף : עדכוני ראש העיר",
+        "topic_headline_he": "סעיף2 : ..עדכוני ראש העיר14",
+        "topic_identification_context": "סעיף2 : ..עדכוני ראש העיר14",
+    }
+
+    assert step4._looks_like_container_heading("סעיף2 : ..עדכוני ראש העיר14") is True
+    assert step4._post_assignment_non_topic_reason(row) == "internal_update_heading"
 
 
 def test_substantive_fragment_gets_model_review() -> None:
@@ -59,6 +146,20 @@ def test_numeric_evidence_fragment_is_not_active_topic() -> None:
         subject="עזרה משטרתית",
         text="עזרה משטרתית 100 .ומבקשים את עזרת המשטרה",
     ) is True
+
+
+def test_numbered_continuation_with_bounded_topic_signal_is_not_numeric_fragment() -> None:
+    row = {
+        "topic_subject_he": "שיפוץ מרכז מסחרי רובע ו׳ ועדכון תבחינים",
+        "topic_identification_context": "29 .שיפוץ מרכז מסחרי רובע ו' ,עדכון תבחינים שנתקבלו במועצה ממאי2018 - רוטנברג",
+        "structural_role": "continuation",
+    }
+
+    assert step4._looks_like_numeric_or_partial_evidence_fragment(
+        row=row,
+        subject="שיפוץ מרכז מסחרי רובע ו׳ ועדכון תבחינים",
+        text="שיפוץ מרכז מסחרי רובע ו׳ ועדכון תבחינים",
+    ) is False
 
 
 def _structured_fallback_item(text: str, *, topic_subject: str | None = None, hints: list[dict] | None = None) -> dict:
@@ -112,6 +213,25 @@ def test_geo_fallback_routes_place_only_query_to_geo_candidate() -> None:
     assert assignment["geo_resolution"]["source"] == "local_geo_pattern"
 
 
+def test_root_geo_child_is_repaired_from_subject_pattern() -> None:
+    row = {
+        "packet_role": "protocol",
+        "root_topic_id": "root_geo",
+        "child_label_he": "כתובות ורחובות",
+        "raw_child_label_he": "כתובות ורחובות",
+        "topic_subject_he": "כיכר רמון בעיר ודרך מנחם בגין",
+        "topic_node_status": "active",
+        "is_topic_bearing": True,
+        "topic_assignment_route": "dictalm_v4_global_tree:child_choice:existing_tree",
+    }
+
+    repaired = step4._repair_root_geo_child_from_subject(row)
+
+    assert repaired["child_label_he"] == "כיכרות וצמתים"
+    assert repaired["geo_resolution"]["source"] == "local_geo_pattern"
+    assert repaired["topic_assignment_route"].endswith(":geo_child_repaired")
+
+
 def test_geo_fallback_does_not_steal_action_topic() -> None:
     assert step4._resolve_geo_fallback(
         subject="הקמת חניון מוניציפלי חכם בסמוך לתחנת רכבת",
@@ -155,7 +275,7 @@ def test_v3_fallback_maps_single_entailed_hint_through_topic_tree() -> None:
     assert assignment["v3_fallback_selection"]["status"] == "selected"
 
 
-def test_v3_confirmed_location_action_becomes_active_without_root_overwrite() -> None:
+def test_v3_confirmed_location_action_stays_candidate_without_external_geo_verification() -> None:
     hint = {
         "source": "topic_subject_v3",
         "source_structure_unit_id": "s0001_01_aaaaaaaaaaaa",
@@ -192,10 +312,37 @@ def test_v3_confirmed_location_action_becomes_active_without_root_overwrite() ->
     }
 
     assignment = step4._assignment_from_topic_proposal(row=row, item=item, proposal=proposal)
+    assignment = step4._normalize_protocol_non_topic_assignments([assignment])[0]
 
     assert assignment["root_topic_id"] == "root_geo"
-    assert assignment["topic_node_status"] == "active"
-    assert assignment["topic_reject_reason"] is None
+    assert assignment["topic_node_status"] == "candidate"
+    assert assignment["topic_reject_reason"] == "non_blocking_topic_review:unverified_geo_location"
+
+
+def test_v3_response_to_location_query_keeps_location_root_not_mayor_updates() -> None:
+    hint = {
+        "source": "topic_subject_v3",
+        "source_structure_unit_id": "s0001_01_aaaaaaaaaaaa",
+        "matter_he": "כיכר רמון בעיר ודרך מנחם בגין",
+        "matter_display_he": "כיכר רמון ודרך מנחם בגין",
+        "action_type_he": "מענה לשאילתה",
+        "source_quote_he": "תשובת ראש העיר לשאילתה בנושא כיכר רמון בעיר ודרך מנחם בגין",
+        "quality_status": "accepted",
+        "row_role": "action_anchor",
+        "event_role": "primary",
+        "entailment_status": "entailed",
+    }
+    item = _structured_fallback_item(
+        'תשובת ראש העיר לשאילתה בנושא "כיכר רמון בעיר ודרך מנחם בגין"',
+        topic_subject="כיכר רמון בעיר ודרך מנחם בגין",
+        hints=[hint],
+    )
+
+    selection = step4._select_v3_fallback_hint(item=item)
+    proposals = step4._v3_topic_proposals(item=item)
+
+    assert selection["best"]["root_topic_id"] == "root_geo"
+    assert proposals[0]["root_topic_id"] == "root_geo"
 
 
 def test_non_geo_child_evidence_with_place_term_is_active() -> None:
@@ -1085,6 +1232,45 @@ def test_reply_attachment_tail_is_inheritable_evidence() -> None:
     assert step4._evidence_only_arbitration_reason(row=row, item=item) == "reply_attachment_dependent_detail"
 
 
+def test_v3_facility_subject_overrides_reply_tail_without_using_procedural_root() -> None:
+    raw = "המתנ\"ס. .שתושבי רובע ט\"ו מחכים לו כל כך הרבה שנים .השאלה והתשובה מצורפות לפרוטוקול זה כנספח"
+    hint = {
+        "source": "topic_subject_v3",
+        "source_structure_unit_id": "vh006_07_01_966a6a09f777",
+        "matter_he": "המתנ\"ס שתושבי רובע ט\"ו מחכים לו כל כך הרבה שנים",
+        "matter_display_he": "מתנ\"ס לרובע ט\"ו",
+        "action_type_he": "מענה לשאילתה",
+        "source_quote_he": "השאלה והתשובה מצורפות לפרוטוקול זה כנספח",
+        "quality_status": "accepted",
+        "row_role": "action_anchor",
+        "event_role": "primary",
+    }
+    item = _structured_fallback_item(raw, hints=[hint])
+    item["structure_unit_id"] = "vh006_07_01_966a6a09f777"
+    row = {
+        "structure_unit_id": "vh006_07_01_966a6a09f777",
+        "root_topic_id": "root_geo",
+        "topic_subject_he": None,
+        "raw_topic_subject_he": "המתנ\"ס שתושבי רובע ט\"ו מחכים לו כל כך הרבה שנים",
+        "topic_node_status": "active",
+        "is_topic_bearing": False,
+        "topic_assignment_route": "dictalm_v4_global_tree:root_only",
+    }
+
+    assignment = step4._apply_topic_arbitration(assignments=[row], items=[item], enable_govmap_geo=False)[0]
+
+    assert assignment["root_topic_id"] == "root_planning_building"
+    assert assignment["topic_subject_he"] == "מתנ\"ס רובע ט\"ו"
+    assert assignment["topic_node_status"] == "active"
+    assert assignment["is_topic_bearing"] is True
+
+
+def test_v3_proposal_does_not_override_numeric_evidence_fragment() -> None:
+    proposal = {"source": "v3_event_subject", "score": 94, "root_topic_id": "root_supports", "subject_he": "עמותת יד לבנים"}
+
+    assert step4._topic_proposal_overrides_evidence_only(proposal, reason="numeric_or_partial_evidence") is False
+
+
 def test_nearby_contained_visual_split_can_inherit_context() -> None:
     current = {"unit_raw_text": "המתנ\"ס. שתושבי רובע ט\"ו מחכים לו כל כך הרבה שנים", "source_window_id": "visual_page_6"}
     candidate = {"unit_raw_text": "שאילתה בנושא אי בניית מבני ציבור ומתנ\"סים. המתנ\"ס. שתושבי רובע ט\"ו מחכים לו כל כך הרבה שנים", "source_window_id": "p6_w16"}
@@ -1137,7 +1323,7 @@ def test_allocation_repair_keeps_public_use_subject() -> None:
         quote=raw,
     )
 
-    assert repaired == "הקצאה לבית כנסת ומרכז רוחני"
+    assert repaired == "ביטול החלטת ועדת הקצאות עבור בית כנסת ומרכז רוחני"
     assert reason is not None
 
 
@@ -2057,6 +2243,265 @@ def test_query_carrier_extracts_semantic_subject_from_dangerous_building_query()
     assert contract["topic_subject_he"] == "בדיקת מבנים מסוכנים ברחבי העיר"
 
 
+def test_compound_child_arbitration_preserves_action_scoped_subject(monkeypatch) -> None:
+    monkeypatch.setattr(
+        step4,
+        "_best_candidate_for_subject",
+        lambda **_: {"root_topic_id": "root_planning_building", "child_label_he": "מבנים מסוכנים", "score": 0.95},
+    )
+
+    assignment = step4._compound_child_subject_arbitration_assignment(
+        row={
+            "is_topic_bearing": True,
+            "topic_subject_he": "בדיקת מבנים מסוכנים",
+            "root_topic_id": "root_welfare_social",
+        },
+        item={
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "sem-u1",
+            "unit_raw_text": "שאילתה בנושא בדיקת מבנים מסוכנים ברחבי העיר",
+            "raw_text": "שאילתה בנושא בדיקת מבנים מסוכנים ברחבי העיר",
+            "topic_identification_context": "בדיקת מבנים מסוכנים ברחבי העיר",
+            "topic_headline_he": "בדיקת מבנים מסוכנים ברחבי העיר",
+            "row_type": "topic_item",
+        },
+    )
+
+    assert assignment is not None
+    assert assignment["root_topic_id"] == "root_planning_building"
+    assert assignment["child_label_he"] == "מבנים מסוכנים"
+    assert assignment["topic_subject_he"] == "בדיקת מבנים מסוכנים"
+
+
+def test_compound_child_arbitration_does_not_replace_clear_non_geo_subject_with_geo(monkeypatch) -> None:
+    monkeypatch.setattr(
+        step4,
+        "_best_candidate_for_subject",
+        lambda **_: {"root_topic_id": "root_geo", "child_label_he": "שכונות ואזורים", "score": 0.94},
+    )
+
+    assignment = step4._compound_child_subject_arbitration_assignment(
+        row={
+            "is_topic_bearing": True,
+            "topic_subject_he": "הסכם עם עמותה",
+            "root_topic_id": "root_agreements",
+        },
+        item={
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "sem-u1",
+            "unit_raw_text": "דיון חוזר לאישור הסכם בין עיריית אשדוד לבין עמותת משכנות שמעון בגוש 2002 חלקה 158, רובע יז",
+            "raw_text": "דיון חוזר לאישור הסכם בין עיריית אשדוד לבין עמותת משכנות שמעון בגוש 2002 חלקה 158, רובע יז",
+            "topic_identification_context": "אישור הסכם בין העירייה לבין עמותה ברובע יז",
+            "topic_headline_he": "אישור הסכם בין העירייה לבין עמותה ברובע יז",
+            "row_type": "topic_item",
+        },
+    )
+
+    assert assignment is None
+
+
+def test_v3_hint_keeps_entailed_matter_when_only_outcome_is_not_entailed() -> None:
+    hint = step4._topic_subject_v3_hint_from_row(
+        {
+            "quality_status": "accepted",
+            "row_role": "action_anchor",
+            "event_role": "primary",
+            "artifact_id": "json_900000_110_s0043_01_a10162c4edfe",
+            "model_prediction": {
+                "action_type_he": "דיון",
+                "matter_he": "אישור הסכם בין העירייה לבין עמותה",
+                "matter_display_he": "אישור הסכם עם עמותה",
+                "v3_evidence_entailment": {
+                    "entailment_status": "not_entailed",
+                    "field_assessments": {
+                        "action_type_he": {"status": "entailed", "source_quote_he": "דיון חוזר לאישור הסכם"},
+                        "matter_he": {"status": "entailed", "source_quote_he": "אישור הסכם בין העירייה לבין עמותה"},
+                        "outcome": {"status": "not_entailed"},
+                    },
+                },
+            },
+        }
+    )
+
+    assert hint is not None
+    assert hint["source_structure_unit_id"] == "s0043_01_a10162c4edfe"
+    assert hint["matter_he"] == "אישור הסכם בין העירייה לבין עמותה"
+
+
+def test_multifacet_ambiguous_subject_stays_candidate() -> None:
+    row = {
+        "packet_role": "protocol",
+        "topic_node_status": "active",
+        "is_topic_bearing": True,
+        "root_topic_id": "root_culture_sport",
+        "child_label_he": "הנחות לתושבים",
+        "topic_subject_he": "תחזוקת מתקנים, עלויות שימוש והנחות לתושבים",
+        "deterministic_topic_decision": {"reason": "ambiguous_candidates"},
+        "root_topic_candidates": [
+            {"root_topic_id": "root_culture_sport", "score": 0.82},
+            {"root_topic_id": "root_budget_finance", "score": 0.81},
+        ],
+    }
+
+    assert step4._post_assignment_candidate_review_reason(row) == "ambiguous_multifacet_topic"
+
+
+def test_root_only_geo_supported_subject_stays_candidate_without_external_verification() -> None:
+    row = {
+        "packet_role": "protocol",
+        "topic_node_status": "active",
+        "is_topic_bearing": True,
+        "root_topic_id": "root_mayor_updates",
+        "child_label_he": None,
+        "topic_subject_he": "כיכר מרכזית ודרך ראשית",
+        "root_topic_candidates": [
+            {"root_topic_id": "root_geo", "child_label_he": "כתובות ורחובות", "score": 0.91},
+        ],
+    }
+
+    assert step4._post_assignment_candidate_review_reason(row) == "unverified_geo_location"
+
+
+def test_geo_supported_subject_with_clear_non_geo_root_stays_active() -> None:
+    row = {
+        "packet_role": "protocol",
+        "topic_node_status": "active",
+        "is_topic_bearing": True,
+        "root_topic_id": "root_security_enforcement",
+        "child_label_he": None,
+        "topic_subject_he": "אלימות ופשע ברחובות העיר",
+        "root_topic_candidates": [
+            {"root_topic_id": "root_geo", "child_label_he": "כתובות ורחובות", "score": 0.91},
+        ],
+    }
+
+    assert step4._post_assignment_candidate_review_reason(row) is None
+
+
+def test_specific_lease_agreement_subject_gets_candidate_review() -> None:
+    row = {
+        "packet_role": "protocol",
+        "topic_node_status": "active",
+        "is_topic_bearing": True,
+        "root_topic_id": "root_agreements",
+        "child_label_he": "הסכמי שימוש במתקנים ציבוריים",
+        "topic_subject_he": "הסכם שכירות למתקן שידור",
+    }
+
+    assert step4._post_assignment_candidate_review_reason(row) == "specific_agreement_subject"
+
+
+def test_support_criteria_subject_matches_existing_child_alias() -> None:
+    assert step4._existing_child_label_for_subject(root_topic_id="root_supports", subject="תבחינים לתמיכות") == "תבחינים"
+
+
+def test_canonical_subject_does_not_reparent_when_full_evidence_supports_current_root() -> None:
+    item = {
+        "structure_unit_id": "u1",
+        "semantic_unit_id": "sem-u1",
+        "source_window_id": "w1",
+        "source_region_ids": [],
+        "source_block_ids": [],
+        "source_page": 1,
+        "structural_role": "outline_item",
+        "section_id": "s1",
+        "section_number": "1",
+        "skip_model_assignment": False,
+        "row_type": "topic_item",
+        "raw_text": "שאילתא בנושא העמדת לוח מודעות אלקטרוני בצומת הרחובות שדרות בגין ושדרות הרצל",
+        "topic_headline_he": "העמדת לוח מודעות אלקטרוני בצומת הרחובות שדרות בגין ושדרות הרצל",
+        "document_context": {"packet_role": "protocol"},
+    }
+
+    assignment = step4._assignment_payload(
+        item=item,
+        root_topic_id="root_transport_safety",
+        root_label=step4.root_label_for_id("root_transport_safety") or "",
+        child_label=None,
+        raw_child_label=None,
+        status="active",
+        reject_reason=None,
+        aliases=[],
+        confidence=0.8,
+        quote=item["raw_text"],
+        route="deterministic_v4_topic_arbitration:v3_event_subject",
+        rationale_he="test",
+        parsed_contract={"is_topic_bearing": True, "topic_subject_he": "העמדת לוח מודעות אלקטרוני בצומת הרחובות שדרות בגין ושדרות הרצל"},
+    )
+
+    assert assignment["root_topic_id"] == "root_transport_safety"
+    assert assignment["topic_subject_he"] == "לוח מודעות אלקטרוני"
+
+
+def test_dependent_numeric_continuation_is_non_topic_fragment() -> None:
+    row = {
+        "packet_role": "protocol",
+        "row_type": "topic_item",
+        "structural_role": "continuation",
+        "root_topic_id": "root_security_enforcement",
+        "topic_node_status": "active",
+        "is_topic_bearing": True,
+        "topic_subject_he": "סיוע משטרתי",
+        "topic_identification_context": "ומבקשים את עזרת המשטרה, שזה מספר משמעותי מאוד התחנה מטפלת ב8,",
+        "topic_supporting_quote_he": "ומבקשים את עזרת המשטרה, שזה מספר משמעותי מאוד התחנה מטפלת ב8,",
+        "topic_assignment_route": "dictalm_v4_global_tree:dicta_contextual_root:root_only:root_only",
+    }
+
+    assert step4._post_assignment_non_topic_reason(row) == "active_numeric_or_partial_evidence_fragment"
+
+
+def test_amount_only_continuation_with_beneficiary_is_non_topic_fragment() -> None:
+    row = {
+        "packet_role": "protocol",
+        "row_type": "topic_item",
+        "structural_role": "continuation",
+        "root_topic_id": "root_supports",
+        "topic_node_status": "active",
+        "is_topic_bearing": True,
+        "topic_subject_he": "יד לבנים",
+        "topic_identification_context": "₪ סכום נוסף זה יעמיד את התמיכה השנתית ליד לבנים על סך 700,000 ₪",
+        "topic_supporting_quote_he": "800 ₪ סכום נוסף זה יעמיד את התמיכה השנתית ליד לבנים על סך 700,000 ₪",
+        "topic_assignment_route": "dictalm_v4_global_tree:dicta_contextual_root:root_only:root_only",
+    }
+
+    assert step4._post_assignment_non_topic_reason(row) == "active_numeric_or_partial_evidence_fragment"
+
+
+def test_amount_clause_quote_with_beneficiary_is_non_topic_fragment() -> None:
+    row = {
+        "packet_role": "protocol",
+        "row_type": "topic_item",
+        "structural_role": "continuation",
+        "root_topic_id": "root_supports",
+        "topic_node_status": "active",
+        "is_topic_bearing": True,
+        "topic_subject_he": "עמותת יד לבנים",
+        "topic_identification_context": "₪ (סכום נוסף זה יעמיד את התמיכה השנתית ליד לבנים על סך,000 ) ₪",
+        "topic_headline_he": "₪ (סכום נוסף זה יעמיד את התמיכה השנתית ליד לבנים על סך,000 ) ₪",
+        "topic_supporting_quote_he": "\"סכום נוסף זה יעמיד את התמיכה השנתית ליד לבנים על סך,000 ₪\"",
+        "topic_assignment_route": "dictalm_v4_global_tree:dicta_contextual_root:root_only:root_only",
+    }
+
+    assert step4._post_assignment_non_topic_reason(row) == "active_numeric_or_partial_evidence_fragment"
+
+
+def test_continuation_list_heading_is_non_topic_even_with_policy_match() -> None:
+    row = {
+        "packet_role": "protocol",
+        "row_type": "topic_item",
+        "structural_role": "continuation",
+        "root_topic_id": "root_culture_sport",
+        "topic_node_status": "active",
+        "is_topic_bearing": True,
+        "topic_subject_he": "מענקי הישגיות ספורט",
+        "topic_identification_context": "המלצה למענקי הישגיות ספורט א להלן רשימת ההישגים והמענקים לאישורכם",
+        "topic_policy_matches": [{"root_topic_id": "root_culture_sport"}],
+        "topic_assignment_route": "deterministic_v4_candidate_finder:strong_policy_match:root_only",
+    }
+
+    assert step4._post_assignment_non_topic_reason(row) == "attachment_or_list_heading"
+
+
 def test_canonical_topic_label_rejects_dialogue_only() -> None:
     canonical, reason = step4.canonicalize_topic_label("יו\"ר הישיבה .זה מועצת העיר, נכון")
 
@@ -2507,6 +2952,30 @@ def test_bounded_split_lease_continuation_is_topic_item() -> None:
     assert item["deterministic_topic_decision"]["root_topic_id"] == "root_allocations"
 
 
+def test_punctuated_hendon_continuation_heading_is_topic_item() -> None:
+    tree = step4.global_topic_tree_payload(existing_tree=None, attachment_contexts=[])
+    item = step4._build_item(
+        unit={
+            "structure_unit_id": "u1",
+            "semantic_unit_id": "u1",
+            "structural_role": "continuation",
+            "raw_text": ":הנדון 'מענק עליה לשלב ב",
+        },
+        facts=[],
+        max_raw_chars=1000,
+        attachment_contexts=[],
+        document_context={"packet_role": "protocol", "topic_carrier_mode": "headline_topics"},
+        topic_context={"topic_identification_text": "", "context_source": "", "parent_agenda_unit_id": None},
+        document_child_candidates=[],
+        topic_tree=tree,
+        topic_index=step4.build_topic_profile_index(tree),
+    )
+
+    assert item["row_type"] == "topic_item"
+    assert item["topic_subject_he"] == "מענק עליה לשלב ב"
+    assert item["deterministic_topic_decision"]["root_topic_id"] == "root_culture_sport"
+
+
 def test_contextual_prefilter_only_allows_strong_policy_matches() -> None:
     item = {
         "row_type": "topic_item",
@@ -2813,6 +3282,32 @@ def test_legal_boilerplate_fragment_is_not_topic() -> None:
         structural_role="outline_item",
         packet_role="protocol",
     ) == "legal_boilerplate_fragment"
+
+
+def test_dependent_legal_clause_fragment_is_not_topic() -> None:
+    assert step4._post_assignment_non_topic_reason(
+        {
+            "packet_role": "protocol",
+            "topic_node_status": "active",
+            "is_topic_bearing": True,
+            "root_topic_id": "root_planning_building",
+            "topic_subject_he": "מתאימה בהכנת תוכנית ואישורה או בדרך חוקית אחרת",
+            "topic_headline_he": "מתאימה בהכנת תוכנית ואישורה או בדרך חוקית אחרת",
+            "topic_identification_context": "מתאימה בהכנת תוכנית ואישורה או בדרך חוקית אחרת",
+        }
+    ) == "active_dependent_legal_clause_fragment"
+
+
+def test_legal_section_reference_fragment_is_not_extracted_as_heading() -> None:
+    raw_text = "סעיף198 א בוצעו. יש חוות דעת של הוועדה המקצועית שמצביעה על תועלת כלכלית בבנייה"
+
+    assert step4._extract_heading_from_text(raw_text) == ""
+    assert step4._non_topic_protocol_reason(
+        headline=raw_text,
+        raw_text=raw_text,
+        structural_role="outline_item",
+        packet_role="protocol",
+    ) == "legal_section_reference_fragment"
 
 
 def test_transcript_thank_you_fragment_is_not_topic() -> None:
@@ -3470,6 +3965,24 @@ def test_cleaned_continuation_without_source_is_not_topic() -> None:
     ) == "missing_topic_headline_provenance"
 
 
+def test_short_split_agenda_title_with_bounded_raw_signal_keeps_provenance() -> None:
+    raw_text = "22 ) - .מצ\"ל 11 \".\"פרס חינוך עירוני שנתי לחינוך פורץ דרך באשדוד- דיון עפ\"י בקשת עו\"ד טובול- ( 29.5."
+    unit = {
+        "structural_role": "continuation",
+        "raw_text": raw_text,
+        "structure_evidence": {"split_reason": "multiple_structural_starts"},
+    }
+
+    assert step4._protocol_topic_provenance_reject_reason(
+        unit=unit,
+        headline="",
+        raw_text=raw_text,
+        topic_context_source="",
+        headline_source="none",
+        packet_role="protocol",
+    ) is None
+
+
 def test_committee_protocol_carrier_is_not_standalone_topic() -> None:
     assert step4._looks_like_procedural_carrier_heading("פרוטוקול הוועדה המקצועית מספר") is True
     assert step4._non_topic_protocol_reason(headline="פרוטוקול הוועדה המקצועית מספר", raw_text="פרוטוקול הוועדה המקצועית מספר", structural_role="outline_item", packet_role="protocol") == "procedural_carrier_heading"
@@ -3704,6 +4217,12 @@ def test_canonical_subjects_align_to_non_procedural_roots() -> None:
     assert step4.infer_root_topic_id("טיפול בדרי רחוב") == "root_welfare_social"
     assert step4.infer_root_topic_id("הנחת מבנה יביל") == "root_planning_building"
     assert step4.infer_root_topic_id("בניית מבני ציבור ומתנ\"סים") == "root_planning_building"
+    assert step4.infer_root_topic_id("מתנ\"ס רובע ט\"ו") == "root_planning_building"
+    assert step4.infer_root_topic_id("כיתות אזרחים ותיקים") == "root_education"
+    assert step4.infer_root_topic_id("פרס חינוך") == "root_education"
+    assert step4.infer_root_topic_id("מענקי ספורט") == "root_supports"
+    assert step4.infer_root_topic_id("שיפוץ חוף") == "root_planning_building"
+    assert step4.infer_root_topic_id("לוח מודעות אלקטרוני בצומת הרחובות שדרות בגין ושדרות הרצל") == "root_transport_safety"
     assert step4.infer_root_topic_id("ציוד מגן אישי לעובדים") == "root_hr_labor"
     assert step4.infer_root_topic_id("החזר תשלומי הורים") == "root_education"
     assert step4.infer_root_topic_id("הטבות בעקבות ירידה במדד חברתי-כלכלי") == "root_budget_finance"
@@ -3719,6 +4238,28 @@ def test_canonical_subjects_align_to_non_procedural_roots() -> None:
     assert step4.infer_root_topic_id("שימוע למהנדס העיר") == "root_administration"
     assert step4.infer_root_topic_id("אלרגיות ואפיפן במרחב הציבורי") == "root_security_enforcement"
     assert step4.infer_root_topic_id("הקמת פסל ציבורי") == "root_culture_sport"
+
+
+def test_contextual_service_domain_corrects_beneficiary_root_for_school_classes() -> None:
+    override = step4._contextual_validation_root_override(
+        item={"topic_headline_he": "ייסוד והקמת כיתות אזרחים וותיקים בביה\"ס התיכוניים"},
+        parsed={
+            "is_topic_bearing": True,
+            "root_topic_id": "root_welfare_social",
+            "topic_subject_he": "אזרחים ותיקים",
+            "clean_subject_he": "אזרחים ותיקים",
+            "primary_action_he": "הקמת כיתות אזרחים ותיקים",
+            "service_domain_he": "חינוך",
+        },
+        normalized_event={
+            "primary_action_he": "הקמת כיתות אזרחים ותיקים",
+            "clean_subject_he": "כיתות אזרחים ותיקים",
+            "service_domain_he": "חינוך",
+            "event_summary_he": "דיון בהקמת כיתות אזרחים ותיקים בבתי ספר תיכוניים",
+        },
+    )
+
+    assert override == "root_education"
 
 
 def test_child_only_judge_applies_same_root_existing_child() -> None:
@@ -3796,6 +4337,34 @@ def test_topic_subject_v3_hint_requires_accepted_entailed_primary_anchor() -> No
     keys = step4._topic_subject_v3_hint_keys(row=row)
     assert keys[:2] == ["unit:s0009_01_5f79c9055981", "ordinal:49"]
     assert keys[2].startswith("raw:")
+
+
+def test_topic_subject_v3_hint_accepts_nested_model_prediction_without_entailment() -> None:
+    row = {
+        "artifact_id": "json_900000_222_vh006_07_01_966a6a09f777",
+        "quality_status": "accepted",
+        "row_role": "action_anchor",
+        "event_role": "primary",
+        "source_ordinal": 222,
+        "raw_text_he": "המתנ\"ס. שתושבי רובע ט\"ו מחכים לו כל כך הרבה שנים",
+        "subject_metadata": {
+            "matter_he": "המתנ\"ס שתושבי רובע ט\"ו מחכים לו כל כך הרבה שנים",
+            "matter_display_he": "מתנ\"ס לרובע ט\"ו",
+        },
+        "event_metadata": {"action_type_he": "מענה לשאילתה"},
+        "model_prediction": {
+            "matter_he": "המתנ\"ס שתושבי רובע ט\"ו מחכים לו כל כך הרבה שנים",
+            "matter_display_he": "מתנ\"ס לרובע ט\"ו",
+            "action_type_he": "מענה לשאילתה",
+        },
+    }
+
+    hint = step4._topic_subject_v3_hint_from_row(row)
+
+    assert hint is not None
+    assert hint["source_structure_unit_id"] == "vh006_07_01_966a6a09f777"
+    assert hint["matter_he"] == "המתנ\"ס שתושבי רובע ט\"ו מחכים לו כל כך הרבה שנים"
+    assert hint["matter_display_he"] == "מתנ\"ס לרובע ט\"ו"
 
 
 def test_topic_subject_v3_hint_matches_unit_id_without_root_overwrite() -> None:

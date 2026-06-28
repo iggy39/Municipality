@@ -44,6 +44,7 @@ def canonicalize_topic_label(value: str | None, *, root_label_he: str | None = N
     combined_norm = normalize_for_search(" ".join(part for part in [raw, evidence] if part))
     root_norm = normalize_for_search(root_label_he or "")
     label = _basic_label_cleanup(raw)
+    label = _repair_ocr_truncated_tail(label=label, evidence=evidence)
     label_norm = normalize_for_search(label)
 
     mapped = _semantic_canonical_label(label=label, label_norm=label_norm, combined_norm=combined_norm, root_norm=root_norm)
@@ -52,6 +53,7 @@ def canonicalize_topic_label(value: str | None, *, root_label_he: str | None = N
 
     label = _trim_contextual_tail(label)
     label = _basic_label_cleanup(label)
+    label = _repair_ocr_truncated_tail(label=label, evidence=evidence)
     label_norm = normalize_for_search(label)
     mapped = _semantic_canonical_label(label=label, label_norm=label_norm, combined_norm=normalize_for_search(" ".join([label, evidence])), root_norm=root_norm)
     if mapped:
@@ -74,6 +76,7 @@ def _basic_label_cleanup(value: str) -> str:
     label = re.sub(r"\bבנו\s+['\"׳״]?שא['\"׳״]?\b", "בנושא", label)
     label = re.sub(r"\bו\s+עדת\b", "ועדת", label)
     label = re.sub(r"\bה\s+חלטה\b", "החלטה", label)
+    label = re.sub(r"\bעירו\s+נית\b", "עירונית", label)
     label = strip_topic_carrier_prefixes(label)
     label = re.sub(r"^(?:שאילת[אה]|שאילתה)\s+של\b.{0,120}?\s+בנושא\s+", "", label).strip()
     label = re.sub(r"^(?:שאילת[אה]|שאילתה)\s+בנושא\s+", "", label).strip()
@@ -100,6 +103,8 @@ def _basic_label_cleanup(value: str) -> str:
     label = re.sub(r"\bהישגי\s+ות\b", "הישגיות", label)
     label = re.sub(r"\s*/\s*['\"׳״]?\s*", " ", label)
     label = re.sub(r"\s*,\s*", ", ", label)
+    if sum(label.count(mark) for mark in ('"', "״", "“", "”")) % 2 == 1:
+        label = re.sub(r"(?<=[\s,;:])['\"׳״“”](?=ו?[\u0590-\u05FF])", "", label)
     label = re.sub(r"\s+", " ", label).strip(" *•'\"׳״[]{}() -–:.,")
     if label.count("(") != label.count(")"):
         label = label.replace("(", " ").replace(")", " ")
@@ -108,9 +113,66 @@ def _basic_label_cleanup(value: str) -> str:
     return label[:220]
 
 
+def _commercial_center_renovation_label(text: str) -> str | None:
+    if "שיפוץ מרכז מסחרי" not in text:
+        return None
+    return "שיפוץ מרכז מסחרי"
+
+
+def _semantic_essence_from_detail_tail(label: str) -> str | None:
+    """Keep the reusable activity/topic and leave facets such as cost as evidence."""
+
+    compact = compact_topic_label(label)
+    parts = [compact_topic_label(part) for part in re.split(r"[,;]", compact, maxsplit=1) if compact_topic_label(part)]
+    if len(parts) < 2:
+        return None
+    first, tail = parts[0], parts[1]
+    first_norm = normalize_for_search(first)
+    tail_norm = normalize_for_search(tail)
+    if not first_norm or not tail_norm:
+        return None
+    detail_terms = (
+        "עלות",
+        "עלויות",
+        "תעריף",
+        "תעריפים",
+        "אגרה",
+        "אגרות",
+        "הנחה",
+        "הנחות",
+        "זכאים",
+        "מנוי",
+        "מנויים",
+        "תשלום",
+        "תשלומים",
+        "תקציב",
+    )
+    if first_norm.startswith("פעילות ") and any(term in tail_norm for term in detail_terms):
+        return first
+    return None
+
+
+def _repair_ocr_truncated_tail(*, label: str, evidence: str) -> str:
+    compact = compact_topic_label(label)
+    compact_evidence = compact_topic_label(evidence)
+    if not compact or not compact_evidence or len(topic_quality_tokens(compact)) < 3:
+        return compact
+    label_pattern = re.escape(compact).replace(r"\ ", r"\s+")
+    match = re.search(rf"{label_pattern}\s*\d{{1,3}}\s*['\"׳״“”]?\s*([\u0590-\u05FF]{{2,}})\b", compact_evidence)
+    if not match:
+        return compact
+    tail = match.group(1)
+    if tail in {"של", "את", "עם", "על", "אל", "או"}:
+        return compact
+    return compact_topic_label(f"{compact} {tail}")
+
+
 def _semantic_canonical_label(*, label: str, label_norm: str, combined_norm: str, root_norm: str) -> str | None:
     text = label_norm
     full_text = combined_norm or label_norm
+    detail_essence = _semantic_essence_from_detail_tail(label)
+    if detail_essence:
+        return detail_essence
     if "זכויות אויר" in text:
         return "זכויות אוויר"
     if "זכויות אוויר" in text:
@@ -121,6 +183,12 @@ def _semantic_canonical_label(*, label: str, label_norm: str, combined_norm: str
         return "פרסום מכירת דירות"
     if any(term in full_text for term in ["מקדמה", "מקדמות"]) and any(term in full_text for term in ["עמותה", "עמותות", "מוסד"]) and "נוהל תמיכות" not in full_text:
         return "מקדמות תמיכה לעמותות"
+    if "הסכם הגג" in full_text:
+        return "הסכם הגג"
+    if "ארנונה" in text and ("תת סיווג" in text or ("תת" in text and "סיווג" in text)) and any(term in text for term in ["הוספת", "להוסיף"]):
+        if "צו הארנונה" in text:
+            return "הוספת תת סיווג בצו הארנונה"
+        return "הוספת תת סיווג ארנונה"
     if "ארנונה" in text:
         tax_label = _term_centered_topic_label(label, anchor="ארנונה", before=3, after=4)
         if tax_label:
@@ -145,8 +213,16 @@ def _semantic_canonical_label(*, label: str, label_norm: str, combined_norm: str
         return "בדיקת מבנים מסוכנים"
     if any(term in text for term in ["אלימות", "פשע", "פשיעה"]) and "רחובות העיר" in text:
         return "אלימות ופשע ברחובות העיר"
-    if "שיפוץ מרכז מסחרי" in text:
-        return "שיפוץ מרכז מסחרי ועדכון תבחינים" if any(term in text for term in ["תבחין", "תבחינים", "קריטריונים"]) else "שיפוץ מרכז מסחרי"
+    commercial_center_label = _commercial_center_renovation_label(text)
+    if commercial_center_label:
+        return commercial_center_label
+    sport_terms = ["ספורט", "כדורסל", "כדורגל", "כדוריד", "אליפות", "גביע", "ליגה", "קבוצת ספורט"]
+    if "מענקי" in full_text and any(term in full_text for term in ["הישגיות", "הישגי"]) and "ספורט" in full_text:
+        return "מענקי הישגיות ספורט"
+    if any(term in full_text for term in ["מענק", "מענקי", "מענקים", "תמיכה", "תמיכות"]) and any(term in full_text for term in sport_terms):
+        return "מענקי ספורט"
+    if any(term in text for term in ["תבחין", "תבחינים", "קריטריון", "קריטריונים"]) and "תמיכות" in root_norm:
+        return "תבחינים לתמיכות"
     if any(term in text for term in ["מענק עליה לשלב", "מענק עלייה לשלב"]):
         return "מענק עליה לשלב ב" if "שלב ב" in text else "מענק עליה לשלב"
     if "קבוצת כדורסל" in text and "מענק" in text:
@@ -173,14 +249,14 @@ def _semantic_canonical_label(*, label: str, label_norm: str, combined_norm: str
         return "טיפול באגם המרינה"
     if any(term in text for term in ["חוף", "חופי", "חופים"]) and "פעילות" in text:
         return "פעילות בחופים"
+    if "שיפוץ" in full_text and any(term in full_text for term in ["חוף", "חופי", "חופים"]):
+        return "שיפוץ חוף"
     if "זיהום" in text and "שפכים" in text and any(term in text for term in ["ים", "חוף", "חופי"]):
         return "זיהום ים משפכים"
     if "רעידת אדמה" in text:
         return "מוכנות לרעידת אדמה ומערכת התראה" if "מערכת התראה" in full_text else "מוכנות לרעידת אדמה"
     if "שדרוג תבחינים" in full_text and "שיפוץ חזיתות" in full_text:
         return "תבחינים לשיפוץ חזיתות"
-    if "מענקי" in full_text and any(term in full_text for term in ["הישגיות", "הישגי"]) and "ספורט" in full_text:
-        return "מענקי הישגיות ספורט"
     if "ציוד מגן אישי" in full_text and any(term in full_text for term in ["עובד", "עובדים", "עובדי"]):
         return "ציוד מגן אישי לעובדים"
     if any(term in text for term in ["מקור לכיסוי", "כיסוי גרעון", "כיסוי גירעון", "גרעון", "גירעון"]) and any(term in text for term in ["תחבורה ציבורית", "פרויקט התחבורה"]):
@@ -251,6 +327,8 @@ def _semantic_canonical_label(*, label: str, label_norm: str, combined_norm: str
             return "הקצאה לפעילות רב תכליתית"
         if "בית כנסת" in text:
             if "מרכז רוחני" in text:
+                if "ביטול" in text and "ועדת הקצאות" in text:
+                    return "ביטול החלטת ועדת הקצאות עבור בית כנסת ומרכז רוחני"
                 return "הקצאה לבית כנסת ומרכז רוחני"
             return "הקצאת מקרקעין לבית כנסת"
         if any(term in text for term in ["עמותה", "עמותת", "עמותות"]):
@@ -299,12 +377,14 @@ def _semantic_canonical_label(*, label: str, label_norm: str, combined_norm: str
         return "ועדות אפיון וזכאות"
     if any(term in text for term in ["השקעה בחינוך", "השקעה נמוכה בחינוך", "ההשקעה הנמוכה בחינוך"]):
         return "השקעה בחינוך"
+    if "כיתות" in full_text and any(term in full_text for term in ["אזרחים ותיקים", "אזרחים וותיקים"]):
+        return "כיתות אזרחים ותיקים"
     if any(term in text for term in ["מעבר בית הספר", "מעבר בית ספר"]):
         return "מעבר בית ספר"
     if "פרוטוקול חינוך" in full_text or re.search(r"\bחינוך\s+מס\b", text):
         return "ועדת חינוך"
-    if "פרס חינוך עירוני" in text:
-        return "פרס חינוך עירוני"
+    if "פרס חינוך" in full_text:
+        return "פרס חינוך"
     if any(term in text for term in ["אמנות מקומית", "אומנות מקומית", "אמנים מקומיים", "אומנים מקומיים"]):
         return "אמנות מקומית"
     if any(term in text for term in ["בני נוער", "נוער", "צעירים"]) and any(term in text for term in ["קבוצת", "מועדון", "קבוצת ספורט", "קבוצת כדורגל", "עירוני"]) and any(term in text for term in ["חלופה", "סגירת", "סגירה"]):
@@ -316,7 +396,10 @@ def _semantic_canonical_label(*, label: str, label_norm: str, combined_norm: str
     if "פרס התיאטרון" in text:
         return "פרסים עירוניים"
     if "סקירה שנתית" in text and "מפקד תחנת" in text:
-        return "סקירה שנתית של מפקד תחנת משטרה"
+        station_match = re.search(r"סקירה\s+שנתית\s+של\s+מפקד\s+תחנת\s+(.+)", label)
+        station_tail = station_match.group(1).strip(" .,:;()[]{}\"'׳״-–0123456789") if station_match else ""
+        station = re.split(r"\s+(?:סנ[\"׳״']?צ|סנצ|רפ[\"׳״']?ק|רפ\s+ק|ניצב|פקד|רב\s+פקד)\b|\d+", station_tail, maxsplit=1)[0].strip(" .,:;()[]{}\"'׳״-–")
+        return f"סקירה שנתית של מפקד תחנת {station}" if station else "סקירה שנתית של מפקד תחנת משטרה"
     if "ועדת רווחה" in text:
         return "ועדת רווחה"
     if "ועדת מלגות" in text:
@@ -563,7 +646,7 @@ def _procedural_or_dialogue_only(label: str, *, root_norm: str) -> bool:
         return True
     if normalized.startswith(("שהתקבלו", "שנתקבלו")) and "פרוטוקול" in normalized:
         return True
-    if normalized in {"דברי ראש העיר", "דבר ראש העיר", "דברי ראש העירייה", "דבר ראש העירייה"}:
+    if normalized in {"דברי ראש העיר", "דבר ראש העיר", "דברי ראש העירייה", "דבר ראש העירייה", "עדכוני ראש העיר", "עדכון ראש העיר"}:
         return True
     if normalized in {"הצעה לסדר", "שאילתה", "שאילתא", "אישור", "פרוטוקול", "דיון", "החלטה", "ועדה מקצועית", "הוועדה המקצועית"}:
         return True
