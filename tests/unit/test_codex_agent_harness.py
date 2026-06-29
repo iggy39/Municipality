@@ -38,11 +38,23 @@ def test_quality_report_includes_raw_text_and_filters_successful_rows() -> None:
     report = format_quality_report(
         [
             {"id": "ok", "raw_text": "raw success text", "prediction": "A", "expected": "A", "succeeded": True, "confidence": 0.95},
-            {"id": "bad", "raw_text": "full raw failing text", "prediction": "A", "expected": "B", "succeeded": False, "reason": "wrong label"},
+            {
+                "id": "bad",
+                "raw_text": "full raw failing text",
+                "prediction": {"structure_role": "decision", "root_label_he": "תחבורה", "child_label_he": "בטיחות", "topic_assignment_route": "model"},
+                "assistant_judgement": "root should be education",
+                "final_artifact_metadata": {"artifact_id": "a1", "retrieval_rank": 2},
+                "succeeded": False,
+                "reason": "wrong label",
+            },
         ]
     )
 
     assert "full raw failing text" in report
+    assert "structure_role" in report
+    assert "root should be education" in report
+    assert "artifact_id" in report
+    assert "assistant disagrees with the pipeline" in report
     assert "wrong label" in report
     assert "raw success text" not in report
 

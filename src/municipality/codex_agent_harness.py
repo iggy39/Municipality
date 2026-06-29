@@ -32,8 +32,12 @@ class HarnessExample:
     municipality: str = ""
     document_type: str = ""
     edge_cases: tuple[str, ...] = ()
+    pipeline_predictions: str = ""
     model_prediction: str = ""
     ground_truth: str = ""
+    assistant_judgement: str = ""
+    agreement: str = ""
+    artifact_metadata: str = ""
     reason: str = ""
     confidence: float | None = None
     succeeded: bool | None = None
@@ -93,17 +97,19 @@ def format_quality_report(rows: Iterable[Mapping[str, Any] | HarnessExample], *,
     examples = [_to_example(row) for row in rows]
     problematic = [example for example in examples if _is_problematic(example)]
     visible = problematic[: max(0, int(max_rows))]
-    header = "| Full source/text | Model prediction | Ground truth | Reason for failure or uncertainty |"
-    separator = "|---|---|---|---|"
+    header = "| Full source/text | Pipeline/model predictions | Assistant judgement | Agreement and why | Final artifact metadata | Reason for failure or uncertainty |"
+    separator = "|---|---|---|---|---|---|"
     if not visible:
-        return "\n".join([header, separator, "| No problematic or low-confidence predictions found. |  |  |  |"])
+        return "\n".join([header, separator, "| No problematic or low-confidence predictions found. |  |  |  |  |  |"])
     lines = [header, separator]
     for example in visible:
         lines.append(
-            "| {source} | {prediction} | {truth} | {reason} |".format(
+            "| {source} | {prediction} | {judgement} | {agreement} | {metadata} | {reason} |".format(
                 source=_table_cell(example.raw_text),
-                prediction=_table_cell(example.model_prediction),
-                truth=_table_cell(example.ground_truth),
+                prediction=_table_cell(example.pipeline_predictions or example.model_prediction),
+                judgement=_table_cell(example.assistant_judgement or example.ground_truth),
+                agreement=_table_cell(example.agreement or _agreement_reason(example)),
+                metadata=_table_cell(example.artifact_metadata),
                 reason=_table_cell(example.reason or _default_reason(example)),
             )
         )
@@ -209,8 +215,12 @@ def _to_example(value: Mapping[str, Any] | HarnessExample) -> HarnessExample:
         municipality=str(value.get("municipality") or value.get("city") or ""),
         document_type=str(value.get("document_type") or value.get("source_type") or ""),
         edge_cases=tuple(str(item) for item in edge_cases),
-        model_prediction=str(value.get("model_prediction") or value.get("prediction") or ""),
-        ground_truth=str(value.get("ground_truth") or value.get("expected") or ""),
+        pipeline_predictions=_stringify_value(value.get("pipeline_predictions") or value.get("pipeline_prediction") or _pipeline_prediction_summary(value)),
+        model_prediction=_stringify_value(value.get("model_prediction") or value.get("prediction") or ""),
+        ground_truth=_stringify_value(value.get("ground_truth") or value.get("expected") or ""),
+        assistant_judgement=_stringify_value(value.get("assistant_judgement") or value.get("human_judge_prediction") or ""),
+        agreement=str(value.get("agreement") or value.get("judge_agreement") or ""),
+        artifact_metadata=_stringify_value(value.get("artifact_metadata") or value.get("final_artifact_metadata") or value.get("retrieval_artifact_metadata") or ""),
         reason=str(value.get("reason") or value.get("failure_reason") or value.get("judge_notes") or ""),
         confidence=_float_or_none(value.get("confidence")),
         succeeded=_bool_or_none(value.get("succeeded", value.get("success"))),
@@ -249,9 +259,43 @@ def _default_reason(example: HarnessExample) -> str:
     return "uncertain"
 
 
+def _agreement_reason(example: HarnessExample) -> str:
+    if example.succeeded is True:
+        return "assistant agrees with the pipeline"
+    if example.succeeded is False:
+        return "assistant disagrees with the pipeline"
+    return "not judged"
+
+
 def _table_cell(value: Any) -> str:
     text = " ".join(str(value or "").split())
     return text.replace("|", "\\|")
+
+
+def _stringify_value(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        if not value:
+            return ""
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
+def _pipeline_prediction_summary(row: Mapping[str, Any]) -> dict[str, Any]:
+    prediction = row.get("prediction") if isinstance(row.get("prediction"), Mapping) else {}
+    fields = {
+        "model_prediction": row.get("model_prediction") or prediction.get("model_prediction"),
+        "structure_role": row.get("structure_role") or row.get("role") or prediction.get("structure_role") or prediction.get("role"),
+        "topic": row.get("topic") or prediction.get("topic"),
+        "root": row.get("root") or row.get("root_topic") or row.get("root_label_he") or prediction.get("root") or prediction.get("root_topic_id") or prediction.get("root_label_he"),
+        "child": row.get("child") or row.get("child_topic") or row.get("child_label_he") or prediction.get("child") or prediction.get("child_label_he"),
+        "subject": row.get("subject") or row.get("topic_subject_he") or prediction.get("subject") or prediction.get("topic_subject_he"),
+        "route": row.get("route") or row.get("topic_assignment_route") or prediction.get("route") or prediction.get("topic_assignment_route"),
+        "confidence": row.get("confidence") or prediction.get("confidence"),
+        "validation": row.get("validation_result") or row.get("audit_result") or prediction.get("validation_result") or prediction.get("audit_result"),
+    }
+    return {key: value for key, value in fields.items() if value not in (None, "")}
 
 
 def _path_classification(path: str, category: str, safe_to_commit: bool, reason: str) -> dict[str, Any]:

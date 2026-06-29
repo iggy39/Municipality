@@ -44,3 +44,7 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 - For non-trivial implementation, verification, or commit work, use the Codex agent harness at `scripts/codex_agent_harness.py` to enforce representative testing, sequential example validation, raw-text quality reports, UI verification, server checks, prediction summaries, and commit safety.
 - Act as a judge: run or demonstrate the feature with representative input and print concise input/output evidence to the console.
 - Keep verification output concise unless debugging requires more detail.
+
+## End-of-Run Quality Reports
+- After ingestion, import, extraction, classification, retrieval, or evaluation runs, print a concise quality report with raw source text for every warning, failure, representative sample, and judged row.
+- For judged rows, include pipeline/model predictions, assistant judgement, agreement or disagreement reason, and relevant final artifact metadata.
