@@ -3567,30 +3567,40 @@ def _resolve_geo_fallback(*, subject: str, municipality: str | None, enable_govm
 
 
 def _google_maps_geo_resolution(*, subject: str, municipality: str | None) -> dict[str, Any] | None:
-    query = _google_maps_geo_query(subject=subject, municipality=municipality)
-    if not query:
+    queries = _google_maps_geo_queries(subject=subject, municipality=municipality)
+    if not queries:
         return None
+    places: list[dict[str, Any]] = []
+    errors: list[str] = []
     try:
         from municipality.google_maps_client import GoogleMapsClient  # noqa: PLC0415
 
-        payload = GoogleMapsClient(timeout_seconds=6.0).search_text(query, max_results=5)
+        client = GoogleMapsClient(timeout_seconds=6.0)
+        for query in queries:
+            payload = client.search_text(query, max_results=5)
+            if payload.get("error"):
+                errors.append(str(payload.get("error")))
+                continue
+            for place in payload.get("places") or []:
+                if isinstance(place, dict):
+                    places.append({**place, "_google_maps_query": query, "_google_maps_result_count": len(payload.get("places") or [])})
     except Exception as exc:  # noqa: BLE001 - Google Maps is optional external verification.
-        return {"source": "google_maps_places", "confidence": "none", "status": "error", "query": query, "error": f"{exc.__class__.__name__}:{exc}"}
-    if payload.get("error"):
-        return {"source": "google_maps_places", "confidence": "none", "status": "error", "query": query, "error": str(payload.get("error"))}
-    places = [row for row in payload.get("places") or [] if isinstance(row, dict)]
+        return {"source": "google_maps_places", "confidence": "none", "status": "error", "query": queries[0], "queries": queries, "error": f"{exc.__class__.__name__}:{exc}"}
+    if errors and not places:
+        return {"source": "google_maps_places", "confidence": "none", "status": "error", "query": queries[0], "queries": queries, "error": "; ".join(errors[:3])}
     result = _best_google_maps_place(places=places, subject=subject, municipality=municipality)
     if not result:
-        return {"source": "google_maps_places", "confidence": "none", "status": "no_match", "query": query, "result_count": len(places)}
+        return {"source": "google_maps_places", "confidence": "none", "status": "no_match", "query": queries[0], "queries": queries, "result_count": len(places)}
     place = result["place"]
     location = place.get("location") if isinstance(place.get("location"), dict) else {}
-    confidence = "high" if result["score"] >= 24 and location else "medium"
+    confidence = "high" if result["score"] >= 24 and location and result.get("required_place_match") is not False else "medium"
     return {
         "source": "google_maps_places",
         "confidence": confidence,
         "status": "matched",
-        "query": query,
-        "result_count": len(places),
+        "query": str(place.get("_google_maps_query") or queries[0]),
+        "queries": queries,
+        "result_count": int(place.get("_google_maps_result_count") or len(places)),
         "place_id": place.get("id"),
         "display_name": _google_maps_place_display_name(place),
         "formatted_address": _compact(place.get("formattedAddress")),
@@ -3601,18 +3611,31 @@ def _google_maps_geo_resolution(*, subject: str, municipality: str | None) -> di
         "google_maps_uri": place.get("googleMapsUri"),
         "municipality_match": result.get("municipality_match"),
         "token_overlap": result.get("token_overlap") or [],
+        "distinctive_place_match": result.get("distinctive_place_match"),
+        "place_type_match": result.get("place_type_match"),
     }
 
 
-def _google_maps_geo_query(*, subject: str, municipality: str | None) -> str:
+def _google_maps_geo_queries(*, subject: str, municipality: str | None) -> list[str]:
     clean_subject = _compact(subject)
     clean_subject = re.sub(r"\bבעיר\b", " ", clean_subject)
+    clean_subject = re.sub(r"(^|\s)ו(דרך|רחוב|שדרות|שדרה)(?=\s|$)", r"\1\2", clean_subject)
     clean_subject = re.sub(r"\bסעיף\b.*$", "", clean_subject).strip(" '()[]-–:.,")
-    return _compact(" ".join(part for part in [clean_subject, municipality, "ישראל"] if part))
+    requirements = _google_maps_place_marker_requirements(subject)
+    queries: list[str] = []
+    marker = str(requirements.get("marker") or "")
+    distinctive_tokens = [str(token) for token in requirements.get("distinctive_tokens") or [] if str(token).strip()]
+    if marker and distinctive_tokens:
+        queries.append(_compact(" ".join(part for part in [marker, " ".join(distinctive_tokens), municipality, "ישראל"] if part)))
+    queries.append(_compact(" ".join(part for part in [clean_subject, municipality, "ישראל"] if part)))
+    return _dedupe_strings([query for query in queries if query])
 
 
 def _best_google_maps_place(*, places: list[dict[str, Any]], subject: str, municipality: str | None) -> dict[str, Any] | None:
     subject_tokens = {token for token in _hebrew_tokens(_norm(subject)) if len(token) >= 3}
+    requirements = _google_maps_place_marker_requirements(subject)
+    required_tokens = set(requirements.get("distinctive_tokens") or [])
+    required_marker = str(requirements.get("marker") or "")
     scored: list[dict[str, Any]] = []
     for place in places:
         label = _norm(_join_unique([_google_maps_place_display_name(place), place.get("formattedAddress")]))
@@ -3625,13 +3648,30 @@ def _best_google_maps_place(*, places: list[dict[str, Any]], subject: str, munic
         municipality_match = _google_maps_municipality_matches(label=label, municipality=municipality)
         location = place.get("location") if isinstance(place.get("location"), dict) else {}
         types = {str(value).lower() for value in place.get("types") or []}
-        type_bonus = 4 if types & {"intersection", "route", "street_address", "premise", "point_of_interest", "establishment"} else 0
+        place_type_match = (required_marker == "כיכר" and ("כיכר" in label or "town_square" in types)) or (required_marker == "צומת" and ("צומת" in label or "intersection" in types))
+        distinctive_place_match = bool(required_tokens & label_tokens)
+        if required_tokens and not distinctive_place_match and not place_type_match:
+            continue
+        type_bonus = 4 if types & {"intersection", "town_square", "route", "street_address", "premise", "point_of_interest", "establishment"} else 0
         score = len(overlap_tokens) * 10 + (6 if municipality_match is True else 0) + (2 if location else 0) + type_bonus
-        scored.append({"score": score, "place": place, "municipality_match": municipality_match, "token_overlap": overlap_tokens})
+        scored.append({"score": score, "place": place, "municipality_match": municipality_match, "token_overlap": overlap_tokens, "required_place_match": (distinctive_place_match or place_type_match) if required_tokens else None, "distinctive_place_match": distinctive_place_match if required_tokens else None, "place_type_match": place_type_match if required_marker else None})
     if not scored:
         return None
     scored.sort(key=lambda row: float(row.get("score") or 0.0), reverse=True)
     return scored[0]
+
+
+def _google_maps_place_marker_requirements(subject: str) -> dict[str, Any]:
+    normalized = _norm(subject)
+    match = re.search(r"(?:^|\s)(כיכר|צומת)\s+(.{2,120})", normalized)
+    if not match:
+        return {}
+    marker = match.group(1)
+    tail = match.group(2)
+    tail = re.split(r"\s+(?:בעיר|ביישוב|דרך|ודרך|רחוב|ורחוב|רחובות|הרחובות|שדרות|ושדרות|שדרה|ושדרה|פינת|ופינת|ליד|מול|סמוך|באזור)\b", tail, maxsplit=1)[0]
+    generic_tokens = {"כיכר", "צומת", "רחוב", "רחובות", "הרחובות", "דרך", "שדרות", "שדרה", "בעיר", "ביישוב"}
+    tokens = [token for token in _hebrew_tokens(tail) if token not in generic_tokens and len(token) >= 3]
+    return {"marker": marker, "distinctive_tokens": tokens[:3]}
 
 
 def _google_maps_place_display_name(place: dict[str, Any]) -> str:
@@ -3649,7 +3689,7 @@ def _google_maps_municipality_matches(*, label: str, municipality: str | None) -
 def _geo_child_label_for_google_maps_place(*, place: dict[str, Any], subject: str) -> str:
     label = _norm(_join_unique([subject, _google_maps_place_display_name(place), place.get("formattedAddress")]))
     types = {str(value).lower() for value in place.get("types") or []}
-    if "כיכר" in label or "צומת" in label or "intersection" in types:
+    if "כיכר" in label or "צומת" in label or types & {"intersection", "town_square"}:
         return "כיכרות וצמתים"
     if types & {"route", "street_address", "premise", "subpremise"}:
         return "כתובות ורחובות"
@@ -3758,9 +3798,13 @@ def _resolve_people_role_fallback(subject: str) -> dict[str, Any] | None:
 
 
 def _geo_resolution_confirms_topic(*, geo: dict[str, Any], item: dict[str, Any]) -> bool:
-    if str(geo.get("source") or "") == "govmap_search" and str(geo.get("confidence") or "") == "high":
+    if _geo_resolution_is_backend_confirmed(geo):
         return True
     return str(geo.get("source") or "") == "local_geo_pattern" and _has_confirming_v3_action_hint(item=item)
+
+
+def _geo_resolution_is_backend_confirmed(geo: dict[str, Any]) -> bool:
+    return str(geo.get("source") or "") in {"govmap_search", "google_maps_places"} and str(geo.get("confidence") or "") == "high"
 
 
 def _v3_structured_fallback_assignment(*, row: dict[str, Any], item: dict[str, Any]) -> dict[str, Any] | None:
@@ -4295,7 +4339,7 @@ def _assignment_from_topic_proposal(*, row: dict[str, Any], item: dict[str, Any]
             source = "classifier_candidate_span:clean_carrier_subject"
     child_label = clean_topic_label(proposal.get("child_label_he")) if proposal.get("child_label_he") else _existing_child_label_for_subject(root_topic_id=root_topic_id, subject=subject)
     status = _arbitrated_topic_status(row=row, item=item, subject=subject, child_label=child_label, root_topic_id=root_topic_id)
-    if proposal.get("geo_resolution") and str((proposal.get("geo_resolution") or {}).get("source") or "") != "govmap_search" and not _has_confirming_v3_action_hint(item=item):
+    if proposal.get("geo_resolution") and not _geo_resolution_is_backend_confirmed(proposal.get("geo_resolution") or {}) and not _has_confirming_v3_action_hint(item=item):
         status = "candidate"
     reject_reason = "non_blocking_topic_review:topic_arbitration:proposal_ambiguous" if status == "candidate" else None
     assignment = _assignment_payload(
@@ -4531,10 +4575,10 @@ def _local_topic_arbitration_assignment(*, row: dict[str, Any], item: dict[str, 
             root_label=root_label_for_id("root_geo") or "מיקומים וגיאוגרפיה",
             child_label=str(geo.get("child_label_he") or "כתובות ורחובות"),
             raw_child_label=str(geo.get("child_label_he") or "כתובות ורחובות"),
-            status="active" if geo.get("source") == "govmap_search" and geo.get("confidence") == "high" else "candidate",
-            reject_reason=None if geo.get("source") == "govmap_search" and geo.get("confidence") == "high" else "non_blocking_topic_review:geo_fallback_unverified_location",
+            status="active" if _geo_resolution_is_backend_confirmed(geo) else "candidate",
+            reject_reason=None if _geo_resolution_is_backend_confirmed(geo) else "non_blocking_topic_review:geo_fallback_unverified_location",
             aliases=[],
-            confidence=0.76 if geo.get("source") == "govmap_search" and geo.get("confidence") == "high" else 0.58,
+            confidence=0.76 if _geo_resolution_is_backend_confirmed(geo) else 0.58,
             quote=str(item.get("unit_raw_text") or item.get("raw_text") or "")[:500],
             route=f"deterministic_v4_topic_arbitration:local_subject:geo:{geo.get('source') or 'unknown'}",
             rationale_he="local topic evidence selected over weaker topic-pipeline proposal",
@@ -5421,7 +5465,7 @@ def _post_assignment_candidate_review_reason(row: dict[str, Any], *, item: dict[
     if str(row.get("root_topic_id") or "") != "root_geo":
         return None
     geo = row.get("geo_resolution") if isinstance(row.get("geo_resolution"), dict) else {}
-    if str(geo.get("source") or "") == "govmap_search" and str(geo.get("confidence") or "") == "high":
+    if _geo_resolution_is_backend_confirmed(geo):
         return None
     if _has_confirming_v3_subject_hint_for_row(row=row, item=item or {}):
         return None
@@ -5470,7 +5514,7 @@ def _active_root_only_subject_has_unverified_geo_support(row: dict[str, Any]) ->
     if str(row.get("root_topic_id") or "") == "root_geo" or _compact(row.get("child_label_he")):
         return False
     geo = row.get("geo_resolution") if isinstance(row.get("geo_resolution"), dict) else {}
-    if str(geo.get("source") or "") == "govmap_search" and str(geo.get("confidence") or "") == "high":
+    if _geo_resolution_is_backend_confirmed(geo):
         return False
     subject = _compact(row.get("topic_subject_he"))
     if not subject:

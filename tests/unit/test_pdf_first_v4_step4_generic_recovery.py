@@ -555,6 +555,40 @@ def test_geo_fallback_does_not_steal_action_topic() -> None:
     ) is None
 
 
+def test_geo_fallback_prefers_google_maps_when_high_confidence(monkeypatch) -> None:
+    def fake_google_maps_geo_resolution(*, subject: str, municipality: str | None) -> dict:
+        return {
+            "source": "google_maps_places",
+            "confidence": "high",
+            "status": "matched",
+            "query": f"{subject} {municipality} ישראל",
+            "child_label_he": "כיכרות וצמתים",
+            "matched_name_he": "כיכר רמון",
+            "matched_type": "point_of_interest",
+            "place_id": "places/test",
+            "lat_lng": {"lat": 31.8, "lng": 34.65},
+        }
+
+    def fail_govmap_geo_resolution(*, subject: str, municipality: str | None) -> dict:
+        raise AssertionError("GovMap should not be called after a high-confidence Google match")
+
+    monkeypatch.setattr(step4, "_google_maps_geo_resolution", fake_google_maps_geo_resolution)
+    monkeypatch.setattr(step4, "_govmap_geo_resolution", fail_govmap_geo_resolution)
+
+    geo = step4._resolve_geo_fallback(
+        subject="כיכר רמון בעיר ודרך מנחם בגין",
+        municipality="אשדוד",
+        enable_govmap_geo=True,
+    )
+
+    assert geo is not None
+    assert geo["source"] == "google_maps_places"
+    assert geo["confidence"] == "high"
+    assert geo["child_label_he"] == "כיכרות וצמתים"
+    assert geo["local_geo_resolution"]["source"] == "local_geo_pattern"
+    assert step4._geo_resolution_is_backend_confirmed(geo) is True
+
+
 def test_geo_fallback_prefers_govmap_when_enabled(monkeypatch) -> None:
     def fake_govmap_geo_resolution(*, subject: str, municipality: str | None) -> dict:
         return {
@@ -581,6 +615,101 @@ def test_geo_fallback_prefers_govmap_when_enabled(monkeypatch) -> None:
     assert geo["confidence"] == "high"
     assert geo["child_label_he"] == "כיכרות וצמתים"
     assert geo["local_geo_resolution"]["source"] == "local_geo_pattern"
+    assert geo["backend_resolution_attempts"][0]["source"] == "google_maps_places"
+
+
+def test_geo_fallback_records_google_error_then_uses_local_pattern(monkeypatch) -> None:
+    monkeypatch.setattr(
+        step4,
+        "_google_maps_geo_resolution",
+        lambda *, subject, municipality: {"source": "google_maps_places", "confidence": "none", "status": "error", "query": "test query", "error": "missing_google_maps_api_key"},
+    )
+    monkeypatch.setattr(step4, "_govmap_geo_resolution", lambda *, subject, municipality: None)
+
+    geo = step4._resolve_geo_fallback(
+        subject="כיכר רמון בעיר ודרך מנחם בגין",
+        municipality="אשדוד",
+        enable_govmap_geo=True,
+    )
+
+    assert geo is not None
+    assert geo["source"] == "local_geo_pattern"
+    assert geo["child_label_he"] == "כיכרות וצמתים"
+    assert geo["backend_resolution_attempts"][0]["source"] == "google_maps_places"
+    assert geo["backend_resolution_attempts"][0]["error"] == "missing_google_maps_api_key"
+    assert geo["backend_resolution_attempts"][1]["source"] == "govmap_search"
+
+
+def test_google_maps_geo_resolution_extracts_place_diagnostics(monkeypatch) -> None:
+    from municipality import google_maps_client
+
+    calls: list[dict] = []
+
+    class FakeGoogleMapsClient:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def search_text(self, query: str, *, max_results: int = 5) -> dict:
+            calls.append({"query": query, "max_results": max_results})
+            return {
+                "places": [
+                    {
+                        "id": "places/ramon-square",
+                        "displayName": {"text": "כיכר רמון"},
+                        "formattedAddress": "דרך מנחם בגין, אשדוד, ישראל",
+                        "location": {"latitude": 31.8, "longitude": 34.65},
+                        "types": ["point_of_interest", "establishment"],
+                        "googleMapsUri": "https://maps.google.com/?cid=test",
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(google_maps_client, "GoogleMapsClient", FakeGoogleMapsClient)
+
+    geo = step4._google_maps_geo_resolution(subject="כיכר רמון בעיר ודרך מנחם בגין", municipality="אשדוד")
+
+    assert geo is not None
+    assert geo["source"] == "google_maps_places"
+    assert geo["confidence"] == "high"
+    assert geo["status"] == "matched"
+    assert geo["place_id"] == "places/ramon-square"
+    assert geo["display_name"] == "כיכר רמון"
+    assert geo["formatted_address"] == "דרך מנחם בגין, אשדוד, ישראל"
+    assert geo["child_label_he"] == "כיכרות וצמתים"
+    assert geo["municipality_match"] is True
+    assert "כיכר" in geo["token_overlap"]
+    assert geo["query"] == "כיכר רמון אשדוד ישראל"
+    assert calls[0]["query"] == "כיכר רמון אשדוד ישראל"
+
+
+def test_google_maps_geo_resolution_rejects_named_square_when_only_road_matches(monkeypatch) -> None:
+    from municipality import google_maps_client
+
+    class FakeGoogleMapsClient:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def search_text(self, query: str, *, max_results: int = 5) -> dict:
+            return {
+                "places": [
+                    {
+                        "id": "places/menachem-begin-road",
+                        "displayName": {"text": "דרך מנחם בגין"},
+                        "formattedAddress": "דרך מנחם בגין, אשדוד",
+                        "location": {"latitude": 31.78, "longitude": 34.64},
+                        "types": ["route"],
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(google_maps_client, "GoogleMapsClient", FakeGoogleMapsClient)
+
+    geo = step4._google_maps_geo_resolution(subject="כיכר רמון בעיר ודרך מנחם בגין", municipality="אשדוד")
+
+    assert geo is not None
+    assert geo["source"] == "google_maps_places"
+    assert geo["status"] == "no_match"
+    assert geo["confidence"] == "none"
 
 
 def test_explicit_query_subject_strips_speaker_tail() -> None:
