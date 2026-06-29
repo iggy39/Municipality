@@ -41,11 +41,6 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 - Before implementation, present concise verification options appropriate to the task and ask the user to choose when non-obvious.
 - Verify each stage before proceeding to the next.
 - Tests alone are not enough.
-- When testing new logic or fixes, use the broadest representative set available; prefer coverage across different municipalities, document types, and edge cases over multiple similar examples from one source.
-- When validating a fix with a batch of examples, sort examples from hardest to easiest and run them one at a time; continue to the next example only after the current one succeeds.
-- When doing UI work, always verify the desired result with Playwright; Playwright is installed globally and can be used directly.
-- After UI or database changes, restart any affected local server yourself, verify the correct port is being used, and do not wait for the user to ask.
+- For non-trivial implementation, verification, or commit work, use the Codex agent harness at `scripts/codex_agent_harness.py` to enforce representative testing, sequential example validation, raw-text quality reports, UI verification, server checks, prediction summaries, and commit safety.
 - Act as a judge: run or demonstrate the feature with representative input and print concise input/output evidence to the console.
-- After fixing or refining a document-processing pipeline, once the processed examples are finished, show a concise quality report table focused on problematic or low-confidence predictions. The table must include: full source/text, model prediction, ground truth based on agent judgement, and the reason for the failure or uncertainty.
-- After any build or run that reruns predictions, proactively summarize the main remaining problems and how to fix them generically; do not wait for the user to ask.
 - Keep verification output concise unless debugging requires more detail.
