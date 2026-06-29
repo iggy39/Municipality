@@ -7,6 +7,7 @@ All agents working in this repository MUST follow this file.
 - Always show estimated build/execution time before starting implementation or running commands.
 - During builds, print only concise progress and summary information unless the user explicitly asks for detailed output.
 - Prefer concise status updates, concise findings, and concise verification output.
+- When presenting cases, examples, predictions, failures, or quality reports in the session, include the raw source text, not only summaries or labels.
 - When printing file paths in the session, always use full absolute paths instead of paths relative to the project.
 - Do not print a "Relevant Files" section in the session unless the current action is committing those files.
 - Assume the user is not a software engineer and is not fully fluent in English; explain actions, findings, and tradeoffs in simple plain English, even if the explanation needs to be longer.
