@@ -136,8 +136,9 @@ def _normalize_structure(units: list[dict[str, Any]], *, semantic_payload: dict[
     out: list[dict[str, Any]] = []
     current_section_id: str | None = None
     current_anchor_id: str | None = None
+    visual_blocks_by_id = _visual_blocks_by_id(semantic_payload or {})
     for ordinal, unit in enumerate(units, start=1):
-        fragments = _split_semantic_unit(unit)
+        fragments = _split_semantic_unit(unit, visual_blocks_by_id=visual_blocks_by_id)
         for fragment_index, fragment in enumerate(fragments, start=1):
             role = _structural_role(fragment["text"], original_unit=unit, fragment_count=len(fragments))
             section_number = _section_number(fragment["text"])
@@ -186,13 +187,13 @@ def _normalize_structure(units: list[dict[str, Any]], *, semantic_payload: dict[
     return out
 
 
-def _split_semantic_unit(unit: dict[str, Any]) -> list[dict[str, Any]]:
+def _split_semantic_unit(unit: dict[str, Any], *, visual_blocks_by_id: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     text = _clean_text(str(unit.get("raw_text") or unit.get("summary_he") or ""))
     if not text:
         return [{"text": "", "evidence": {"split_reason": "empty"}}]
     stripped_headers = _remove_table_header_runs(text)
     text = stripped_headers if stripped_headers else text
-    starts = _structural_starts(text)
+    starts = _structural_starts(text, unit=unit, visual_blocks_by_id=visual_blocks_by_id or {})
     if len(starts) <= 1:
         return [{"text": text, "evidence": {"split_reason": "single_fragment"}}]
     fragments = []
@@ -205,23 +206,53 @@ def _split_semantic_unit(unit: dict[str, Any]) -> list[dict[str, Any]]:
     return fragments or [{"text": text, "evidence": {"split_reason": "split_fallback"}}]
 
 
-def _structural_starts(text: str) -> list[int]:
+def _structural_starts(text: str, *, unit: dict[str, Any] | None = None, visual_blocks_by_id: dict[str, dict[str, Any]] | None = None) -> list[int]:
     patterns = [
+        r"(?<![\u0590-\u05FF])(החלטה\s*[:：])",
         r"(?<![\d-])(סעיף\s*\d+\s*[:.-]?)",
         r"(?<![\d-])(\d+(?:\.\d+)?\s*[.)]?\s*(?:שאילתה|הצעה\s+לסדר|נושא\s+לדיון|פרוטוקול|הסכם|אישור|מינוי))",
         r"(?<![\d-])(\d+\s*[.)]\s*[\"'׳״]?[^\d]{8,})",
+        r"(?<![\u0590-\u05FF])(פרוטוקול\s+ועדת\s+[\u0590-\u05FF\"'׳״\s]{2,80}?\s+מס\.?\s*\d{1,3})",
+        r"(?<![\u0590-\u05FF])([:.]\s*[\"'׳״]?[\u0590-\u05FF][^:.]{4,90}?\d{1,3}\s*(?=:(?:מר|גב'|גברת|ד\"ר|עו\"ד|ראש|יו\"ר)))",
         r"\b(Item|Section|Agenda|Decision|Resolution)\s+\d+\b",
     ]
     starts = {0}
     for pattern in patterns:
         for match in re.finditer(pattern, text, flags=re.IGNORECASE):
-            if _allowed_structural_start_match(text=text, start=match.start(), matched_text=match.group(0)):
+            if _allowed_structural_start_match(
+                text=text,
+                start=match.start(),
+                matched_text=match.group(0),
+                unit=unit,
+                visual_blocks_by_id=visual_blocks_by_id or {},
+            ):
                 starts.add(match.start())
     return sorted(starts)
 
 
-def _allowed_structural_start_match(*, text: str, start: int, matched_text: str) -> bool:
+def _allowed_structural_start_match(
+    *,
+    text: str,
+    start: int,
+    matched_text: str,
+    unit: dict[str, Any] | None = None,
+    visual_blocks_by_id: dict[str, dict[str, Any]] | None = None,
+) -> bool:
     compact_match = str(matched_text or "").strip()
+    prefix = text[:start].rstrip()
+    if compact_match.startswith("פרוטוקול ועדת") and re.fullmatch(r"\s*החלטה\s*[:：]\s*", prefix):
+        return False
+    if _section_label_numbered_title_start(prefix=prefix, matched_text=compact_match):
+        return False
+    if _date_tail_reference_start(text=text, start=start, matched_text=compact_match):
+        return False
+    if _dependent_numbered_clause_start(text=text, start=start, matched_text=compact_match) and _visual_continuity_supports_join(
+        text=text,
+        start=start,
+        unit=unit or {},
+        visual_blocks_by_id=visual_blocks_by_id or {},
+    ):
+        return False
     if not compact_match.startswith("סעיף"):
         return True
     remainder = text[start:]
@@ -229,11 +260,127 @@ def _allowed_structural_start_match(*, text: str, start: int, matched_text: str)
         return False
     if start <= 0:
         return True
-    prefix = text[:start].rstrip()
     if not prefix:
         return True
     # Inline references such as "להלן סעיף 23" should remain inside the current unit.
     return prefix[-1] in ".;:!?)]}\"'׳״-–"
+
+
+def _date_tail_reference_start(*, text: str, start: int, matched_text: str) -> bool:
+    if start <= 0:
+        return False
+    if not re.match(r"^\d{2,4}\s*[.)]?", matched_text.strip()):
+        return False
+    prefix = text[max(0, start - 16) : start]
+    return bool(re.search(r"\(?\s*\d{1,2}[./]\d{1,2}[./]\s*$", prefix))
+
+
+def _section_label_numbered_title_start(*, prefix: str, matched_text: str) -> bool:
+    return bool(re.fullmatch(r"\s*סעיף\s*\d+(?:\.\d+)?\s*[:：]\s*", prefix)) and bool(re.match(r"^\d+(?:\.\d+)?\s*[.)]", matched_text.strip()))
+
+
+def _dependent_numbered_clause_start(*, text: str, start: int, matched_text: str) -> bool:
+    if start <= 0 or not re.match(r"^\d+(?:\.\d+)?\s*[.)]?\s*אישור\b", matched_text):
+        return False
+    prefix = _norm(text[max(0, start - 180) : start])
+    suffix = _norm(text[start : start + 240])
+    prefix_cues = (
+        "בהצעת ההחלטה",
+        "הצעת ההחלטה",
+        "כמפורט",
+        "בסעיפים",
+        "בסעיף",
+        "לפי סעיף",
+        "כאמור",
+        "להלן",
+    )
+    suffix_cues = (
+        "אישור מועצת",
+        "אישור המועצה",
+        "מועצת העיר",
+        "לחתום על חוזה",
+        "וכן לחתום",
+        "וכמפורט",
+        "כמפורט בסעיפים",
+    )
+    return any(cue in prefix for cue in prefix_cues) and any(cue in suffix for cue in suffix_cues)
+
+
+def _visual_blocks_by_id(semantic_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    visual_path = Path(str(semantic_payload.get("input_visual_layout_report") or ""))
+    if not visual_path.exists():
+        return {}
+    try:
+        visual_payload = json.loads(visual_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    blocks: dict[str, dict[str, Any]] = {}
+    for page_result in visual_payload.get("results") or []:
+        for block in page_result.get("block_roles") or []:
+            block_id = str(block.get("block_id") or "")
+            if block_id:
+                blocks[block_id] = block
+    return blocks
+
+
+def _visual_continuity_supports_join(*, text: str, start: int, unit: dict[str, Any], visual_blocks_by_id: dict[str, dict[str, Any]]) -> bool:
+    spans = _unit_visual_block_spans(text=text, unit=unit, visual_blocks_by_id=visual_blocks_by_id)
+    if not spans:
+        return False
+    current_index = next((index for index, span in enumerate(spans) if span["start"] <= start < span["end"]), None)
+    if current_index is None:
+        current_index = next((index for index, span in enumerate(spans) if span["start"] >= start), None)
+    if current_index is None:
+        return False
+    current = spans[current_index]
+    previous = spans[current_index - 1] if current_index > 0 else None
+    current_block = current["block"]
+    previous_block = previous["block"] if previous else None
+    role = str(current_block.get("final_visual_role") or current_block.get("proposed_role") or "")
+    if role not in {"structured_row", "body_text"}:
+        return False
+    if previous_block and str(previous_block.get("region_id") or "") != str(current_block.get("region_id") or ""):
+        return False
+    if previous_block and not _visual_blocks_are_typographically_close(previous_block, current_block):
+        return False
+    return True
+
+
+def _unit_visual_block_spans(*, text: str, unit: dict[str, Any], visual_blocks_by_id: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    spans: list[dict[str, Any]] = []
+    cursor = 0
+    for block_id in [str(value) for value in unit.get("source_block_ids") or [] if str(value).strip()]:
+        block = visual_blocks_by_id.get(block_id)
+        block_text = _clean_text(str((block or {}).get("text") or ""))
+        if not block or not block_text:
+            continue
+        found = text.find(block_text, cursor)
+        if found < 0:
+            found = text.find(block_text)
+        if found < 0:
+            continue
+        end = found + len(block_text)
+        spans.append({"block_id": block_id, "block": block, "start": found, "end": end})
+        cursor = max(cursor, end)
+    return spans
+
+
+def _visual_blocks_are_typographically_close(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_features = left.get("visual_features") if isinstance(left.get("visual_features"), dict) else {}
+    right_features = right.get("visual_features") if isinstance(right.get("visual_features"), dict) else {}
+    left_font = float(left_features.get("median_font_size") or left_features.get("max_font_size") or 0.0)
+    right_font = float(right_features.get("median_font_size") or right_features.get("max_font_size") or 0.0)
+    if left_font and right_font and abs(left_font - right_font) > 1.25:
+        return False
+    left_bbox = left.get("bbox") if isinstance(left.get("bbox"), list) else []
+    right_bbox = right.get("bbox") if isinstance(right.get("bbox"), list) else []
+    if len(left_bbox) >= 4 and len(right_bbox) >= 4:
+        vertical_gap = float(right_bbox[1]) - float(left_bbox[3])
+        if vertical_gap > 36.0:
+            return False
+        if abs(float(left_bbox[2]) - float(right_bbox[2])) > 40.0:
+            return False
+    return True
 
 
 def _visual_bounded_headline_units(semantic_payload: dict[str, Any], *, start_index: int) -> list[dict[str, Any]]:
@@ -462,6 +609,41 @@ def _looks_like_page_chrome(text: str) -> bool:
     return False
 
 
+def _strip_leading_page_chrome(text: str) -> str:
+    compact = _clean_text(text)
+    patterns = (
+        r"^פרוטוקול\s+ישיבות?\s+המועצה\b.{0,260}?\s+-\s*\d{1,4}\s*-\s*",
+        r"^פרוטוקול\s+ישיבה\s+[^.]{0,260}?\s+-\s*\d{1,4}\s*-\s*",
+    )
+    for pattern in patterns:
+        stripped = re.sub(pattern, "", compact, count=1)
+        if stripped != compact:
+            return _clean_text(stripped)
+    return ""
+
+
+def _page_chrome_remainder_has_body_text(text: str) -> bool:
+    compact = _clean_text(text)
+    normalized = _norm(compact)
+    if len(normalized) < 80:
+        return False
+    if _looks_like_vote_only_text(compact):
+        return False
+    body_cues = ("אני", "אנחנו", "בנושא", "בעניין", "החלטה", "הצעה", "שאילתה", "אישור", "מינוי")
+    if any(cue in normalized for cue in body_cues):
+        return True
+    tokens = [token for token in re.split(r"\W+", normalized) if len(token) >= 3]
+    return len(tokens) >= 18
+
+
+def _looks_like_vote_only_text(text: str) -> bool:
+    normalized = _norm(text)
+    if not any(_norm(term) in normalized for term in VOTE_RESULT_TERMS):
+        return False
+    substantive_tokens = [token for token in re.split(r"\W+", normalized) if len(token) >= 3]
+    return len(substantive_tokens) <= 18
+
+
 def _structural_role(text: str, *, original_unit: dict[str, Any], fragment_count: int) -> str:
     normalized = _norm(text)
     if not normalized:
@@ -483,7 +665,12 @@ def _structural_role(text: str, *, original_unit: dict[str, Any], fragment_count
 
 def _is_metadata(text: str, *, original_unit: dict[str, Any]) -> bool:
     normalized = _norm(text)
+    if _has_explicit_decision_subject(text) or _looks_like_committee_protocol_heading(text):
+        return False
     if _looks_like_page_chrome(text):
+        remainder = _strip_leading_page_chrome(text)
+        if remainder and _page_chrome_remainder_has_body_text(remainder):
+            return False
         return True
     if _has_structural_subject(text):
         return False
@@ -509,6 +696,9 @@ def _is_vote_or_result(text: str) -> bool:
     normalized = _norm(text)
     if not any(_norm(term) in normalized for term in VOTE_RESULT_TERMS):
         return False
+    body_text = _strip_leading_page_chrome(text) or text
+    if _page_chrome_remainder_has_body_text(body_text):
+        return False
     if _starts_new_subject(text):
         return False
     return True
@@ -516,11 +706,56 @@ def _is_vote_or_result(text: str) -> bool:
 
 def _starts_new_subject(text: str) -> bool:
     normalized = _norm(text)
+    if _is_generic_decision_disposition(text):
+        return False
+    if _has_explicit_decision_subject(text):
+        return True
+    if _looks_like_committee_protocol_heading(text):
+        return True
+    if _looks_like_trailing_number_agenda_heading(text):
+        return True
     if re.search(r"(?:^|\s)סעיף\s*\d+", text):
         return True
     if re.search(r"(?:^|\s)\d+(?:\.\d+)?\s*[.)]?\s*(?:שאילתה|הצעה\s+לסדר|נושא\s+לדיון|פרוטוקול|הסכם|אישור|מינוי)", text):
         return True
     return any(_norm(term) in normalized for term in ("נושא לדיון", "הצעה לסדר", "שאילתה בנושא", "Item", "Section", "Decision", "Resolution"))
+
+
+def _looks_like_trailing_number_agenda_heading(text: str) -> bool:
+    compact = _clean_text(text)
+    if len(compact) > 180:
+        return False
+    return bool(re.match(r"^[:.\s]*[\"'׳״]?[\u0590-\u05FF][^:.]{4,120}?\d{1,3}\s*(?=:(?:מר|גב'|גברת|ד\"ר|עו\"ד|ראש|יו\"ר)|$)", compact))
+
+
+def _looks_like_committee_protocol_heading(text: str) -> bool:
+    compact = _clean_text(text).lstrip(" :.\"'׳״")
+    return bool(re.match(r"^פרוטוקול\s+ועדת\s+[\u0590-\u05FF\"'׳״\s]{2,80}?\s+מס\.?\s*(?:\d{1,3}|\d{1,3}/\d{2,4})", compact))
+
+
+def _has_explicit_decision_subject(text: str) -> bool:
+    match = re.match(r"^\s*החלטה\s*[:：]\s*(.+)", _clean_text(text))
+    if not match:
+        return False
+    subject = match.group(1).strip(" .:;,-–'\"׳״")
+    if not subject:
+        return False
+    normalized = _norm(subject[:220])
+    if _is_generic_decision_subject_text(normalized):
+        return False
+    tokens = [token for token in re.split(r"\W+", normalized) if len(token) >= 2]
+    return len(tokens) >= 3
+
+
+def _is_generic_decision_disposition(text: str) -> bool:
+    match = re.match(r"^\s*החלטה\s*[:：]\s*(.+)", _clean_text(text))
+    return bool(match and _is_generic_decision_subject_text(_norm(match.group(1)[:220])))
+
+
+def _is_generic_decision_subject_text(normalized: str) -> bool:
+    if re.match(r"^(?:מ\s*)?א\s*ו\s*ש\s*ר\b|^מאושר\b|^אושר\b|^לא\s+אושר\b", normalized):
+        return True
+    return normalized.startswith(("ההצעה", "הבקשה", "הסעיף", "הנושא"))
 
 
 def _has_structural_subject(text: str) -> bool:

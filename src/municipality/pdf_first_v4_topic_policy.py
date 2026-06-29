@@ -86,9 +86,9 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
     TopicPolicy(
         policy_id="electronic_advertising_signs_infrastructure",
         root_topic_id="root_infrastructure_environment",
-        description_he="לוחות פרסום אלקטרוניים מסווגים לתשתיות וסביבה.",
+        description_he="לוחות מודעות/פרסום אלקטרוניים מסווגים לתשתיות וסביבה; צומת או רחוב הם מיקום בלבד.",
         priority=104,
-        required_any=(("לוחות פרסום אלקטרוניים",),),
+        required_any=(("לוח מודעות אלקטרוני", "לוחות מודעות אלקטרוניים", "מודעות אלקטרוני", "מודעות אלקטרוניים", "לוחות פרסום אלקטרוניים"),),
     ),
     TopicPolicy(
         policy_id="solar_renewable_energy_environment",
@@ -129,9 +129,9 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
     TopicPolicy(
         policy_id="religious_council_services",
         root_topic_id="root_religious_services",
-        description_he="מועצה דתית ושירותיה מסווגים לדת ושירותי דת, גם כאשר הפעולה היא מינוי או הרכב המועצה.",
+        description_he="מועצה דתית/מועצות דתיות ושירותיהן מסווגים לדת ושירותי דת, גם כאשר הפעולה היא מינוי או הרכב המועצה.",
         priority=116,
-        required_any=(("מועצה דתית",),),
+        required_any=(("מועצה דתית", "מועצות דתיות", "מועצות דתית"),),
     ),
     TopicPolicy(
         policy_id="air_pollution_odors_environment",
@@ -160,6 +160,13 @@ TOPIC_POLICIES: tuple[TopicPolicy, ...] = (
         description_he="הסכמי רשות, הסכמי פיתוח או הסכם להקמה והפעלה מסווגים לפי פעולת ההסכם גם כאשר מוזכר תחום שירות כמו דת.",
         priority=101,
         required_any=(("הסכמי רשות", "הסכמי פיתוח", "רשות ופיתוח", "הסכם להקמה", "הסכמי רשות ופיתוח"),),
+    ),
+    TopicPolicy(
+        policy_id="lease_land_use_agreement_action",
+        root_topic_id="root_agreements",
+        description_he="חכירה, שינוי מטרת חכירה או חוזה חכירה הם נושאי הסכם/שימוש בקרקע ולא טקסט פרוצדורלי בלבד.",
+        priority=102,
+        required_any=(("חכירה", "החכרת", "מטרת חכירה", "חוזה חכירה"),),
     ),
     TopicPolicy(
         policy_id="education_use_agreement_action",

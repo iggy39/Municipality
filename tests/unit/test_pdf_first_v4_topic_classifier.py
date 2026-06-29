@@ -177,7 +177,7 @@ def test_generic_root_keywords_cover_finance_and_notice_board_actions() -> None:
     assert infer_root_topic_id("הנפקת כרטיס אשראי טעון", allow_procedural_default=False) == "root_budget_finance"
     assert infer_root_topic_id("ביצוע פעולות מול בנק הדואר", allow_procedural_default=False) == "root_budget_finance"
     assert infer_root_topic_id("פתיחת חשבון בבנק מזרחי", allow_procedural_default=False) == "root_budget_finance"
-    assert infer_root_topic_id("העמדת לוח מודעות אלקטרוני", allow_procedural_default=False) == "root_administration"
+    assert infer_root_topic_id("העמדת לוח מודעות אלקטרוני", allow_procedural_default=False) == "root_infrastructure_environment"
 
 
 def test_canonicalizes_substantive_fragment_subjects() -> None:

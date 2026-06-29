@@ -287,7 +287,7 @@ def _semantic_canonical_label(*, label: str, label_norm: str, combined_norm: str
         return "מימון חממה מהתקציב העירוני"
     if "הטבות" in text and "מדד" in text and "חברתי" in text:
         return "הטבות בעקבות ירידה במדד חברתי-כלכלי"
-    if "מועצה דתית" in text:
+    if "מועצה דתית" in text or "מועצות דתיות" in text:
         return "מינוי מועצה דתית" if "מינוי" in text else "מועצה דתית"
     if "תצהיר" in text and any(term in text for term in ["חברי המועצה", "חבר מועצה"]):
         return "תצהיר ניגוד עניינים לחברי מועצה"
