@@ -3,11 +3,9 @@
 All agents working in this repository MUST follow this file.
 
 ## Communication
-- Print minimal information unless the user explicitly asks for more detail.
+- Be concise by default, but include the raw evidence needed to judge quality, failures, examples, and predictions.
 - Always show estimated build/execution time before starting implementation or running commands.
-- During builds, print only concise progress and summary information unless the user explicitly asks for detailed output.
-- Prefer concise status updates, concise findings, and concise verification output.
-- When presenting cases, examples, predictions, failures, or quality reports in the session, include the raw source text, not only summaries or labels.
+- During builds and long commands, print concise progress and summary information unless detailed output is needed for debugging or judgement.
 - When printing file paths in the session, always use full absolute paths instead of paths relative to the project.
 - Do not print a "Relevant Files" section in the session unless the current action is committing those files.
 - Assume the user is not a software engineer and is not fully fluent in English; explain actions, findings, and tradeoffs in simple plain English, even if the explanation needs to be longer.
@@ -20,12 +18,11 @@ Build a research-grade MVP for ingesting municipality protocol documents and att
 Do not assume fixed document structure, wording, language, schema, or municipality-specific rules.
 
 ## Solution Principles
-- Prefer generic, reusable solutions over logic tailored to one document, municipality, or text pattern.
-- When planning or implementing, challenge the first non-generic solution instinct and prefer a more generic approach, even if it requires more planning, more execution time, additional model runs, or higher cost.
+- Prefer generic, reusable solutions over logic tailored to one document, municipality, wording pattern, or fixed layout.
+- Before planning or implementing, challenge the first narrow or non-generic idea and prefer a more generic approach, even if it requires more planning, more model runs, more execution time, or higher cost.
 - Do not rush when proposing plans, solutions, or fixes; think carefully about each problem, compare plausible approaches, and provide the highest-quality generic recommendation even if it takes longer.
-- Do not optimize for saving tokens, tool calls, model runs, or execution time at the expense of solution quality; use the effort needed for high-quality planning and generic, research-based solutions that deliver the highest-quality practical result.
-- Do not hardcode assumptions about protocol layout, terminology, metadata, or attachment structure.
-- Do not build solutions that depend on semantic-specific keywords or fixed wording; if this seems necessary, clearly notify the user and ask for permission before proceeding.
+- Do not optimize for saving tokens, tool calls, model runs, or execution time at the expense of solution quality.
+- Do not make correctness depend on semantic-specific keywords, fixed wording, or municipality-specific labels; if this seems necessary, clearly notify the user and ask for permission before proceeding.
 - When working on UI maps, render selected polygons such as neighborhoods through GovMap `displayGeometries` instead of dashboard HTML/SVG overlays above the map.
 - Add helpful comments when writing code, especially where intent, assumptions, or non-obvious behavior need clarification.
 - If unsure, pause and ask the user. If documentation or best practices are needed, research them before proceeding.
@@ -39,17 +36,16 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 
 ## Verification
 - Before implementation, present concise verification options appropriate to the task and ask the user to choose when non-obvious.
-- Verify each stage before proceeding to the next.
-- Tests alone are not enough.
-- When testing new logic or fixes, use the broadest representative set available; prefer coverage across different municipalities, document types, and edge cases over multiple similar examples from one source.
-- When validating a fix with a batch of examples, sort examples from hardest to easiest and run them one at a time; continue to the next example only after the current one succeeds.
-- When doing UI work, always verify the desired result with Playwright; Playwright is installed globally and can be used directly.
-- After UI or database changes, restart any affected local server yourself, verify the correct port is being used, and do not wait for the user to ask.
-- Act as a judge: run or demonstrate the feature with representative input and print concise input/output evidence to the console.
-- Run experiments visibly in the active session and report concise progress with the relevant raw inputs, outputs, warnings, and failures needed to judge the result.
+- Verify each stage before proceeding to the next. Tests alone are not enough.
+- When testing new logic or fixes, use the broadest representative set available, with coverage across municipalities, document types, and edge cases.
+- When validating a fix with a batch of examples, sort examples from hardest to easiest and run them one at a time; continue only after the current example succeeds.
+- For UI work, restart any affected local server, verify the correct port, and check the desired result with globally installed Playwright.
+- After database changes, restart any affected local server yourself and verify the correct port.
+- Run experiments visibly in the active session and report concise progress with the raw inputs, outputs, warnings, and failures needed to judge the result.
 - For long runs expected to take more than one hour, save incremental results to durable per-file or per-example output files as the run progresses, not only at the end.
-- Keep verification output concise unless debugging requires more detail.
+- Keep verification output concise unless debugging or quality judgement requires more detail.
 
 ## End-of-Run Quality Reports
-- After ingestion, import, extraction, classification, retrieval, or evaluation runs, print a concise quality report with raw source text for every warning, failure, representative sample, and judged row.
+- After ingestion, import, extraction, classification, retrieval, or evaluation runs, print a concise quality report.
+- Include raw source text for every warning, failure, representative sample, and judged row.
 - For judged rows, include pipeline/model predictions, assistant judgement, agreement or disagreement reason, and relevant final artifact metadata.
