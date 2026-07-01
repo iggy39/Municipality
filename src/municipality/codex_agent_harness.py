@@ -51,6 +51,7 @@ def build_preflight_checklist(
     database_change: bool | None = None,
     reruns_predictions: bool | None = None,
     document_pipeline: bool | None = None,
+    long_run: bool | None = None,
 ) -> list[dict[str, str]]:
     """Build a rule checklist that agents can show before implementation.
 
@@ -64,6 +65,7 @@ def build_preflight_checklist(
     inferred_database = _bool_or_infer(database_change, _looks_like_database_change(task=task, paths=paths))
     inferred_prediction = _bool_or_infer(reruns_predictions, any(word in task for word in ("prediction", "predict", "model", "rerun")))
     inferred_pipeline = _bool_or_infer(document_pipeline, any(word in task for word in ("pipeline", "document", "documents", "extraction")))
+    inferred_long_run = _bool_or_infer(long_run, _looks_like_long_run(task))
 
     checks = [
         _check("generic_solution", "Challenge the first non-generic idea and choose the broadest reusable approach."),
@@ -80,6 +82,8 @@ def build_preflight_checklist(
         checks.append(_check("playwright_verification", "Restart the affected server, verify the port, and check the desired UI result with global Playwright."))
     if inferred_database:
         checks.append(_check("database_server_restart", "After database changes, restart affected local servers and verify the correct port."))
+    if inferred_long_run:
+        checks.append(_check("incremental_outputs", "For runs expected to exceed one hour, save durable per-file or per-example results during the run, not only at the end."))
     checks.append(_check("commit_safety", "Before committing, exclude logs, database backups, local screenshots, and possible secrets."))
     return checks
 
@@ -160,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     preflight = subparsers.add_parser("preflight", help="Build a task preflight checklist")
     preflight.add_argument("--task", required=True)
     preflight.add_argument("--changed-path", action="append", default=[])
+    preflight.add_argument("--long-run", action="store_true")
     preflight.add_argument("--json", action="store_true")
 
     safety = subparsers.add_parser("commit-safety", help="Classify paths before committing")
@@ -170,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "preflight":
-        checks = build_preflight_checklist(task_text=args.task, changed_paths=args.changed_path)
+        checks = build_preflight_checklist(task_text=args.task, changed_paths=args.changed_path, long_run=args.long_run or None)
         print(json.dumps(checks, ensure_ascii=False, indent=2) if args.json else preflight_markdown(checks))
         return 0
     if args.command == "commit-safety":
@@ -200,6 +205,10 @@ def _looks_like_database_change(*, task: str, paths: list[str]) -> bool:
     if any(Path(path).suffix.lower() == ".sql" or "migrations" in Path(path).parts for path in paths):
         return True
     return "database" in task or "db" in task or "migration" in task
+
+
+def _looks_like_long_run(task: str) -> bool:
+    return any(phrase in task for phrase in ("long run", "long-running", "more than one hour", "over one hour", "1 hour", ">1 hour"))
 
 
 def _to_example(value: Mapping[str, Any] | HarnessExample) -> HarnessExample:

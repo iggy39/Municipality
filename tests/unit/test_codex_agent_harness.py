@@ -22,6 +22,12 @@ def test_preflight_adds_ui_and_database_verification_from_paths() -> None:
     assert "commit_safety" in check_ids
 
 
+def test_preflight_adds_incremental_outputs_for_long_runs() -> None:
+    checks = build_preflight_checklist(task_text="Run a long-running extraction for more than one hour")
+
+    assert "incremental_outputs" in {row["id"] for row in checks}
+
+
 def test_sort_examples_hardest_first_uses_metadata_not_input_order() -> None:
     sorted_examples = sort_examples_hardest_first(
         [
