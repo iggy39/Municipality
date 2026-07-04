@@ -2,11 +2,15 @@
 
 All agents working in this repository MUST follow this file.
 
+## Most Important Rule
+- No pipeline step is accepted until it is validated against an independent ground-truth-like check.
+- A model, parser, OCR engine, extractor, or pipeline output is never its own ground truth. Comparing two outputs is useful only as a diagnostic signal.
+- For OCR and document-image tasks, the closest practical ground truth is visual judgement of the same rendered page image or bbox crop image.
+- If visual judgement or other independent evidence does not support the output, mark the step `needs_review`, `partial`, or `failed`, print the reason and raw evidence in the session, and suggest a generic next step before continuing.
+
 ## Communication
-- Be concise by default, but include the raw evidence needed to judge quality, failures, examples, and predictions.
-- Always show estimated build/execution time before starting implementation or running commands.
 - During builds and long commands, print concise progress and summary information unless detailed output is needed for debugging or judgement.
-- When printing file paths in the session, always use full absolute paths instead of paths relative to the project.
+- When printing file paths in the session, or saving in a variable, always use full absolute paths instead of paths relative to the project.
 - Do not print a "Relevant Files" section in the session unless the current action is committing those files.
 - Assume the user is not a software engineer and is not fully fluent in English; explain actions, findings, and tradeoffs in simple plain English, even if the explanation needs to be longer.
 - If the user provides Hebrew text, treat it as context only and always answer in English.
@@ -35,17 +39,16 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 - Use `mistral-small3.1` for vision tasks.
 
 ## Verification
-- Before implementation, present concise verification options appropriate to the task and ask the user to choose when non-obvious.
-- Verify each stage before proceeding to the next. Tests alone are not enough.
-- When testing new logic or fixes, use the broadest representative set available, with coverage across municipalities, document types, and edge cases.
-- When validating a fix with a batch of examples, sort examples from hardest to easiest and run them one at a time; continue only after the current example succeeds.
+- After classification, retrieval, or evaluation runs, print a full quality report.
+- Always explain input and output and show raw input text for every run.
+- Always judge each result as if you were a human judge; if it is not acceptable, explain the mistake source and suggest a generic fix.
+- For every processing step, validate the output against the best available independent evidence before accepting it. For PDF/OCR/layout work, check the rendered page image or bbox crop visually; do not accept a result only because two text outputs agree.
+- For document or file processing, do not run multiple files silently; process one file at a time and show raw evidence and judgement after each file unless the user explicitly approved a full batch.
+- When testing new logic or fixes, choose a broad representative set across municipalities, document types, and edge cases; unless the user approves a full batch, run examples one at a time from hardest to easiest and show the result before continuing.
+- For any non-success state/status such as `failed`, `blocked`, `skipped`, `warning`, `needs_review`, `partial`, or `not_accepted`, print the reason, raw evidence or report path, and suggested generic next step directly in the session. Do not require `reason` or `suggested_solution` fields inside JSON report files unless the user explicitly asks for machine-readable reporting.
+- Prefer putting the important quality judgement in the session immediately: status, reason, raw evidence snippets, paths to key artifacts, human judgement, and next step. Keep generated report files concise and avoid long report files unless durable detailed evidence is needed for later debugging or comparison.
 - For UI work, restart any affected local server, verify the correct port, and check the desired result with globally installed Playwright.
 - After database changes, restart any affected local server yourself and verify the correct port.
 - Run experiments visibly in the active session and report concise progress with the raw inputs, outputs, warnings, and failures needed to judge the result.
 - For long runs expected to take more than one hour, save incremental results to durable per-file or per-example output files as the run progresses, not only at the end.
-- Keep verification output concise unless debugging or quality judgement requires more detail.
-
-## End-of-Run Quality Reports
-- After ingestion, import, extraction, classification, retrieval, or evaluation runs, print a concise quality report.
-- Include raw source text for every warning, failure, representative sample, and judged row.
-- For judged rows, include pipeline/model predictions, assistant judgement, agreement or disagreement reason, and relevant final artifact metadata.
+- If required verification cannot be completed, stop and report the reason, raw evidence, and generic next step.
