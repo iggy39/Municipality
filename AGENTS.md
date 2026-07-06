@@ -39,16 +39,22 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 - Use `mistral-small3.1` for vision tasks.
 
 ## Verification
-- After classification, retrieval, or evaluation runs, print a full quality report.
+- After classification, retrieval, or evaluation runs, print a concise quality summary and, when the result is meant for user review, save the full quality report as HTML.
 - Always explain input and output and show raw input text for every run.
 - Always judge each result as if you were a human judge; if it is not acceptable, explain the mistake source and suggest a generic fix.
 - For every processing step, validate the output against the best available independent evidence before accepting it. For PDF/OCR/layout work, check the rendered page image or bbox crop visually; do not accept a result only because two text outputs agree.
 - For document or file processing, do not run multiple files silently; process one file at a time and show raw evidence and judgement after each file unless the user explicitly approved a full batch.
 - When testing new logic or fixes, choose a broad representative set across municipalities, document types, and edge cases; unless the user approves a full batch, run examples one at a time from hardest to easiest and show the result before continuing.
 - For any non-success state/status such as `failed`, `blocked`, `skipped`, `warning`, `needs_review`, `partial`, or `not_accepted`, print the reason, raw evidence or report path, and suggested generic next step directly in the session. Do not require `reason` or `suggested_solution` fields inside JSON report files unless the user explicitly asks for machine-readable reporting.
-- Prefer putting the important quality judgement in the session immediately: status, reason, raw evidence snippets, paths to key artifacts, human judgement, and next step. Keep generated report files concise and avoid long report files unless durable detailed evidence is needed for later debugging or comparison.
+- Prefer putting the important quality judgement in the session immediately: status, reason, raw evidence snippets, paths to key artifacts, human judgement, and next step. Keep internal machine-readable report files concise; make user-review HTML reports complete enough to judge the result without hunting for separate visual evidence.
 - For UI work, restart any affected local server, verify the correct port, and check the desired result with globally installed Playwright.
 - After database changes, restart any affected local server yourself and verify the correct port.
 - Run experiments and long commands visibly in the active session, monitor them until they finish, and report concise progress with the raw inputs, outputs, warnings, and failures needed to judge the result.
 - For long runs expected to take more than one hour, save incremental results to durable per-file or per-example output files as the run progresses, not only at the end.
 - If required verification cannot be completed, stop and report the reason, raw evidence, and generic next step.
+
+## User-Review Report Outputs
+- Any report meant for the user to review must use HTML as the primary report format.
+- User-review HTML reports must include the visual details needed to judge the result conveniently, such as rendered page images, bbox crop images, screenshots, visual overlays, tables, status colors, raw input text, pipeline/model outputs, assistant judgement, failure reasons, and links to key artifacts using full absolute paths.
+- JSON, JSONL, CSV, Markdown, or plain-text reports may still be generated for internal processing, automated tests, or companion machine-readable artifacts, but they must not be the only user-review report unless the user explicitly asks for that format.
+- In the session, print a concise summary and the full absolute path to the user-review HTML report.
