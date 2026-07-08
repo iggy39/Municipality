@@ -17,6 +17,21 @@ All agents working in this repository MUST follow this file.
 - When the user writes `GIT` in uppercase, treat it as an instruction to commit and push the current code changes.
 - Ask targeted follow-up questions whenever requirements, context, or implementation choices are unclear.
 
+## Concurrent Agent Work
+- Multiple agents or sessions may work in this same project at the same time.
+- At the beginning of any substantial pipeline, experiment, report, data-processing, or code-change task, ask the user whether to continue an existing pipeline/run or start a new separate pipeline/run so the work does not interfere with other agents.
+- Prefer separate run directories, output directories, logs, temporary files, databases, and report paths for new work unless the user explicitly asks to continue an existing pipeline.
+- Before editing code, check the worktree and inspect the specific files that will be changed. Do not assume local changes were made by the current agent.
+- Never overwrite, revert, reformat, delete, or clean files changed by another agent or the user unless the user explicitly asks.
+- If another session changes a file currently being edited, reread the file before patching. If the changes conflict with the task, stop and ask the user how to proceed.
+- Commit only the files intentionally changed for the current task. Do not include unrelated modified or untracked files.
+
+## Other Project Boundaries
+- Different projects may be solving the same problem with different agents or approaches.
+- Agents may read files in other projects when needed for comparison or research, but must treat other projects as read-only by default.
+- Never modify, create, delete, format, commit, push, or run write operations in another project unless the user specifically asks for that project to be changed.
+- If modifying another project is requested, first confirm the exact absolute project path, the intended files or scope, and why the change belongs there instead of this project.
+
 ## Project Goal
 Build a research-grade MVP for ingesting municipality protocol documents and attachments.
 Do not assume fixed document structure, wording, language, schema, or municipality-specific rules.
