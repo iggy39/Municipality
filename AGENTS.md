@@ -56,8 +56,7 @@ Do not assume fixed document structure, wording, language, schema, or municipali
 ## Verification
 - After classification, retrieval, or evaluation runs, print a concise quality summary and, when the result is meant for user review, save the full quality report as HTML.
 - Always explain input and output and show raw input text for every run.
-- Always judge each result as if you were a human judge; if it is not acceptable, explain the mistake source and suggest a generic fix.
-- For every processing step, validate the output against the best available independent evidence before accepting it. For PDF/OCR/layout work, check the rendered page image or bbox crop visually; do not accept a result only because two text outputs agree.
+- When creating a user-review HTML report, act as an independent visual judge: compare each pipeline prediction against the best available ground-truth-like visual evidence, state whether the prediction is accepted, and clearly explain every discrepancy using the visual evidence.
 - For document or file processing, do not run multiple files silently; process one file at a time and show raw evidence and judgement after each file unless the user explicitly approved a full batch.
 - When testing new logic or fixes, choose a broad representative set across municipalities, document types, and edge cases; unless the user approves a full batch, run examples one at a time from hardest to easiest and show the result before continuing.
 - For any non-success state/status such as `failed`, `blocked`, `skipped`, `warning`, `needs_review`, `partial`, or `not_accepted`, print the reason, raw evidence or report path, and suggested generic next step directly in the session. Do not require `reason` or `suggested_solution` fields inside JSON report files unless the user explicitly asks for machine-readable reporting.
